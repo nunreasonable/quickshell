@@ -189,6 +189,11 @@ public:
 	void sendMessage(const T& message) {
 		this->stream << message;
 		this->socket.flush();
+#ifdef _WIN32
+		// The client has no event loop. With named pipes flush() only queues an overlapped write,
+		// which is never completed without one, so the server would never see the command.
+		this->socket.waitForBytesWritten(-1);
+#endif
 	}
 
 	template <typename T>
