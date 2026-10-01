@@ -92,7 +92,6 @@ boption(SERVICE_NOTIFICATIONS "Notifications" ${QS_POSIX_DEFAULT})
 boption(BLUETOOTH "Bluetooth" ${QS_POSIX_DEFAULT})
 boption(NETWORK "Network" ${QS_POSIX_DEFAULT})
 boption(WINDOWS_BACKEND "Windows backend" ${QS_WINDOWS_DEFAULT})
-boption(BUNDLED_CLI11 "Use the bundled minimal CLI11 replacement (dev)" OFF)
 
 if (WIN32)
 	set(QS_POSIX_ONLY_OPTIONS

@@ -1,6 +1,5 @@
-# CLI11 is header only. Prefer an installed package. When cross compiling (or when no package
-# is available) it can be pointed at a plain include directory, or, as a last resort, the bundled
-# minimal replacement in src/launch/cli11 can be used with -DBUNDLED_CLI11=ON.
+# CLI11 is header only. Prefer an installed package; when cross compiling it can be pointed at
+# a plain include directory instead.
 find_package(CLI11 CONFIG QUIET)
 
 if (NOT TARGET CLI11::CLI11)
@@ -9,11 +8,6 @@ if (NOT TARGET CLI11::CLI11)
 	if (CLI11_INCLUDE_DIR)
 		add_library(CLI11::CLI11 INTERFACE IMPORTED)
 		target_include_directories(CLI11::CLI11 INTERFACE "${CLI11_INCLUDE_DIR}")
-	elseif (BUNDLED_CLI11)
-		message(WARNING "Using the bundled minimal CLI11 replacement (src/launch/cli11). "
-			"Prefer the real CLI11 via find_package or CLI11_INCLUDE_DIR.")
-		add_library(CLI11::CLI11 INTERFACE IMPORTED)
-		target_include_directories(CLI11::CLI11 INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/cli11")
 	else()
 		find_package(CLI11 CONFIG REQUIRED)
 	endif()
