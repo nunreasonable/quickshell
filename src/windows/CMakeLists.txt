@@ -1,7 +1,8 @@
 # Windows backend: PanelWindow on top of Win32 (AppBars for exclusive zones, DWM attributes,
 # a low level mouse hook for input masks) plus a stand-in Quickshell.Wayland module, small native
 # singletons (system/) ii's services call into instead of spawning Linux CLIs, and native service
-# modules (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower.
+# modules (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower,
+# Mpris on GSMTC.
 
 qt_add_library(quickshell-windows STATIC
 	util.cpp
