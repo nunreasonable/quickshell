@@ -1,6 +1,7 @@
 #include <qcoreapplication.h>
 #include <qdir.h>
 #include <qdiriterator.h>
+#include <qfont.h>
 #include <qfontdatabase.h>
 #include <qguiapplication.h>
 #include <qlist.h>
@@ -32,6 +33,10 @@ void loadBundledFonts() {
 			qWarning() << "Failed to load bundled font" << path;
 		}
 	}
+
+	// Family names fontconfig resolves through its aliases on Linux but Windows doesn't know.
+	QFont::insertSubstitution("JetBrains Mono NF", "JetBrainsMono Nerd Font");
+	QFont::insertSubstitution("JetBrains Mono", "JetBrainsMono Nerd Font");
 }
 
 // Windows backend plugin. Registered after _Window so module overlays apply in the right order,
