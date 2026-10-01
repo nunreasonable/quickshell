@@ -3,7 +3,13 @@
 #include <qdatetime.h>
 #include <qlogging.h>
 #include <qstring.h>
+
+#ifdef _WIN32
+// The MSVC CRT has no pid_t. Keep it 32 bit so the serialized lock/relaunch formats match POSIX.
+using pid_t = int;
+#else
 #include <sys/types.h>
+#endif
 
 struct InstanceInfo {
 	QString instanceId;

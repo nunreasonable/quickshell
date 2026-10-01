@@ -11,6 +11,7 @@
 #include <qobject.h>
 
 #include "../core/generation.hpp"
+#include "../core/instanceinfo.hpp"
 #include "../core/logcat.hpp"
 #include "../core/paths.hpp"
 #include "ipccommand.hpp"
@@ -33,8 +34,10 @@ IpcServer::IpcServer(const QString& path) {
 }
 
 void IpcServer::start() {
-	if (auto* run = QsPaths::instance()->instanceRunDir()) {
-		auto path = run->filePath("ipc.sock");
+	// The socket lives in the instance run dir on POSIX. On Windows it is a named pipe instead,
+	// but the run dir is still required for the instance lock and logs.
+	if (QsPaths::instance()->instanceRunDir()) {
+		auto path = QsPaths::ipcPath(InstanceInfo::CURRENT.instanceId);
 		new IpcServer(path);
 	} else {
 		qCCritical(
