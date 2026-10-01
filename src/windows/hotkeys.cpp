@@ -866,10 +866,16 @@ void HotkeyManager::runExec(const Bind& bind) const {
 	auto parts = QProcess::splitCommand(command);
 	if (parts.isEmpty()) return;
 
-	// CreateProcess semantics: the executable's own dir (qs.exe, qsw.exe), then PATH. Console
-	// programs get no console window since the shell has none.
+	// Bare names next to our own executable (qs.exe, qsw.exe) run from there, everything else
+	// is looked up on PATH. Console programs get no console window since the shell has none.
+	auto program = parts.takeFirst();
+	if (!program.contains('/') && !program.contains('\\')) {
+		auto local = QDir(QCoreApplication::applicationDirPath()).filePath(program);
+		if (QFileInfo(local).isFile()) program = local;
+	}
+
 	auto process = QProcess();
-	process.setProgram(parts.takeFirst());
+	process.setProgram(program);
 	process.setArguments(parts);
 	process.setWorkingDirectory(QDir::homePath());
 
