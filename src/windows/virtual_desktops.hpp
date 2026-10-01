@@ -88,7 +88,8 @@ private:
 
 	void loadAccessor();
 	void installListener();
-	bool readRegistry(QList<Desktop>& desktops, GUID& current) const;
+	bool readRegistry(QList<GUID>& ids, GUID& current) const;
+	[[nodiscard]] QString readDesktopName(const GUID& id) const;
 	bool waitForCount(qsizetype count);
 	void sendShortcut(WORD key, int times) const;
 
@@ -108,6 +109,8 @@ private:
 		bool loaded = false;
 		int (*getCurrentDesktopNumber)() = nullptr;
 		int (*getDesktopCount)() = nullptr;
+		GUID (*getDesktopIdByNumber)(int) = nullptr;
+		int (*getWindowDesktopNumber)(HWND) = nullptr;
 		int (*goToDesktopNumber)(int) = nullptr;
 		int (*moveWindowToDesktopNumber)(HWND, int) = nullptr;
 		int (*isWindowOnCurrentVirtualDesktop)(HWND) = nullptr;

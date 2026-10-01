@@ -246,6 +246,8 @@ void VirtualDesktops::loadAccessor() {
 	       && load(a.isWindowOnCurrentVirtualDesktop, "IsWindowOnCurrentVirtualDesktop");
 
 	// Optional on older builds of the dll.
+	load(a.getDesktopIdByNumber, "GetDesktopIdByNumber");
+	load(a.getWindowDesktopNumber, "GetWindowDesktopNumber");
 	load(a.createDesktop, "CreateDesktop");
 	load(a.registerPostMessageHook, "RegisterPostMessageHook");
 	load(a.unregisterPostMessageHook, "UnregisterPostMessageHook");
@@ -312,29 +314,35 @@ void VirtualDesktops::installListener() {
 	this->accessor.registerPostMessageHook(this->listener, ACCESSOR_MESSAGE);
 }
 
-bool VirtualDesktops::readRegistry(QList<Desktop>& desktops, GUID& current) const {
+QString VirtualDesktops::readDesktopName(const GUID& id) const {
+	// Names only exist for desktops the user renamed.
+	if (guidIsNull(id)) return {};
+
+	HKEY key = nullptr;
+	auto sub = QString::fromWCharArray(DESKTOPS_KEY) + "\\Desktops\\" + guidToString(id);
+	auto wsub = sub.toStdWString();
+	if (RegOpenKeyExW(HKEY_CURRENT_USER, wsub.c_str(), 0, KEY_READ, &key) != ERROR_SUCCESS) {
+		return {};
+	}
+
+	auto name = readString(key, L"Name");
+	RegCloseKey(key);
+	return name;
+}
+
+bool VirtualDesktops::readRegistry(QList<GUID>& ids, GUID& current) const {
 	HKEY key = nullptr;
 	if (RegOpenKeyExW(HKEY_CURRENT_USER, DESKTOPS_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS) {
 		return false;
 	}
 
-	QByteArray ids;
-	if (readBinary(key, L"VirtualDesktopIDs", ids)) {
-		for (qsizetype offset = 0; offset + static_cast<qsizetype>(sizeof(GUID)) <= ids.length();
+	// Absent until a second desktop has been created at least once.
+	QByteArray blob;
+	if (readBinary(key, L"VirtualDesktopIDs", blob)) {
+		for (qsizetype offset = 0; offset + static_cast<qsizetype>(sizeof(GUID)) <= blob.length();
 		     offset += static_cast<qsizetype>(sizeof(GUID)))
 		{
-			desktops.append(Desktop {.id = guidAt(ids, offset), .name = QString()});
-		}
-	}
-
-	// Names only exist for desktops the user renamed.
-	for (auto& desktop: desktops) {
-		HKEY nameKey = nullptr;
-		auto sub = QStringLiteral("Desktops\\") + guidToString(desktop.id);
-		auto wsub = sub.toStdWString();
-		if (RegOpenKeyExW(key, wsub.c_str(), 0, KEY_READ, &nameKey) == ERROR_SUCCESS) {
-			desktop.name = readString(nameKey, L"Name");
-			RegCloseKey(nameKey);
+			ids.append(guidAt(blob, offset));
 		}
 	}
 
@@ -362,15 +370,33 @@ bool VirtualDesktops::readRegistry(QList<Desktop>& desktops, GUID& current) cons
 }
 
 void VirtualDesktops::refresh() {
-	QList<Desktop> desktops;
+	QList<GUID> ids;
 	GUID current {};
 
-	if (!this->readRegistry(desktops, current)) {
+	if (!this->readRegistry(ids, current)) {
 		qCWarning(logDesktops) << "Unable to read the virtual desktop registry keys.";
 	}
 
+	// The accessor asks the shell directly, which beats registry values that are absent on a
+	// fresh profile or might lag behind.
+	const auto& a = this->accessor;
+	if (a.loaded) {
+		auto count = a.getDesktopCount();
+		if (count > 0) {
+			ids.resize(count);
+			if (a.getDesktopIdByNumber != nullptr) {
+				for (auto i = 0; i < count; i++) {
+					if (guidIsNull(ids[i])) ids[i] = a.getDesktopIdByNumber(i);
+				}
+			}
+		}
+	}
+
 	// A fresh profile has a single unnamed desktop and no registry entries yet.
-	if (desktops.isEmpty()) desktops.append(Desktop {});
+	if (ids.isEmpty()) ids.append(GUID {});
+
+	QList<Desktop> desktops;
+	for (const auto& id: ids) desktops.append(Desktop {.id = id, .name = this->readDesktopName(id)});
 
 	auto currentIndex = qsizetype(-1);
 	for (qsizetype i = 0; i < desktops.length(); i++) {
@@ -380,9 +406,8 @@ void VirtualDesktops::refresh() {
 		}
 	}
 
-	// The accessor asks the shell directly, which beats a registry value that might lag.
-	if (this->accessor.loaded) {
-		auto number = this->accessor.getCurrentDesktopNumber();
+	if (a.loaded) {
+		auto number = a.getCurrentDesktopNumber();
 		if (number >= 0 && number < desktops.length()) {
 			currentIndex = number;
 			current = desktops[number].id;
@@ -438,7 +463,17 @@ GUID VirtualDesktops::windowDesktopId(HWND hwnd) const {
 }
 
 qsizetype VirtualDesktops::windowDesktopIndex(HWND hwnd) const {
-	return this->indexOf(this->windowDesktopId(hwnd));
+	auto index = this->indexOf(this->windowDesktopId(hwnd));
+	if (index != -1) return index;
+
+	// Public API unanswered (fresh profile without registry ids, or a stale list): ask the shell.
+	const auto& a = this->accessor;
+	if (a.loaded && a.getWindowDesktopNumber != nullptr) {
+		auto number = a.getWindowDesktopNumber(hwnd);
+		if (number >= 0 && number < this->count()) return number;
+	}
+
+	return -1;
 }
 
 bool VirtualDesktops::isWindowOnCurrent(HWND hwnd) const {
