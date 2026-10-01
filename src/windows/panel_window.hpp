@@ -55,12 +55,19 @@ class WinProxiedWindow: public ProxiedWindow {
 public:
 	using ProxiedWindow::ProxiedWindow;
 
+	// Unlike proxy(), this is a guarded pointer: a disowned window waiting for deleteLater
+	// still receives native messages after its old panel is gone.
+	void setPanel(WinPanelWindow* panel);
+
 signals:
 	void surfaceCreated();
 
 protected:
 	bool event(QEvent* event) override;
 	bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+
+private:
+	QPointer<WinPanelWindow> mPanel;
 };
 
 class WinPanelWindow: public ProxyWindowBase {

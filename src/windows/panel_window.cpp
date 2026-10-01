@@ -95,11 +95,11 @@ bool WinProxiedWindow::event(QEvent* event) {
 	return this->ProxiedWindow::event(event);
 }
 
+void WinProxiedWindow::setPanel(WinPanelWindow* panel) { this->mPanel = panel; }
+
 bool WinProxiedWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
-	if (eventType == "windows_generic_MSG") {
-		if (auto* panel = qobject_cast<WinPanelWindow*>(this->proxy())) {
-			if (panel->handleNativeMessage(static_cast<MSG*>(message), result)) return true;
-		}
+	if (eventType == "windows_generic_MSG" && !this->mPanel.isNull()) {
+		if (this->mPanel->handleNativeMessage(static_cast<MSG*>(message), result)) return true;
 	}
 
 	return this->ProxiedWindow::nativeEvent(eventType, message, result);
@@ -154,6 +154,8 @@ void WinPanelWindow::connectWindow() {
 	this->ProxyWindowBase::connectWindow();
 
 	if (auto* window = qobject_cast<WinProxiedWindow*>(this->window)) {
+		window->setPanel(this);
+
 		QObject::connect(
 		    window,
 		    &WinProxiedWindow::surfaceCreated,
@@ -196,6 +198,10 @@ ProxiedWindow* WinPanelWindow::disownWindow(bool keepItemOwnership) {
 void WinPanelWindow::releaseNativeState() {
 	if (this->window != nullptr) {
 		InputMaskTracker::instance()->remove(this->window);
+
+		if (auto* window = qobject_cast<WinProxiedWindow*>(this->window)) {
+			window->setPanel(nullptr);
+		}
 	}
 
 	this->appBar.remove();
@@ -243,6 +249,9 @@ void WinPanelWindow::onSurfaceCreated() { this->nativeInit(); }
 
 void WinPanelWindow::nativeInit() {
 	if (this->hwnd() == nullptr) return;
+
+	// A window reused across a reload is already visible and emits no visibleChanged.
+	if (this->window->isVisible()) WinPanelStack::instance()->addPanel(this);
 
 	applyPanelDwmAttributes(this->hwnd());
 	this->applyNativeStyles();
