@@ -1,7 +1,6 @@
 #include "toolsupport.hpp"
 #include <cerrno>
 
-#include <fcntl.h>
 #include <qcontainerfwd.h>
 #include <qdebug.h>
 #include <qdir.h>
@@ -11,6 +10,10 @@
 #include <qloggingcategory.h>
 #include <qqmlengine.h>
 #include <qtenvironmentvariables.h>
+
+#ifndef _WIN32
+#include <fcntl.h>
+#endif
 
 #include "logcat.hpp"
 #include "paths.hpp"
@@ -23,6 +26,12 @@ QS_LOGGING_CATEGORY(logTooling, "quickshell.tooling", QtWarningMsg);
 }
 
 bool QmlToolingSupport::updateTooling(const QDir& configRoot, QmlScanner& scanner) {
+#ifdef _WIN32
+	// TODO(windows): qmlls support relies on symlinks and fcntl locks. Disabled for now.
+	Q_UNUSED(configRoot);
+	Q_UNUSED(scanner);
+	return false;
+#else
 	auto* vfs = QsPaths::instance()->shellVfsDir();
 
 	if (!vfs) {
@@ -41,9 +50,13 @@ bool QmlToolingSupport::updateTooling(const QDir& configRoot, QmlScanner& scanne
 
 	QmlToolingSupport::updateToolingFs(scanner, configRoot, vfs->filePath("qs"));
 	return true;
+#endif
 }
 
 bool QmlToolingSupport::lockTooling() {
+#ifdef _WIN32
+	return false;
+#else
 	if (QmlToolingSupport::toolingLock) return true;
 
 	auto lockPath = QsPaths::instance()->shellVfsDir()->filePath("tooling.lock");
@@ -74,6 +87,7 @@ bool QmlToolingSupport::lockTooling() {
 		                                 << " with error code " << errno << ": " << qt_error_string();
 		return false;
 	}
+#endif
 }
 
 QString QmlToolingSupport::getQmllsConfig() {

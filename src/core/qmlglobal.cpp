@@ -21,7 +21,6 @@
 #include <qtypes.h>
 #include <qvariant.h>
 #include <qwindowdefs.h>
-#include <unistd.h>
 
 #include "../io/processcore.hpp"
 #include "generation.hpp"
@@ -150,7 +149,7 @@ QuickshellGlobal::QuickshellGlobal(QObject* parent): QObject(parent) {
 }
 
 qint32 QuickshellGlobal::processId() const { // NOLINT
-	return getpid();
+	return static_cast<qint32>(QCoreApplication::applicationPid());
 }
 
 qsizetype QuickshellGlobal::screensCount(QQmlListProperty<QuickshellScreenInfo>* /*unused*/) {

@@ -3,7 +3,6 @@
 #include <cstring>
 #include <string_view>
 
-#include <fcntl.h>
 #include <qconfig.h>
 #include <qcontainerfwd.h>
 #include <qdebug.h>
@@ -12,20 +11,106 @@
 #include <qhashfunctions.h>
 #include <qscopeguard.h>
 #include <qtversion.h>
+
+#ifdef _WIN32
+#include <qlatin1stringview.h>
+#include <qprocess.h>
+#include <qset.h>
+#include <qsysinfo.h>
+#include <windows.h>
+#else
+#include <fcntl.h>
 #include <unistd.h>
 #include <xf86drm.h>
+#endif
 
 #include "build.hpp"
 
+#ifndef _WIN32
 extern char** environ; // NOLINT
+#endif
 
 namespace qs::debuginfo {
+
+namespace {
+
+// Environment variables starting with any of these are included in the debug output.
+constexpr auto ENV_PREFIXES = std::array<std::string_view, 5> {
+    "QS_",
+    "QT_",
+    "QML_",
+    "QML2_",
+    "QSG_",
+};
+
+} // namespace
 
 QString qsVersion() {
 	return QS_VERSION " (revision " GIT_REVISION ", distributed by " DISTRIBUTOR ")";
 }
 
 QString qtVersion() { return qVersion() % QStringLiteral(" (built against " QT_VERSION_STR ")"); }
+
+#ifdef _WIN32
+
+QString gpuInfo() {
+	QString info;
+	auto stream = QTextStream(&info);
+	QSet<QString> seen;
+
+	DISPLAY_DEVICEW device {};
+	device.cb = sizeof(device);
+
+	for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &device, 0); ++i) {
+		if (device.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) continue;
+
+		auto model = QString::fromWCharArray(device.DeviceString);
+		auto id = QString::fromWCharArray(device.DeviceID);
+
+		// Every output of an adapter is listed as its own display device.
+		if (seen.contains(id)) continue;
+		seen.insert(id);
+
+		stream << "GPU " << QString::fromWCharArray(device.DeviceName) << "\n  Model: " << model
+		       << "\n  Device ID: " << id << '\n';
+	}
+
+	return info;
+}
+
+QString systemInfo() {
+	QString info;
+	auto stream = QTextStream(&info);
+
+	stream << gpuInfo() << '\n';
+
+	stream << "OS: " << QSysInfo::prettyProductName() << " (" << QSysInfo::kernelType() << ' '
+	       << QSysInfo::kernelVersion() << ", " << QSysInfo::currentCpuArchitecture() << ")\n";
+
+	return info;
+}
+
+QString envInfo() {
+	QString info;
+	auto stream = QTextStream(&info);
+
+	auto env = QProcessEnvironment::systemEnvironment();
+	auto keys = env.keys();
+	keys.sort();
+
+	for (const auto& key: keys) {
+		for (const auto& prefix: ENV_PREFIXES) {
+			if (key.startsWith(QLatin1StringView(prefix.data(), prefix.size()))) {
+				stream << key << '=' << env.value(key) << '\n';
+				break;
+			}
+		}
+	}
+
+	return info;
+}
+
+#else
 
 QString gpuInfo() {
 	auto deviceCount = drmGetDevices2(0, nullptr, 0);
@@ -129,15 +214,7 @@ QString envInfo() {
 	auto stream = QTextStream(&info);
 
 	for (auto** envp = environ; *envp != nullptr; ++envp) { // NOLINT
-		auto prefixes = std::array<std::string_view, 5> {
-		    "QS_",
-		    "QT_",
-		    "QML_",
-		    "QML2_",
-		    "QSG_",
-		};
-
-		for (const auto& prefix: prefixes) {
+		for (const auto& prefix: ENV_PREFIXES) {
 			if (strncmp(prefix.data(), *envp, prefix.length()) == 0) goto print;
 		}
 		continue;
@@ -148,6 +225,8 @@ QString envInfo() {
 
 	return info;
 }
+
+#endif
 
 QString combinedInfo() {
 	QString info;
