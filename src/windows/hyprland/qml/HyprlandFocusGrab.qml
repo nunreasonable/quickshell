@@ -1,16 +1,7 @@
-// Windows shim for Quickshell.Hyprland's HyprlandFocusGrab.
-// Real backend: a Win32 focus/activation watcher (e.g. a WH_CBT/WH_MOUSE
-// hook, or polling GetForegroundWindow) that emits `cleared()` once input
-// moves outside the listed windows, mirroring hyprland_focus_grab_v1.
-//
-// This stub tracks `active`/`windows` as plain properties but never performs
-// a real grab and never emits `cleared()` on its own -- popups that rely on
-// click-outside-to-dismiss simply won't auto-dismiss yet in this phase.
-import QtQml
+// Quickshell.Hyprland's HyprlandFocusGrab on Windows: the native Quickshell.Windows FocusGrab.
+// While active, a mouse press outside every listed window (or their popups), or another
+// process taking the foreground, clears the grab and emits cleared(), like hyprland_focus_grab_v1.
+// Same properties: `active`, `windows`; same signal: `cleared()`.
+import Quickshell.Windows
 
-QtObject {
-    property bool active: false
-    property var windows: []
-
-    signal cleared()
-}
+FocusGrab {}

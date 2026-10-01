@@ -10,6 +10,7 @@
 #include <qregion.h>
 #include <qtimer.h>
 #include <qwindow.h>
+#include <windowsx.h>
 
 #include "util.hpp"
 
@@ -20,6 +21,7 @@ namespace {
 Q_LOGGING_CATEGORY(logInputMask, "quickshell.windows.inputmask", QtWarningMsg);
 
 constexpr UINT WM_QS_CURSOR_MOVED = WM_APP + 1;
+constexpr UINT WM_QS_BUTTON_PRESSED = WM_APP + 2;
 constexpr auto MESSAGE_WINDOW_CLASS = L"QuickshellInputMaskTracker";
 
 // Shared with the hook thread. The hook only writes the position and wakes the gui thread
@@ -30,6 +32,7 @@ std::atomic<bool> wakePending = false; // NOLINT
 std::atomic<HWND> hookTarget = nullptr; // NOLINT
 std::atomic<DWORD> hookThreadId = 0;    // NOLINT
 std::atomic<bool> hookInstalled = false; // NOLINT
+std::atomic<int> buttonWatchers = 0;     // NOLINT
 
 } // namespace
 
@@ -122,6 +125,25 @@ void InputMaskTracker::refresh() {
 	this->evaluate(cursor);
 }
 
+void InputMaskTracker::acquireButtonEvents() {
+	buttonWatchers.fetch_add(1);
+	this->updateHookState();
+
+	if (!this->hookRunning) {
+		qCWarning(logInputMask) << "Mouse hook unavailable, mouse button presses can't be observed.";
+	}
+}
+
+void InputMaskTracker::releaseButtonEvents() {
+	if (buttonWatchers.load() <= 0) return;
+	buttonWatchers.fetch_sub(1);
+	this->updateHookState();
+}
+
+void InputMaskTracker::onButtonPressed(QPoint position, quint32 time) {
+	emit this->buttonPressed(position, time);
+}
+
 void InputMaskTracker::onCursorMoved() {
 	// clear before reading so a position written in between triggers another wakeup
 	wakePending.store(false);
@@ -172,14 +194,20 @@ void InputMaskTracker::evaluate(POINT cursor) {
 }
 
 void InputMaskTracker::updateHookState() {
-	auto needed = !this->entries.isEmpty();
+	auto needed = !this->entries.isEmpty() || buttonWatchers.load() > 0;
 
-	if (needed && !this->hookRunning && !this->pollTimer.isActive()) {
+	if (needed && !this->hookRunning && !this->hookFailed) {
 		if (this->messageWindow == nullptr || !this->startHook()) {
 			qCWarning(logInputMask) << "Mouse hook unavailable, polling the cursor instead.";
-			this->pollTimer.start();
+			this->hookFailed = true;
 		}
-	} else if (!needed) {
+	}
+
+	if (needed && this->hookFailed && !this->entries.isEmpty() && !this->pollTimer.isActive()) {
+		this->pollTimer.start();
+	}
+
+	if (!needed) {
 		this->stopHook();
 		this->pollTimer.stop();
 	}
@@ -253,6 +281,21 @@ LRESULT CALLBACK InputMaskTracker::mouseHookProc(int code, WPARAM wParam, LPARAM
 			if (target != nullptr) PostMessageW(target, WM_QS_CURSOR_MOVED, 0, 0);
 			else wakePending.store(false);
 		}
+
+		auto button = wParam == WM_LBUTTONDOWN || wParam == WM_RBUTTONDOWN || wParam == WM_MBUTTONDOWN
+		           || wParam == WM_XBUTTONDOWN;
+
+		// Posted after the move, so the masks are up to date when the press is handled.
+		if (button && buttonWatchers.load() > 0) {
+			if (auto* target = hookTarget.load()) {
+				PostMessageW(
+				    target,
+				    WM_QS_BUTTON_PRESSED,
+				    static_cast<WPARAM>(info->time),
+				    MAKELPARAM(static_cast<WORD>(info->pt.x), static_cast<WORD>(info->pt.y))
+				);
+			}
+		}
 	}
 
 	return CallNextHookEx(nullptr, code, wParam, lParam);
@@ -262,6 +305,12 @@ LRESULT CALLBACK
 InputMaskTracker::messageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	if (msg == WM_QS_CURSOR_MOVED) {
 		InputMaskTracker::instance()->onCursorMoved();
+		return 0;
+	}
+
+	if (msg == WM_QS_BUTTON_PRESSED) {
+		auto position = QPoint(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+		InputMaskTracker::instance()->onButtonPressed(position, static_cast<quint32>(wParam));
 		return 0;
 	}
 

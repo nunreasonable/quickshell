@@ -6,6 +6,7 @@
 
 #include <qlist.h>
 #include <qobject.h>
+#include <qpoint.h>
 #include <qpointer.h>
 #include <qregion.h>
 #include <qtclasshelpermacros.h>
@@ -23,6 +24,9 @@ namespace qs::windows {
 // whether the cursor is inside its mask. The cursor is observed with a WH_MOUSE_LL hook that
 // runs on a dedicated thread and only records the position, since a slow hook delays the whole
 // system's mouse and Windows removes hooks that stall.
+//
+// The same hook reports mouse button presses (for focus grabs) while someone asks for them,
+// so the process never installs a second mouse hook.
 class InputMaskTracker: public QObject {
 	Q_OBJECT;
 
@@ -41,6 +45,15 @@ public:
 	// rewrote its window styles.
 	void refresh();
 
+	// Reference counted: buttonPressed is emitted while at least one user acquired it.
+	void acquireButtonEvents();
+	void releaseButtonEvents();
+
+signals:
+	// A mouse button went down anywhere, in physical screen coordinates. `time` is the
+	// event's GetTickCount time. Emitted after the input masks saw the matching cursor move.
+	void buttonPressed(QPoint position, quint32 time);
+
 private:
 	explicit InputMaskTracker(QObject* parent);
 
@@ -54,6 +67,7 @@ private:
 	bool startHook();
 	void stopHook();
 	void onCursorMoved();
+	void onButtonPressed(QPoint position, quint32 time);
 
 	static LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 	static LRESULT CALLBACK mouseHookProc(int code, WPARAM wParam, LPARAM lParam);
@@ -63,6 +77,7 @@ private:
 	HWND messageWindow = nullptr;
 	std::thread hookThread;
 	bool hookRunning = false;
+	bool hookFailed = false;
 	QTimer pollTimer;
 };
 

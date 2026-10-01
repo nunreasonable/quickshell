@@ -16,6 +16,7 @@
 
 #include "../../core/model.hpp"
 #include "../../core/qmlscreen.hpp"
+#include "../hotkeys.hpp"
 #include "../virtual_desktops.hpp"
 #include "../window_tracker.hpp"
 #include "dispatcher.hpp"
@@ -108,6 +109,11 @@ HyprlandIpc::HyprlandIpc()
 	QObject::connect(this->mDesktops, &VirtualDesktops::desktopsChanged, this, &HyprlandIpc::onDesktopsChanged);
 	QObject::connect(this->mDesktops, &VirtualDesktops::currentChanged, this, &HyprlandIpc::onCurrentDesktopChanged);
 	// clang-format on
+
+	// `global` dispatches reach GlobalShortcut objects, like Hyprland's global dispatcher.
+	QObject::connect(this, &HyprlandIpc::dispatchGlobal, this, [](const QString& name) {
+		qs::windows::hotkeys::HotkeyManager::instance()->triggerGlobal(name);
+	});
 
 	if (auto* app = qobject_cast<QGuiApplication*>(QGuiApplication::instance())) {
 		QObject::connect(app, &QGuiApplication::screenAdded, this, &HyprlandIpc::onScreensChanged);

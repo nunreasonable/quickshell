@@ -1,6 +1,8 @@
-// Windows shim for Quickshell.Hyprland's GlobalShortcut.
-// Real backend: RegisterHotKey / a low-level keyboard hook, keyed by the
-// appid+name pair like hyprland_global_shortcuts_v1.
+// Quickshell.Hyprland's GlobalShortcut on Windows.
+// Registers with the native Quickshell.Windows Hotkeys singleton, which owns the keys
+// (keybinds.json: RegisterHotKey + a low level keyboard hook) and signals every shortcut whose
+// appid and name match a bind's `"action": "global", "name": "<appid>:<name>"` (appid defaults
+// to "quickshell", as in Hyprland's `global, quickshell:<name>`).
 //
 // NOTE: upstream's C++ type has both a `pressed` *property* (poll-only state)
 // and a `pressed()` *signal* -- legal there because Qt's meta-object system
@@ -10,8 +12,11 @@
 // ii only ever uses `onPressed`/`onReleased`, so the polling property is
 // dropped here; everything else matches upstream.
 import QtQml
+import Quickshell.Windows
 
 QtObject {
+    id: root
+
     property string appid: "quickshell"
     property string name: ""
     property string description: ""
@@ -19,4 +24,7 @@ QtObject {
 
     signal pressed()
     signal released()
+
+    Component.onCompleted: Hotkeys.registerShortcut(root)
+    Component.onDestruction: Hotkeys.unregisterShortcut(root)
 }

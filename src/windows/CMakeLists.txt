@@ -1,5 +1,6 @@
 # Windows backend: PanelWindow on top of Win32 (AppBars for exclusive zones, DWM attributes,
-# a low level mouse hook for input masks), the window / virtual desktop tracker, stand-in
+# a low level mouse hook for input masks), global shortcuts (RegisterHotKey + a low level
+# keyboard hook) and focus grabs, the window / virtual desktop tracker, stand-in
 # Quickshell.Wayland and Quickshell.Hyprland modules built on it, small native singletons
 # (system/) ii's services call into instead of spawning Linux CLIs, and native service modules
 # (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower, Mpris on GSMTC.
@@ -9,6 +10,9 @@ qt_add_library(quickshell-windows STATIC
 	appbar.cpp
 	input_mask.cpp
 	panel_window.cpp
+	keyboard_hook.cpp
+	hotkeys.cpp
+	focus_grab.cpp
 	virtual_desktops.cpp
 	window_tracker.cpp
 	desktopentry_backend.cpp

@@ -1,6 +1,7 @@
 # Windows stand-in for the Quickshell.Hyprland module: the Hyprland singleton, monitors
 # (screens), workspaces (virtual desktops) and toplevels, all backed by the window tracker.
-# GlobalShortcut and HyprlandFocusGrab are still QML stubs (qml/) until they get backends.
+# GlobalShortcut and HyprlandFocusGrab are QML (qml/) on top of Quickshell.Windows' Hotkeys and
+# FocusGrab, which own the keyboard hook / RegisterHotKey and the click and foreground watching.
 
 qt_add_library(quickshell-windows-hyprland STATIC
 	connection.cpp
@@ -20,7 +21,7 @@ qt_add_qml_module(quickshell-windows-hyprland
 		qml/HyprlandFocusGrab.qml
 )
 
-qs_add_module_deps_light(quickshell-windows-hyprland Quickshell Quickshell.Wayland)
+qs_add_module_deps_light(quickshell-windows-hyprland Quickshell Quickshell.Wayland Quickshell.Windows)
 
 install_qml_module(quickshell-windows-hyprland)
 
