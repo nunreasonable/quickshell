@@ -6,6 +6,8 @@ qt_add_library(quickshell-windows STATIC
 	appbar.cpp
 	input_mask.cpp
 	panel_window.cpp
+	desktopentry_backend.cpp
+	appicon.cpp
 )
 
 qt_add_qml_module(quickshell-windows
@@ -22,7 +24,7 @@ add_subdirectory(wayland)
 
 add_library(quickshell-windows-init OBJECT init.cpp)
 
-target_link_libraries(quickshell-windows PRIVATE Qt::Quick user32 shell32 dwmapi)
+target_link_libraries(quickshell-windows PRIVATE Qt::Quick user32 shell32 dwmapi ole32 uuid gdi32)
 target_link_libraries(quickshell-windows-init PRIVATE Qt::Quick Qt::Qml)
 
 qs_module_pch(quickshell-windows SET large)

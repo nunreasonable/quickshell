@@ -336,6 +336,11 @@ QVector<QString> DesktopEntry::parseExecString(const QString& execString) {
 }
 
 void DesktopEntry::doExec(const QList<QString>& execString, const QString& workingDirectory) {
+	if (auto* backend = DesktopEntryManager::backend()) {
+		backend->execute(execString, workingDirectory);
+		return;
+	}
+
 	qs::io::process::ProcessContext ctx;
 	ctx.setCommand(execString);
 	ctx.setWorkingDirectory(workingDirectory);
@@ -351,14 +356,19 @@ DesktopEntryScanner::DesktopEntryScanner(DesktopEntryManager* manager): manager(
 }
 
 void DesktopEntryScanner::run() {
-	const auto& desktopPaths = DesktopEntryManager::desktopPaths();
 	auto scanResults = QList<ParsedDesktopEntryData>();
 
-	for (const auto& path: desktopPaths | std::views::reverse) {
-		auto file = QFileInfo(path);
-		if (!file.isDir()) continue;
+	if (auto* backend = DesktopEntryManager::backend()) {
+		scanResults = backend->scan();
+	} else {
+		const auto& desktopPaths = DesktopEntryManager::desktopPaths();
 
-		this->scanDirectory(QDir(path), QString(), scanResults);
+		for (const auto& path: desktopPaths | std::views::reverse) {
+			auto file = QFileInfo(path);
+			if (!file.isDir()) continue;
+
+			this->scanDirectory(QDir(path), QString(), scanResults);
+		}
 	}
 
 	QMetaObject::invokeMethod(
@@ -403,6 +413,8 @@ void DesktopEntryScanner::scanDirectory(
 	}
 }
 
+DesktopEntryBackend* DesktopEntryManager::sBackend = nullptr; // NOLINT
+
 DesktopEntryManager::DesktopEntryManager(): monitor(new DesktopEntryMonitor(this)) {
 	QObject::connect(
 	    this->monitor,
@@ -411,7 +423,14 @@ DesktopEntryManager::DesktopEntryManager(): monitor(new DesktopEntryMonitor(this
 	    &DesktopEntryManager::handleFileChanges
 	);
 
-	DesktopEntryScanner(this).run();
+	if (DesktopEntryManager::sBackend != nullptr) {
+		// Backend scans may hit COM/WinRT or disk and must not block the Qt GUI thread (which
+		// is where the singleton is typically first constructed from); run it like any other
+		// rescan instead of inline like the synchronous Linux .desktop scan below.
+		this->scanDesktopEntries();
+	} else {
+		DesktopEntryScanner(this).run();
+	}
 }
 
 void DesktopEntryManager::scanDesktopEntries() {
@@ -433,6 +452,12 @@ DesktopEntryManager* DesktopEntryManager::instance() {
 	static auto* instance = new DesktopEntryManager(); // NOLINT
 	return instance;
 }
+
+void DesktopEntryManager::installBackend(DesktopEntryBackend* backend) {
+	DesktopEntryManager::sBackend = backend;
+}
+
+DesktopEntryBackend* DesktopEntryManager::backend() { return DesktopEntryManager::sBackend; }
 
 DesktopEntry* DesktopEntryManager::byId(const QString& id) {
 	if (auto* entry = this->desktopEntries.value(id)) {
@@ -460,6 +485,21 @@ DesktopEntry* DesktopEntryManager::heuristicLookup(const QString& name) {
 	});
 
 	if (iter != list.end()) return *iter;
+
+	// Backend-provided entries (Windows) have no meaningful startupClass to match on, but
+	// matching a window's title/appId against the display name is a reasonable last resort
+	// there. Gated on a backend being installed so Linux's .desktop-driven lookup (which this
+	// could make falsely match a Name= against an arbitrary window class) is unaffected.
+	if (DesktopEntryManager::sBackend != nullptr) {
+		auto lowerName = name.toLower();
+
+		iter = std::ranges::find_if(list, [&](DesktopEntry* entry) {
+			return lowerName == entry->bName.value().toLower();
+		});
+
+		if (iter != list.end()) return *iter;
+	}
+
 	return nullptr;
 }
 
@@ -482,6 +522,8 @@ void DesktopEntryManager::handleFileChanges() {
 
 const QStringList& DesktopEntryManager::desktopPaths() {
 	static const auto paths = []() {
+		if (auto* backend = DesktopEntryManager::sBackend) return backend->watchPaths();
+
 		auto dataPaths = QStringList();
 
 		auto dataHome = qEnvironmentVariable("XDG_DATA_HOME");

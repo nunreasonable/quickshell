@@ -10,6 +10,7 @@
 #include <qstring.h>
 
 #include "../core/plugin.hpp"
+#include "desktopentry_backend.hpp"
 #include "panel_window.hpp"
 
 namespace {
@@ -47,7 +48,13 @@ class WindowsPlugin: public QsEnginePlugin {
 
 	bool applies() override { return QGuiApplication::platformName() == "windows"; }
 
-	void init() override { loadBundledFonts(); }
+	void init() override {
+		loadBundledFonts();
+		// Before anything can touch DesktopEntries / DesktopEntryManager::instance(): it
+		// decides how to perform its initial scan (sync Linux .desktop walk vs. async backend
+		// scan) at construction time.
+		qs::windows::WindowsDesktopEntryBackend::install();
+	}
 
 	void registerTypes() override {
 		qmlRegisterType<qs::windows::WinPanelInterface>(
