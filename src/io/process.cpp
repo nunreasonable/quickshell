@@ -310,7 +310,26 @@ void Process::onStderrReadyRead() {
 
 void Process::signal(qint32 signal) {
 	if (this->process == nullptr) return;
+
+#ifdef _WIN32
+	// There are no POSIX signals on Windows. QProcess::terminate() posts WM_CLOSE to the
+	// process's windows (console programs ignore it), QProcess::kill() calls TerminateProcess.
+	switch (signal) {
+	case 1:  // SIGHUP
+	case 2:  // SIGINT
+	case 15: // SIGTERM
+		this->process->terminate();
+		break;
+	case 9: // SIGKILL
+		this->process->kill();
+		break;
+	default:
+		qmlWarning(this) << "Signal " << signal << " cannot be sent to a process on Windows.";
+		break;
+	}
+#else
 	kill(static_cast<qint32>(this->process->processId()), signal); // NOLINT
+#endif
 }
 
 void Process::write(const QString& data) {
