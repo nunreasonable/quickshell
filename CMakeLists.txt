@@ -48,14 +48,24 @@ boption(BUILD_TESTING "Build tests (dev)" OFF)
 boption(ASAN "ASAN (dev)" OFF) # note: better output with gcc than clang
 boption(FRAME_POINTERS "Keep Frame Pointers (dev)" ${ASAN})
 
+# Features that only exist on POSIX systems default to OFF when targeting Windows, where the
+# Windows backend defaults to ON instead. Enabling a POSIX feature on Windows is an error.
+if (WIN32)
+	set(QS_POSIX_DEFAULT OFF)
+	set(QS_WINDOWS_DEFAULT ON)
+else()
+	set(QS_POSIX_DEFAULT ON)
+	set(QS_WINDOWS_DEFAULT OFF)
+endif()
+
 if (CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
 	boption(USE_JEMALLOC "Use jemalloc" OFF)
 else()
-	boption(USE_JEMALLOC "Use jemalloc" ON)
+	boption(USE_JEMALLOC "Use jemalloc" ${QS_POSIX_DEFAULT})
 endif()
-boption(CRASH_HANDLER "Crash Handling" ON)
+boption(CRASH_HANDLER "Crash Handling" ${QS_POSIX_DEFAULT})
 boption(SOCKETS "Unix Sockets" ON)
-boption(WAYLAND "Wayland" ON)
+boption(WAYLAND "Wayland" ${QS_POSIX_DEFAULT})
 boption(WAYLAND_WLR_LAYERSHELL "  Wlroots Layer-Shell" ON REQUIRES WAYLAND)
 boption(WAYLAND_SESSION_LOCK "  Session Lock" ON REQUIRES WAYLAND)
 boption(WAYLAND_TOPLEVEL_MANAGEMENT "  Foreign Toplevel Management" ON REQUIRES WAYLAND)
@@ -68,24 +78,57 @@ boption(SCREENCOPY "  Screencopy" ON REQUIRES WAYLAND)
 boption(SCREENCOPY_ICC "    Image Copy Capture" ON REQUIRES WAYLAND)
 boption(SCREENCOPY_WLR "    Wlroots Screencopy" ON REQUIRES WAYLAND)
 boption(SCREENCOPY_HYPRLAND_TOPLEVEL "    Hyprland Toplevel Export" ON REQUIRES WAYLAND)
-boption(X11 "X11" ON)
-boption(I3 "I3/Sway" ON)
+boption(X11 "X11" ${QS_POSIX_DEFAULT})
+boption(I3 "I3/Sway" ${QS_POSIX_DEFAULT})
 boption(I3_IPC "  I3/Sway IPC" ON REQUIRES I3)
-boption(SERVICE_STATUS_NOTIFIER "System Tray" ON)
-boption(SERVICE_PIPEWIRE "PipeWire" ON)
-boption(SERVICE_MPRIS "Mpris" ON)
-boption(SERVICE_PAM "Pam" ON)
-boption(SERVICE_POLKIT "Polkit" ON)
-boption(SERVICE_GREETD "Greetd" ON)
-boption(SERVICE_UPOWER "UPower" ON)
-boption(SERVICE_NOTIFICATIONS "Notifications" ON)
-boption(BLUETOOTH "Bluetooth" ON)
-boption(NETWORK "Network" ON)
+boption(SERVICE_STATUS_NOTIFIER "System Tray" ${QS_POSIX_DEFAULT})
+boption(SERVICE_PIPEWIRE "PipeWire" ${QS_POSIX_DEFAULT})
+boption(SERVICE_MPRIS "Mpris" ${QS_POSIX_DEFAULT})
+boption(SERVICE_PAM "Pam" ${QS_POSIX_DEFAULT})
+boption(SERVICE_POLKIT "Polkit" ${QS_POSIX_DEFAULT})
+boption(SERVICE_GREETD "Greetd" ${QS_POSIX_DEFAULT})
+boption(SERVICE_UPOWER "UPower" ${QS_POSIX_DEFAULT})
+boption(SERVICE_NOTIFICATIONS "Notifications" ${QS_POSIX_DEFAULT})
+boption(BLUETOOTH "Bluetooth" ${QS_POSIX_DEFAULT})
+boption(NETWORK "Network" ${QS_POSIX_DEFAULT})
+boption(WINDOWS_BACKEND "Windows backend" ${QS_WINDOWS_DEFAULT})
+boption(BUNDLED_CLI11 "Use the bundled minimal CLI11 replacement (dev)" OFF)
+
+if (WIN32)
+	set(QS_POSIX_ONLY_OPTIONS
+		USE_JEMALLOC CRASH_HANDLER WAYLAND X11 I3
+		SERVICE_STATUS_NOTIFIER SERVICE_PIPEWIRE SERVICE_MPRIS SERVICE_PAM SERVICE_POLKIT
+		SERVICE_GREETD SERVICE_UPOWER SERVICE_NOTIFICATIONS BLUETOOTH NETWORK
+	)
+
+	set(QS_UNSUPPORTED_OPTIONS "")
+	foreach (opt IN LISTS QS_POSIX_ONLY_OPTIONS)
+		if (${opt})
+			list(APPEND QS_UNSUPPORTED_OPTIONS ${opt})
+		endif()
+	endforeach()
+
+	if (QS_UNSUPPORTED_OPTIONS)
+		list(JOIN QS_UNSUPPORTED_OPTIONS ", " QS_UNSUPPORTED_OPTIONS)
+		message(FATAL_ERROR "The following options are not supported when building for Windows: ${QS_UNSUPPORTED_OPTIONS}")
+	endif()
+elseif (WINDOWS_BACKEND)
+	message(FATAL_ERROR "WINDOWS_BACKEND can only be enabled when building for Windows.")
+endif()
 
 include(cmake/install-qml-module.cmake)
 include(cmake/util.cmake)
 
-add_compile_options(-Wall -Wextra -Wno-vla-cxx-extension)
+if (MSVC)
+	# clang-cl treats -Wall as -Weverything; /W4 is its spelling of -Wall -Wextra.
+	# -Wclang-cl-pch: pchset libraries see fewer QT_*_LIB defines than their consumers, which
+	# clang-cl tolerates (like MSVC) but reports for every file.
+	add_compile_options(/W4 -Wno-vla-cxx-extension -Wno-clang-cl-pch)
+	# Keep windows.h from defining min/max and pulling in rarely used APIs.
+	add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+	add_compile_options(-Wall -Wextra -Wno-vla-cxx-extension)
+endif()
 
 # pipewire defines this, breaking PCH
 add_compile_definitions(_REENTRANT)
@@ -159,20 +202,23 @@ if (USE_JEMALLOC)
 	target_link_libraries(quickshell PRIVATE ${JEMALLOC_LIBRARIES})
 endif()
 
-install(CODE "
-	execute_process(
-		COMMAND ${CMAKE_COMMAND} -E create_symlink \
-		${CMAKE_INSTALL_FULL_BINDIR}/quickshell \$ENV{DESTDIR}${CMAKE_INSTALL_FULL_BINDIR}/qs
+# On Windows the executable is already named qs.exe and there are no desktop entries.
+if (NOT WIN32)
+	install(CODE "
+		execute_process(
+			COMMAND ${CMAKE_COMMAND} -E create_symlink \
+			${CMAKE_INSTALL_FULL_BINDIR}/quickshell \$ENV{DESTDIR}${CMAKE_INSTALL_FULL_BINDIR}/qs
+		)
+	")
+
+	install(
+		FILES ${CMAKE_SOURCE_DIR}/assets/org.quickshell.desktop
+		DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
 	)
-")
 
-install(
-	FILES ${CMAKE_SOURCE_DIR}/assets/org.quickshell.desktop
-	DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
-)
-
-install(
-	FILES ${CMAKE_SOURCE_DIR}/assets/quickshell.svg
-	DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
-	RENAME org.quickshell.svg
-)
+	install(
+		FILES ${CMAKE_SOURCE_DIR}/assets/quickshell.svg
+		DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+		RENAME org.quickshell.svg
+	)
+endif()

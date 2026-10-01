@@ -1,6 +1,18 @@
 qt_add_executable(quickshell main.cpp)
 
-install(TARGETS quickshell RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+if (WIN32)
+	# qs.exe: console subsystem, for CLI usage (qs ipc call, qs list, ...).
+	# qsw.exe: windows subsystem, same code, for launching the shell without a console window.
+	set_target_properties(quickshell PROPERTIES OUTPUT_NAME qs)
+
+	qt_add_executable(quickshell-gui main.cpp)
+	set_target_properties(quickshell-gui PROPERTIES OUTPUT_NAME qsw WIN32_EXECUTABLE ON)
+	target_compile_definitions(quickshell-gui PRIVATE QS_WINDOWS_GUI_EXE)
+
+	install(TARGETS quickshell quickshell-gui RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+else()
+	install(TARGETS quickshell RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 
 add_subdirectory(build)
 add_subdirectory(launch)
@@ -29,6 +41,10 @@ if (X11)
 	add_subdirectory(x11)
 endif()
 
+if (WINDOWS_BACKEND)
+	add_subdirectory(windows)
+endif()
+
 add_subdirectory(services)
 
 if (BLUETOOTH)
@@ -37,4 +53,10 @@ endif()
 
 if (NETWORK)
 	add_subdirectory(network)
+endif()
+
+if (WIN32)
+	# Subdirectories attach their modules to `quickshell`; qsw.exe links exactly the same set.
+	get_target_property(QS_EXE_LIBRARIES quickshell LINK_LIBRARIES)
+	target_link_libraries(quickshell-gui PRIVATE ${QS_EXE_LIBRARIES})
 endif()
