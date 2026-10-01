@@ -145,6 +145,7 @@ private:
 	QString mConfigPath;
 	QByteArray loadedData;
 	bool loaded = false;
+	bool parsed = false;
 
 	QList<Bind> binds;
 	QList<Trigger> triggers;

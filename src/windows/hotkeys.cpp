@@ -344,12 +344,12 @@ void HotkeyManager::setShellDir(const QString& shellDir) {
 
 	this->shellDir = shellDir;
 	this->loaded = true;
-	this->loadedData.clear();
+	this->parsed = false;
 	this->loadFile();
 }
 
 void HotkeyManager::reload() {
-	this->loadedData.clear();
+	this->parsed = false;
 	this->loadFile();
 }
 
@@ -372,16 +372,17 @@ void HotkeyManager::loadFile() {
 
 	QByteArray data;
 	auto file = QFile(path);
-	if (!path.isEmpty() && file.open(QFile::ReadOnly)) {
-		data = file.readAll();
-	} else {
-		qCWarning(logHotkeys) << "No keybinds file found (looked for" << this->userFilePath() << "and"
-		                      << this->defaultFilePath() << "), global shortcuts are disabled.";
-		path.clear();
-	}
+	if (path.isEmpty() || !file.open(QFile::ReadOnly)) path.clear();
+	else data = file.readAll();
 
 	// Watched directories also report unrelated files, and editors touch files without changes.
-	if (path != this->mConfigPath || data != this->loadedData || path.isEmpty()) {
+	if (!this->parsed || path != this->mConfigPath || data != this->loadedData) {
+		if (path.isEmpty()) {
+			qCWarning(logHotkeys) << "No keybinds file found (looked for" << this->userFilePath() << "and"
+			                      << this->defaultFilePath() << "), global shortcuts are disabled.";
+		}
+
+		this->parsed = true;
 		this->mConfigPath = path;
 		this->loadedData = data;
 
