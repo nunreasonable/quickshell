@@ -1,9 +1,9 @@
 #include "logging.hpp"
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstdio>
 
-#include <fcntl.h>
 #include <qbytearrayview.h>
 #include <qcoreapplication.h>
 #include <qdatetime.h>
@@ -26,7 +26,13 @@
 #include <qthread.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
+#ifdef _WIN32
+#include <io.h>
+#include <qtemporaryfile.h>
+#else
+#include <fcntl.h>
 #include <sys/mman.h>
+#endif
 #ifdef __linux__
 #include <sys/sendfile.h>
 #include <sys/types.h>
@@ -42,6 +48,10 @@
 #include "paths.hpp"
 #include "ringbuf.hpp"
 
+#ifdef _WIN32
+#include "winfilelock.hpp"
+#endif
+
 QS_LOGGING_CATEGORY(logBare, "quickshell.bare");
 
 namespace qs::log {
@@ -50,6 +60,14 @@ using namespace qt_logging_registry;
 QS_LOGGING_CATEGORY(logLogging, "quickshell.logging", QtWarningMsg);
 
 namespace {
+#ifdef _WIN32
+// QTemporaryFile only exposes open() publicly; the flags overload is needed for Unbuffered.
+class EarlyLogFile: public QTemporaryFile {
+public:
+	using QTemporaryFile::open;
+};
+#endif
+
 bool copyFileData(int sourceFd, int destFd, qint64 size) {
 	auto usize = static_cast<size_t>(size);
 
@@ -65,6 +83,30 @@ bool copyFileData(int sourceFd, int destFd, qint64 size) {
 		}
 		if (r == 0) break;
 		remaining -= static_cast<size_t>(r);
+	}
+
+	return true;
+#elif defined(_WIN32)
+	// QFile::handle() is a CRT descriptor on Windows.
+	std::array<char, 64 * 1024> buffer = {};
+	auto remaining = usize;
+
+	while (remaining > 0) {
+		auto chunk = static_cast<unsigned int>(std::min(remaining, buffer.size()));
+		auto r = _read(sourceFd, buffer.data(), chunk);
+		if (r == -1) return false;
+		if (r == 0) break;
+
+		auto readBytes = static_cast<size_t>(r);
+		size_t written = 0;
+		while (written < readBytes) {
+			auto w =
+			    _write(destFd, buffer.data() + written, static_cast<unsigned int>(readBytes - written));
+			if (w == -1) return false;
+			written += static_cast<size_t>(w);
+		}
+
+		remaining -= readBytes;
 	}
 
 	return true;
@@ -354,6 +396,36 @@ void LoggingThreadProxy::initInThread() {
 void LoggingThreadProxy::initFs() { this->logging->initFs(); }
 
 void ThreadLogging::init() {
+#ifdef _WIN32
+	// No memfd on Windows: early logs are buffered in anonymous temporary files instead.
+	auto* logTmp = new EarlyLogFile();
+	auto* dlogTmp = new EarlyLogFile();
+
+	if (logTmp->open()) {
+		this->file = logTmp;
+		this->fileStream.setDevice(this->file);
+	} else {
+		qCCritical(logLogging) << "Failed to create temporary file for initial log storage";
+		delete logTmp;
+	}
+
+	// buffered by WriteBuffer
+	if (dlogTmp->open(QFile::ReadWrite | QFile::Unbuffered)) {
+		crash::CrashInfo::INSTANCE.logFd = dlogTmp->handle();
+		this->detailedFile = dlogTmp;
+		this->detailedWriter.setDevice(this->detailedFile);
+
+		if (!this->detailedWriter.writeHeader()) {
+			qCCritical(logLogging) << "Could not write header for detailed logs.";
+			this->detailedWriter.setDevice(nullptr);
+			delete this->detailedFile;
+			this->detailedFile = nullptr;
+		}
+	} else {
+		qCCritical(logLogging) << "Failed to create temporary file for initial detailed log storage";
+		delete dlogTmp;
+	}
+#else
 	auto logMfd = memfd_create("quickshell:logs", 0);
 
 	if (logMfd == -1) {
@@ -398,6 +470,7 @@ void ThreadLogging::init() {
 			qCCritical(logLogging) << "Failed to open early detailed logging memfd.";
 		}
 	}
+#endif
 
 	// This connection is direct so it works while the event loop is destroyed between
 	// QCoreApplication delete and Q(Gui)Application launch.
@@ -409,8 +482,10 @@ void ThreadLogging::init() {
 	    Qt::DirectConnection
 	);
 
+#ifndef _WIN32
 	qCDebug(logLogging) << "Created memfd" << logMfd << "for early logs.";
 	qCDebug(logLogging) << "Created memfd" << dlogMfd << "for early detailed logs.";
+#endif
 }
 
 void ThreadLogging::initFs() {
@@ -449,6 +524,9 @@ void ThreadLogging::initFs() {
 		delete detailedFile;
 		detailedFile = nullptr;
 	} else {
+#ifdef _WIN32
+		auto locked = qs::core::winlock::lockExclusive(*detailedFile);
+#else
 		struct flock lock = {
 		    .l_type = F_WRLCK,
 		    .l_whence = SEEK_SET,
@@ -457,7 +535,10 @@ void ThreadLogging::initFs() {
 		    .l_pid = 0,
 		};
 
-		if (fcntl(detailedFile->handle(), F_SETLK, &lock) != 0) { // NOLINT
+		auto locked = fcntl(detailedFile->handle(), F_SETLK, &lock) == 0; // NOLINT
+#endif
+
+		if (!locked) {
 			qCWarning(logLogging) << "Unable to set lock marker on detailed log file. --follow from "
 			                         "other instances will not work.";
 		}
@@ -953,6 +1034,9 @@ bool LogReader::continueReading() {
 }
 
 void LogFollower::FcntlWaitThread::run() {
+#ifdef _WIN32
+	auto r = qs::core::winlock::waitUnlocked(*this->follower->reader->file) ? 0 : -1;
+#else
 	struct flock lock = {
 	    .l_type = F_RDLCK, // won't block other read locks when we take it
 	    .l_whence = SEEK_SET,
@@ -962,6 +1046,7 @@ void LogFollower::FcntlWaitThread::run() {
 	};
 
 	auto r = fcntl(this->follower->reader->file->handle(), F_SETLKW, &lock); // NOLINT
+#endif
 
 	if (r != 0) {
 		qCWarning(logLogging).nospace()
