@@ -67,6 +67,8 @@ public:
 	bool switchTo(qsizetype index);
 	// Creates desktops until there are at least `count`.
 	bool ensureCount(qsizetype count);
+	// Removes a desktop, moving its windows to `fallback`. Needs the accessor dll.
+	bool removeDesktop(qsizetype index, qsizetype fallback);
 	bool moveWindow(HWND hwnd, qsizetype index);
 	bool pinWindow(HWND hwnd, bool pinned);
 	[[nodiscard]] bool isWindowPinned(HWND hwnd) const;
@@ -115,6 +117,7 @@ private:
 		int (*moveWindowToDesktopNumber)(HWND, int) = nullptr;
 		int (*isWindowOnCurrentVirtualDesktop)(HWND) = nullptr;
 		int (*createDesktop)() = nullptr;
+		int (*removeDesktop)(int, int) = nullptr;
 		int (*registerPostMessageHook)(HWND, UINT) = nullptr;
 		int (*unregisterPostMessageHook)(HWND) = nullptr;
 		int (*isPinnedWindow)(HWND) = nullptr;

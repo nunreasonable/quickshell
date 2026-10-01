@@ -249,6 +249,7 @@ void VirtualDesktops::loadAccessor() {
 	load(a.getDesktopIdByNumber, "GetDesktopIdByNumber");
 	load(a.getWindowDesktopNumber, "GetWindowDesktopNumber");
 	load(a.createDesktop, "CreateDesktop");
+	load(a.removeDesktop, "RemoveDesktop");
 	load(a.registerPostMessageHook, "RegisterPostMessageHook");
 	load(a.unregisterPostMessageHook, "UnregisterPostMessageHook");
 	load(a.isPinnedWindow, "IsPinnedWindow");
@@ -562,6 +563,28 @@ bool VirtualDesktops::ensureCount(qsizetype count) {
 		}
 	}
 
+	return true;
+}
+
+bool VirtualDesktops::removeDesktop(qsizetype index, qsizetype fallback) {
+	const auto& a = this->accessor;
+	if (!a.loaded || a.removeDesktop == nullptr) {
+		qCWarning(logDesktops) << "Removing a desktop needs VirtualDesktopAccessor.dll";
+		return false;
+	}
+
+	if (index < 0 || index >= this->count() || fallback < 0 || fallback >= this->count()
+	    || index == fallback || this->count() < 2)
+	{
+		return false;
+	}
+
+	if (a.removeDesktop(static_cast<int>(index), static_cast<int>(fallback)) == -1) {
+		qCWarning(logDesktops) << "RemoveDesktop" << index << "failed";
+		return false;
+	}
+
+	this->refresh();
 	return true;
 }
 
