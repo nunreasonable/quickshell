@@ -1,14 +1,22 @@
 #include "main.hpp"
 #include <cerrno>
 
-#include <fcntl.h>
 #include <qcoreapplication.h>
 #include <qdatastream.h>
 #include <qdatetime.h>
 #include <qdebug.h>
 #include <qlogging.h>
 #include <qtenvironmentvariables.h>
+
+#ifdef QS_WINDOWS_GUI_EXE
+#include <cstdio>
+#include <windows.h>
+#endif
+
+#ifndef _WIN32
+#include <fcntl.h>
 #include <unistd.h>
+#endif
 
 #include "../core/instanceinfo.hpp"
 #include "../core/logging.hpp"
@@ -72,6 +80,8 @@ void checkCrashRelaunch(char** argv, QCoreApplication* coreApplication) {
 
 } // namespace
 
+#ifndef _WIN32
+// The Windows implementation lives in daemon_win.cpp.
 int DAEMON_PIPE = -1; // NOLINT
 
 void exitDaemon(int code) {
@@ -100,8 +110,20 @@ void exitDaemon(int code) {
 		qFatal() << "Failed to open /dev/null on stderr";
 	}
 }
+#endif
 
 int main(int argc, char** argv) {
+#ifdef QS_WINDOWS_GUI_EXE
+	// qsw.exe has no console of its own. If it was started from one, attach to it so
+	// CLI output (--help, qs list, ...) is still visible.
+	if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+		FILE* stream = nullptr;
+		freopen_s(&stream, "CONIN$", "r", stdin);
+		freopen_s(&stream, "CONOUT$", "w", stdout);
+		freopen_s(&stream, "CONOUT$", "w", stderr);
+	}
+#endif
+
 	QCoreApplication::setApplicationName("quickshell");
 
 #if CRASH_HANDLER

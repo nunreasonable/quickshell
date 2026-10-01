@@ -23,7 +23,12 @@
 #include <qstandardpaths.h>
 #include <qtenvironmentvariables.h>
 #include <qtversion.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 
 #include "../core/debuginfo.hpp"
 #include "../core/instanceinfo.hpp"
@@ -40,6 +45,25 @@ using qs::ipc::IpcClient;
 namespace {
 
 QList<QString> configBaseDirs() {
+#ifdef _WIN32
+	// %LOCALAPPDATA%, then %APPDATA% (roaming), then the system wide %ProgramData%.
+	// XDG_CONFIG_HOME and XDG_CONFIG_DIRS (';' separated) are still honored when set.
+	auto configHome = qEnvironmentVariable("XDG_CONFIG_HOME");
+	if (configHome.isEmpty()) {
+		configHome = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+	}
+
+	auto configDirs = qEnvironmentVariable("XDG_CONFIG_DIRS").split(';', Qt::SkipEmptyParts);
+	if (configDirs.isEmpty()) {
+		auto roaming = qEnvironmentVariable("APPDATA");
+		if (!roaming.isEmpty()) configDirs.append(QDir::fromNativeSeparators(roaming));
+
+		auto systemDirs = QStandardPaths::standardLocations(QStandardPaths::GenericConfigLocation);
+		for (const auto& dir: systemDirs) {
+			if (dir != configHome && !configDirs.contains(dir)) configDirs.append(dir);
+		}
+	}
+#else
 	auto configHome = qEnvironmentVariable("XDG_CONFIG_HOME");
 	if (configHome.isEmpty()) {
 		auto home = QDir(QStandardPaths::writableLocation(QStandardPaths::HomeLocation));
@@ -50,6 +74,7 @@ QList<QString> configBaseDirs() {
 	if (configDirs.isEmpty()) {
 		configDirs.append("/etc/xdg");
 	}
+#endif
 
 	configDirs.prepend(configHome);
 
@@ -473,6 +498,11 @@ int runCommand(int argc, char** argv, QCoreApplication* coreApplication) {
 
 	// Has to happen before extra threads are spawned.
 	if (state.misc.daemonize) {
+#ifdef _WIN32
+		auto ret = 0;
+		if (spawnDaemon(argc, argv, &ret)) return ret;
+		// Otherwise this process is the detached daemon; carry on normally.
+#else
 		auto closepipes = std::array<int, 2>();
 		if (pipe(closepipes.data()) == -1) {
 			qFatal().nospace() << "Failed to create messaging pipes for daemon with error " << errno
@@ -501,6 +531,7 @@ int runCommand(int argc, char** argv, QCoreApplication* coreApplication) {
 
 			return ret;
 		}
+#endif
 	}
 
 	{
@@ -547,6 +578,13 @@ int runCommand(int argc, char** argv, QCoreApplication* coreApplication) {
 }
 
 QString getDisplayConnection() {
+#ifdef _WIN32
+	// QGuiApplication::platformName() is empty in CLI mode (QCoreApplication only), so it can't
+	// be used to match instances. Each logon session has its own desktop; use its id.
+	DWORD sessionId = 0;
+	ProcessIdToSessionId(GetCurrentProcessId(), &sessionId);
+	return "windows," + QString::number(sessionId);
+#else
 	auto platform = qEnvironmentVariable("QT_QPA_PLATFORM");
 	auto wlDisplay = qEnvironmentVariable("WAYLAND_DISPLAY");
 	auto xDisplay = qEnvironmentVariable("DISPLAY");
@@ -558,6 +596,7 @@ QString getDisplayConnection() {
 	} else {
 		return "unk," + QGuiApplication::platformName();
 	}
+#endif
 }
 
 } // namespace qs::launch
