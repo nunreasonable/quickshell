@@ -1,0 +1,92 @@
+#include "core.hpp"
+
+#include <qlogging.h>
+#include <qloggingcategory.h>
+#include <qobject.h>
+#include <qt_windows.h>
+#include <qtimer.h>
+
+#include "../../../core/logcat.hpp"
+#include "../message_window.hpp"
+
+namespace qs::service::upower {
+
+namespace {
+QS_LOGGING_CATEGORY(logUPower, "quickshell.service.upower", QtWarningMsg);
+
+// Public power setting GUIDs for RegisterPowerSettingNotification. Not declared in the
+// Windows SDK headers available to user mode apps (they live in the driver kit's poclass.h),
+// so they're reproduced here by value.
+// NOLINTBEGIN(cert-err58-cpp)
+const GUID kGuidAcDcPowerSource =
+    {0x5d3e9a59, 0xe9d5, 0x4b00, {0xa6, 0xbd, 0xff, 0x34, 0xff, 0x51, 0x65, 0x48}};
+const GUID kGuidBatteryPercentageRemaining =
+    {0xa7ad8041, 0xb45a, 0x4cae, {0x87, 0xa3, 0xee, 0xcb, 0xb4, 0x68, 0xa9, 0xe1}};
+// Unverified against an authoritative header; registration failure for this one alone is
+// non-fatal, the AC/battery-percentage notifications plus the poll timer still cover changes.
+const GUID kGuidEnergySaverStatus =
+    {0x9ef9c7b4, 0x2a4a, 0x4b5c, {0x9e, 0x8a, 0x6a, 0x5f, 0x5a, 0x1c, 0x9b, 0xd1}};
+// NOLINTEND(cert-err58-cpp)
+
+HPOWERNOTIFY registerSetting(HWND hwnd, const GUID& guid) {
+	auto* handle = RegisterPowerSettingNotification(hwnd, &guid, DEVICE_NOTIFY_WINDOW_HANDLE);
+	if (handle == nullptr) {
+		qCDebug(logUPower) << "RegisterPowerSettingNotification failed for a power setting GUID"
+		                   << "(non-fatal, other triggers still refresh UPower).";
+	}
+	return handle;
+}
+
+} // namespace
+
+UPowerQml::UPowerQml(QObject* parent): QObject(parent) {
+	this->refresh();
+
+	auto* window = qs::windows::services::ServiceMessageWindow::instance();
+
+	window->addHandler(WM_POWERBROADCAST, [this](WPARAM wParam, LPARAM /*lParam*/) {
+		if (wParam == PBT_POWERSETTINGCHANGE) {
+			this->refresh();
+		}
+	});
+
+	this->acdcNotify = registerSetting(window->hwnd(), kGuidAcDcPowerSource);
+	this->batteryPercentNotify = registerSetting(window->hwnd(), kGuidBatteryPercentageRemaining);
+	this->energySaverNotify = registerSetting(window->hwnd(), kGuidEnergySaverStatus);
+
+	// Safety net: GetSystemPowerStatus is cheap, and this catches anything the notifications
+	// above miss (e.g. if the energy-saver GUID above turns out to be wrong).
+	this->pollTimer.setInterval(30000);
+	QObject::connect(&this->pollTimer, &QTimer::timeout, this, &UPowerQml::refresh);
+	this->pollTimer.start();
+}
+
+UPowerQml::~UPowerQml() {
+	if (this->acdcNotify != nullptr) UnregisterPowerSettingNotification(this->acdcNotify);
+	if (this->batteryPercentNotify != nullptr) {
+		UnregisterPowerSettingNotification(this->batteryPercentNotify);
+	}
+	if (this->energySaverNotify != nullptr) {
+		UnregisterPowerSettingNotification(this->energySaverNotify);
+	}
+}
+
+void UPowerQml::refresh() {
+	this->mDevice.updateFromSystemPowerStatus();
+
+	auto present = this->mDevice.bindableIsPresent().value();
+	auto alreadyListed = this->mDevices.valueList().contains(&this->mDevice);
+
+	if (present && !alreadyListed) {
+		this->mDevices.insertObject(&this->mDevice);
+	} else if (!present && alreadyListed) {
+		this->mDevices.removeObject(&this->mDevice);
+	}
+
+	SYSTEM_POWER_STATUS status {};
+	if (GetSystemPowerStatus(&status)) {
+		this->bOnBattery = status.ACLineStatus == 0;
+	}
+}
+
+} // namespace qs::service::upower
