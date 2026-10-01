@@ -21,7 +21,7 @@ qt_add_qml_module(quickshell-windows-hyprland
 		qml/HyprlandFocusGrab.qml
 )
 
-qs_add_module_deps_light(quickshell-windows-hyprland Quickshell Quickshell.Wayland)
+qs_add_module_deps_light(quickshell-windows-hyprland Quickshell Quickshell.Wayland Quickshell.Windows)
 
 install_qml_module(quickshell-windows-hyprland)
 
