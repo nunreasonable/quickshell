@@ -26,6 +26,32 @@ QString UPowerDeviceType::toString(UPowerDeviceType::Enum type) {
 	case UPowerDeviceType::Unknown: return "Unknown";
 	case UPowerDeviceType::LinePower: return "Line Power";
 	case UPowerDeviceType::Battery: return "Battery";
+	case UPowerDeviceType::Ups: return "Ups";
+	case UPowerDeviceType::Monitor: return "Monitor";
+	case UPowerDeviceType::Mouse: return "Mouse";
+	case UPowerDeviceType::Keyboard: return "Keyboard";
+	case UPowerDeviceType::Pda: return "Pda";
+	case UPowerDeviceType::Phone: return "Phone";
+	case UPowerDeviceType::MediaPlayer: return "Media Player";
+	case UPowerDeviceType::Tablet: return "Tablet";
+	case UPowerDeviceType::Computer: return "Computer";
+	case UPowerDeviceType::GamingInput: return "Gaming Input";
+	case UPowerDeviceType::Pen: return "Pen";
+	case UPowerDeviceType::Touchpad: return "Touchpad";
+	case UPowerDeviceType::Modem: return "Modem";
+	case UPowerDeviceType::Network: return "Network";
+	case UPowerDeviceType::Headset: return "Headset";
+	case UPowerDeviceType::Speakers: return "Speakers";
+	case UPowerDeviceType::Headphones: return "Headphones";
+	case UPowerDeviceType::Video: return "Video";
+	case UPowerDeviceType::OtherAudio: return "Other Audio";
+	case UPowerDeviceType::RemoteControl: return "Remote Control";
+	case UPowerDeviceType::Printer: return "Printer";
+	case UPowerDeviceType::Scanner: return "Scanner";
+	case UPowerDeviceType::Camera: return "Camera";
+	case UPowerDeviceType::Wearable: return "Wearable";
+	case UPowerDeviceType::Toy: return "Toy";
+	case UPowerDeviceType::BluetoothGeneric: return "Bluetooth Generic";
 	default: return "Invalid Type";
 	}
 }
@@ -35,8 +61,9 @@ UPowerDevice::UPowerDevice(QObject* parent): QObject(parent) {
 		return this->bType == UPowerDeviceType::Battery && this->bPowerSupply.value();
 	});
 
-	this->bHealthSupported.setBinding([this]() { return false; });
-	this->bHealthPercentage.setBinding([this]() { return 100.0; });
+	// GetSystemPowerStatus has no battery wear/health data.
+	this->bHealthSupported = false;
+	this->bHealthPercentage = 100.0;
 	this->bReady = true;
 }
 
