@@ -26,6 +26,8 @@ Q_LOGGING_CATEGORY(logFocusGrab, "quickshell.windows.focusgrab", QtWarningMsg);
 // GetTickCount based times wrap after 49 days.
 bool notBefore(DWORD time, DWORD reference) { return static_cast<LONG>(time - reference) >= 0; }
 
+constexpr DWORD FOREGROUND_GRACE_MS = 500;
+
 // Watches clicks and foreground changes while any grab is active and clears the grabs they
 // break. Both callbacks run on the gui thread.
 class FocusGrabTracker: public QObject {
@@ -112,7 +114,13 @@ private:
 		auto grabs = this->grabs;
 		for (const auto& grab: grabs) {
 			if (grab.isNull() || !grab->isActive()) continue;
-			if (!notBefore(time, grab->activatedAt())) continue;
+			// Right after a grab starts, foreground changes are fallout of handing it keyboard focus
+			// (the activation dance, or Windows giving the foreground back to the previous app when
+			// that fails), not the user leaving. Clicks outside still clear it during this time.
+			if (!notBefore(time, grab->activatedAt() + FOREGROUND_GRACE_MS)) {
+				qCDebug(logFocusGrab) << "Ignoring foreground change during the grab's grace period";
+				continue;
+			}
 			grab->clear();
 		}
 	}

@@ -29,7 +29,7 @@ QUrl QsUrlInterceptor::intercept(
 	// Configs written for Linux pass absolute paths where URLs are expected ("/x" resolves as a
 	// local file there). On Windows "C:/x" parses as a URL with the one letter scheme "c".
 	if (url.scheme().length() == 1 && url.scheme().at(0).isLetter()) {
-		url = QUrl::fromLocalFile(url.toString(QUrl::FullyDecoded));
+		url = QUrl::fromLocalFile(url.scheme() % u':' % url.path(QUrl::FullyDecoded));
 		qCDebug(logQsIntercept) << "Rewrote drive path" << originalUrl << "to" << url;
 	}
 #endif
