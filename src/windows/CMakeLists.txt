@@ -8,6 +8,8 @@ qt_add_library(quickshell-windows STATIC
 	appbar.cpp
 	input_mask.cpp
 	panel_window.cpp
+	desktopentry_backend.cpp
+	appicon.cpp
 	system/session.cpp
 	system/system_stats.cpp
 	system/brightness.cpp
@@ -51,6 +53,7 @@ target_link_libraries(quickshell-windows PRIVATE
 	wbemuuid
 	ole32
 	oleaut32
+	uuid
 )
 target_link_libraries(quickshell-windows-init PRIVATE Qt::Quick Qt::Qml)
 
