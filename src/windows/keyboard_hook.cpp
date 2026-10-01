@@ -247,18 +247,20 @@ LRESULT onModifier(const HookSnapshot& snapshot, const KBDLLHOOKSTRUCT* info, ui
 	gTapCandidate = 0;
 	if (blocked) return 0;
 
+	// Masked even after a long hold: with Super bound to the launcher, opening the Start menu
+	// on release would be surprising. Ctrl+Esc still opens it.
+	auto masked = bit == ModSuper || bit == ModAlt;
+	if (masked) injectMaskedRelease(info);
+
+	// After the injection: the re-sent release makes this process the source of the last input,
+	// so the gui thread may take the foreground for the tap's action (verified on the target
+	// with AllowSetForegroundWindow). Swallowed combos don't get that, even with a mask key
+	// injected; panels use forceForegroundWindow there.
 	if (info->time - gTapStart <= snapshot.tapTimeoutMs) {
 		postAll(snapshot, HookTrigger::Tap, bit, HookTapped);
 	}
 
-	// Masked even after a long hold: with Super bound to the launcher, opening the Start menu
-	// on release would be surprising. Ctrl+Esc still opens it.
-	if (bit == ModSuper || bit == ModAlt) {
-		injectMaskedRelease(info);
-		return 1;
-	}
-
-	return 0;
+	return masked ? 1 : 0;
 }
 
 LRESULT onKey(const HookSnapshot& snapshot, const KBDLLHOOKSTRUCT* info, bool up) {
