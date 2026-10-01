@@ -14,18 +14,15 @@ namespace qs::service::upower {
 namespace {
 QS_LOGGING_CATEGORY(logUPower, "quickshell.service.upower", QtWarningMsg);
 
-// Public power setting GUIDs for RegisterPowerSettingNotification. Not declared in the
-// Windows SDK headers available to user mode apps (they live in the driver kit's poclass.h),
-// so they're reproduced here by value.
+// Power setting GUIDs for RegisterPowerSettingNotification, by value from winnt.h (the
+// DEFINE_GUID declarations there need INITGUID in exactly one translation unit).
 // NOLINTBEGIN(cert-err58-cpp)
 const GUID kGuidAcDcPowerSource =
     {0x5d3e9a59, 0xe9d5, 0x4b00, {0xa6, 0xbd, 0xff, 0x34, 0xff, 0x51, 0x65, 0x48}};
 const GUID kGuidBatteryPercentageRemaining =
     {0xa7ad8041, 0xb45a, 0x4cae, {0x87, 0xa3, 0xee, 0xcb, 0xb4, 0x68, 0xa9, 0xe1}};
-// Unverified against an authoritative header; registration failure for this one alone is
-// non-fatal, the AC/battery-percentage notifications plus the poll timer still cover changes.
 const GUID kGuidEnergySaverStatus =
-    {0x9ef9c7b4, 0x2a4a, 0x4b5c, {0x9e, 0x8a, 0x6a, 0x5f, 0x5a, 0x1c, 0x9b, 0xd1}};
+    {0x550e8400, 0xe29b, 0x41d4, {0xa7, 0x16, 0x44, 0x66, 0x55, 0x44, 0x00, 0x00}};
 // NOLINTEND(cert-err58-cpp)
 
 HPOWERNOTIFY registerSetting(HWND hwnd, const GUID& guid) {
@@ -55,7 +52,7 @@ UPowerQml::UPowerQml(QObject* parent): QObject(parent) {
 	this->energySaverNotify = registerSetting(window->hwnd(), kGuidEnergySaverStatus);
 
 	// Safety net: GetSystemPowerStatus is cheap, and this catches anything the notifications
-	// above miss (e.g. if the energy-saver GUID above turns out to be wrong).
+	// above miss.
 	this->pollTimer.setInterval(30000);
 	QObject::connect(&this->pollTimer, &QTimer::timeout, this, &UPowerQml::refresh);
 	this->pollTimer.start();
