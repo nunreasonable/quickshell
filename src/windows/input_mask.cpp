@@ -98,6 +98,7 @@ void InputMaskTracker::setMask(QWindow* window, const QRegion& region) {
 	}
 
 	if (!found) this->entries.push_back(Entry {.window = window, .region = region});
+	qCDebug(logInputMask) << "Mask for" << window << "set to" << region;
 
 	this->updateHookState();
 	this->refresh();
@@ -160,7 +161,10 @@ void InputMaskTracker::evaluate(POINT cursor) {
 			    static_cast<int>(std::floor((cursor.y - rect.top) / dpr))
 			);
 
-			setExStyleBits(hwnd, WS_EX_TRANSPARENT, !it->region.contains(local));
+			auto through = !it->region.contains(local);
+			qCDebug(logInputMask) << "Cursor" << cursor.x << cursor.y << "local" << local << "in" << window
+			                      << (through ? "passes through" : "hits the mask");
+			setExStyleBits(hwnd, WS_EX_TRANSPARENT, through);
 		}
 
 		++it;
@@ -200,6 +204,7 @@ bool InputMaskTracker::startHook() {
 	}
 
 	this->hookRunning = true;
+	qCDebug(logInputMask) << "Mouse hook installed.";
 	return true;
 }
 

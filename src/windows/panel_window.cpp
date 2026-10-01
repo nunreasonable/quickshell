@@ -338,7 +338,10 @@ void WinPanelWindow::updateDimensions() {
 
 	auto edge = this->bcExclusionEdge.value();
 	auto zone = this->bcExclusiveZone.value();
-	auto wantsAppBar = !ignoreZones && edge != 0 && zone > 0 && hwnd != nullptr && rects.valid;
+	// Hidden panels must not reserve space. Without the visibility check, the work area change
+	// caused by removing the reservation on hide schedules this function again and re-reserves.
+	auto wantsAppBar = !ignoreZones && edge != 0 && zone > 0 && hwnd != nullptr && rects.valid
+	                && this->window->isVisible();
 
 	if (wantsAppBar) {
 		UINT abEdge = ABE_TOP;
