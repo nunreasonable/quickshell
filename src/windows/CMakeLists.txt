@@ -1,14 +1,16 @@
 # Windows backend: PanelWindow on top of Win32 (AppBars for exclusive zones, DWM attributes,
-# a low level mouse hook for input masks) plus a stand-in Quickshell.Wayland module, small native
-# singletons (system/) ii's services call into instead of spawning Linux CLIs, and native service
-# modules (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower,
-# Mpris on GSMTC.
+# a low level mouse hook for input masks), the window / virtual desktop tracker, stand-in
+# Quickshell.Wayland and Quickshell.Hyprland modules built on it, small native singletons
+# (system/) ii's services call into instead of spawning Linux CLIs, and native service modules
+# (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower, Mpris on GSMTC.
 
 qt_add_library(quickshell-windows STATIC
 	util.cpp
 	appbar.cpp
 	input_mask.cpp
 	panel_window.cpp
+	virtual_desktops.cpp
+	window_tracker.cpp
 	desktopentry_backend.cpp
 	appicon.cpp
 	system/session.cpp
@@ -37,6 +39,7 @@ target_include_directories(quickshell-windows PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 
 add_subdirectory(wayland)
 add_subdirectory(services)
+add_subdirectory(hyprland)
 
 add_library(quickshell-windows-init OBJECT init.cpp)
 
