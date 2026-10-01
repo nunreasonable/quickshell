@@ -509,7 +509,22 @@ void FileView::updateWatchedFiles() {
 
 		if (auto lastIndex = dirPath.lastIndexOf('/'); lastIndex != -1) {
 			dirPath = dirPath.sliced(0, lastIndex);
-			this->watcher->addPath(dirPath);
+
+			if (!this->watcher->addPath(dirPath)) {
+				// The parent directory doesn't exist yet, so the file's creation can't be seen.
+				// Writes create it, so watch again after the first successful one and report the
+				// file like the directory watch would have.
+				QObject::connect(
+				    this,
+				    &FileView::saved,
+				    this->watcher,
+				    [this]() {
+					    this->updateWatchedFiles();
+					    if (QFileInfo::exists(this->targetPath)) emit this->fileChanged();
+				    },
+				    Qt::SingleShotConnection
+				);
+			}
 		}
 
 		QObject::connect(
