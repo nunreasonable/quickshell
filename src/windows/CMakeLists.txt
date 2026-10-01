@@ -1,5 +1,6 @@
 # Windows backend: PanelWindow on top of Win32 (AppBars for exclusive zones, DWM attributes,
-# a low level mouse hook for input masks) plus a stand-in Quickshell.Wayland module.
+# a low level mouse hook for input masks) plus a stand-in Quickshell.Wayland module and a
+# native Quickshell.Services.Pipewire module backed by Core Audio.
 
 qt_add_library(quickshell-windows STATIC
 	util.cpp
@@ -19,6 +20,7 @@ qs_add_module_deps_light(quickshell-windows Quickshell)
 install_qml_module(quickshell-windows)
 
 add_subdirectory(wayland)
+add_subdirectory(services/pipewire)
 
 add_library(quickshell-windows-init OBJECT init.cpp)
 
