@@ -72,7 +72,9 @@ void sendOne(WORD scan, bool extended, bool down) {
 void Input::sendKey(int keycode, bool down) {
 	ScanCode sc {};
 	if (!scanCodeForEvdevKeycode(keycode, sc)) {
-		qCWarning(logInput) << "sendKey: no scancode mapping for evdev keycode" << keycode;
+		// Not a warning: Ydotool.qml's releaseAllKeys() sweeps every evdev keycode 0..248 to
+		// reset modifier state, and most of that range has no mapping below.
+		qCDebug(logInput) << "sendKey: no scancode mapping for evdev keycode" << keycode;
 		return;
 	}
 	sendOne(sc.scan, sc.extended, down);
