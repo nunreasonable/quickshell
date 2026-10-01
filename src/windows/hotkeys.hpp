@@ -89,6 +89,10 @@ public:
 	void registerShortcut(QObject* shortcut);
 	void unregisterShortcut(QObject* shortcut);
 
+	// Presses and releases the GlobalShortcuts named `appid:name` (or `name`, appid
+	// "quickshell"), for Hyprland's `global` dispatcher.
+	void triggerGlobal(const QString& name);
+
 	[[nodiscard]] QString configPath() const { return this->mConfigPath; }
 	[[nodiscard]] QVariantList bindsInfo() const;
 	[[nodiscard]] bool hookActive() const;

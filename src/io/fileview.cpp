@@ -19,6 +19,7 @@
 #include <qthreadpool.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
+#include <qurl.h>
 
 #include "../core/logcat.hpp"
 #include "../core/util.hpp"
@@ -463,7 +464,12 @@ void FileView::updateState(FileViewState& newState) {
 QString FileView::path() const { return this->state.path; }
 
 void FileView::setPath(const QString& path) {
+#ifdef _WIN32
+	// file:///C:/x must become C:/x, not /C:/x.
+	auto p = path.startsWith("file://") ? QUrl(path).toLocalFile() : path;
+#else
 	auto p = path.startsWith("file://") ? path.sliced(7) : path;
+#endif
 	if (p == this->targetPath) return;
 
 	if (this->liveWriter()) {
@@ -509,7 +515,22 @@ void FileView::updateWatchedFiles() {
 
 		if (auto lastIndex = dirPath.lastIndexOf('/'); lastIndex != -1) {
 			dirPath = dirPath.sliced(0, lastIndex);
-			this->watcher->addPath(dirPath);
+
+			if (!this->watcher->addPath(dirPath)) {
+				// The parent directory doesn't exist yet, so the file's creation can't be seen.
+				// Writes create it, so watch again after the first successful one and report the
+				// file like the directory watch would have.
+				QObject::connect(
+				    this,
+				    &FileView::saved,
+				    this->watcher,
+				    [this]() {
+					    this->updateWatchedFiles();
+					    if (QFileInfo::exists(this->targetPath)) emit this->fileChanged();
+				    },
+				    Qt::SingleShotConnection
+				);
+			}
 		}
 
 		QObject::connect(

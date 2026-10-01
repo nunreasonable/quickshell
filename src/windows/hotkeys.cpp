@@ -667,6 +667,19 @@ void HotkeyManager::unregisterShortcut(QObject* shortcut) {
 	});
 }
 
+void HotkeyManager::triggerGlobal(const QString& name) {
+	auto appid = QString("quickshell");
+	auto shortcut = name.trimmed();
+
+	if (auto colon = shortcut.indexOf(':'); colon != -1) {
+		appid = shortcut.left(colon);
+		shortcut = shortcut.mid(colon + 1);
+	}
+
+	this->emitGlobal(appid, shortcut, true);
+	this->emitGlobal(appid, shortcut, false);
+}
+
 LRESULT CALLBACK HotkeyManager::messageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	if (msg == WM_HOTKEY) {
 		HotkeyManager::instance()->onHotkey(static_cast<int>(wParam));

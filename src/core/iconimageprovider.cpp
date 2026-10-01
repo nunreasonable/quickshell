@@ -9,6 +9,10 @@
 #include <qsize.h>
 #include <qstring.h>
 
+#ifdef Q_OS_WIN
+#include "../windows/appicon.hpp"
+#endif
+
 QPixmap
 IconImageProvider::requestPixmap(const QString& id, QSize* size, const QSize& requestedSize) {
 	QString iconName;
@@ -30,12 +34,27 @@ IconImageProvider::requestPixmap(const QString& id, QSize* size, const QSize& re
 		}
 	}
 
+	auto targetSize = requestedSize.isValid() ? requestedSize : QSize(100, 100);
+	if (targetSize.width() == 0 || targetSize.height() == 0) targetSize = QSize(2, 2);
+
+#ifdef Q_OS_WIN
+	// Windows has no icon theme to speak of; app icons (and arbitrary exe/file icons) are
+	// pulled from the shell instead. Keys that aren't recognized as Windows icon keys fall
+	// through to the normal (always-null here) theme lookup below and then the missing-icon
+	// placeholder, same as any other unresolvable icon name.
+	if (path.isEmpty()) {
+		auto winPixmap = qs::windows::iconForKey(iconName, targetSize);
+		if (!winPixmap.isNull()) {
+			if (size != nullptr) *size = winPixmap.size();
+			return winPixmap;
+		}
+	}
+#endif
+
 	auto icon = QIcon::fromTheme(iconName);
 	if (icon.isNull() && !fallbackName.isEmpty()) icon = QIcon::fromTheme(fallbackName);
 	if (icon.isNull() && !path.isEmpty()) icon = QPixmap(path);
 
-	auto targetSize = requestedSize.isValid() ? requestedSize : QSize(100, 100);
-	if (targetSize.width() == 0 || targetSize.height() == 0) targetSize = QSize(2, 2);
 	auto pixmap = icon.pixmap(targetSize.width(), targetSize.height());
 
 	if (pixmap.isNull()) {
