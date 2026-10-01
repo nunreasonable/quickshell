@@ -920,7 +920,7 @@ Hotkeys::Hotkeys(QObject* parent): QObject(parent) {
 }
 
 Hotkeys* Hotkeys::create(QQmlEngine* engine, QJSEngine* /*jsEngine*/) {
-	auto* hotkeys = new Hotkeys();
+	auto* hotkeys = new Hotkeys(nullptr);
 
 	if (auto* generation = EngineGeneration::findEngineGeneration(engine)) {
 		HotkeyManager::instance()->setShellDir(generation->rootPath.path());

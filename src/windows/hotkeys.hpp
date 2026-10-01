@@ -181,7 +181,9 @@ class Hotkeys: public QObject {
 	QML_SINGLETON;
 
 public:
-	explicit Hotkeys(QObject* parent = nullptr);
+	// Not default constructible on purpose: QML prefers a default constructor over create(),
+	// which is where the config dir comes from.
+	explicit Hotkeys(QObject* parent);
 
 	static Hotkeys* create(QQmlEngine* engine, QJSEngine* jsEngine);
 
