@@ -1,0 +1,144 @@
+#include "util.hpp"
+#include <cmath>
+
+#include <qpoint.h>
+#include <qrect.h>
+#include <qscreen.h>
+#include <qscreen_platform.h>
+#include <qtypes.h>
+#include <qwindow.h>
+
+// last: pulls in the rpc headers, which define macros like `small`
+#include <dwmapi.h>
+
+namespace qs::windows {
+
+HMONITOR monitorForScreen(QScreen* screen) {
+	if (screen == nullptr) return nullptr;
+	auto* native = screen->nativeInterface<QNativeInterface::QWindowsScreen>();
+	return native == nullptr ? nullptr : native->handle();
+}
+
+MonitorRects monitorRects(HMONITOR monitor) {
+	MonitorRects rects;
+	if (monitor == nullptr) return rects;
+
+	MONITORINFO info {};
+	info.cbSize = sizeof(info);
+	if (!GetMonitorInfoW(monitor, &info)) return rects;
+
+	rects.monitor = toQRect(info.rcMonitor);
+	rects.work = toQRect(info.rcWork);
+	rects.valid = true;
+	return rects;
+}
+
+QPoint ScreenMapper::toLogical(const QPoint& physical) const {
+	auto delta = physical - this->physicalOrigin;
+	return this->logicalOrigin
+	     + QPoint(
+	           static_cast<int>(std::lround(delta.x() / this->dpr)),
+	           static_cast<int>(std::lround(delta.y() / this->dpr))
+	       );
+}
+
+QRect ScreenMapper::toLogical(const QRect& physical) const {
+	// map both corners instead of the size so adjacent rects stay adjacent after rounding
+	auto topLeft = this->toLogical(physical.topLeft());
+	auto bottomRight = this->toLogical(physical.topLeft() + QPoint(physical.width(), physical.height()));
+	return QRect(topLeft, QSize(bottomRight.x() - topLeft.x(), bottomRight.y() - topLeft.y()));
+}
+
+QPoint ScreenMapper::toPhysical(const QPoint& logical) const {
+	auto delta = logical - this->logicalOrigin;
+	return this->physicalOrigin
+	     + QPoint(
+	           static_cast<int>(std::lround(delta.x() * this->dpr)),
+	           static_cast<int>(std::lround(delta.y() * this->dpr))
+	       );
+}
+
+QRect ScreenMapper::toPhysical(const QRect& logical) const {
+	auto topLeft = this->toPhysical(logical.topLeft());
+	auto bottomRight = this->toPhysical(logical.topLeft() + QPoint(logical.width(), logical.height()));
+	return QRect(topLeft, QSize(bottomRight.x() - topLeft.x(), bottomRight.y() - topLeft.y()));
+}
+
+qint32 ScreenMapper::toPhysical(qint32 logicalLength) const {
+	return static_cast<qint32>(std::lround(logicalLength * this->dpr));
+}
+
+HWND hwndOf(const QWindow* window) {
+	if (window == nullptr || window->handle() == nullptr) return nullptr;
+	return reinterpret_cast<HWND>(window->winId()); // NOLINT(performance-no-int-to-ptr)
+}
+
+QRect toQRect(const RECT& rect) {
+	return QRect(rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top);
+}
+
+RECT toRECT(const QRect& rect) {
+	return RECT {
+	    .left = rect.left(),
+	    .top = rect.top(),
+	    .right = rect.left() + rect.width(),
+	    .bottom = rect.top() + rect.height(),
+	};
+}
+
+bool forceForegroundWindow(HWND hwnd) {
+	if (hwnd == nullptr) return false;
+	if (GetForegroundWindow() == hwnd) return true;
+	if (SetForegroundWindow(hwnd)) return true;
+
+	auto* foreground = GetForegroundWindow();
+	auto foregroundThread =
+	    foreground == nullptr ? 0 : GetWindowThreadProcessId(foreground, nullptr);
+	auto ownThread = GetCurrentThreadId();
+
+	if (foregroundThread == 0 || foregroundThread == ownThread) return false;
+
+	if (!AttachThreadInput(ownThread, foregroundThread, TRUE)) return false;
+	auto ok = SetForegroundWindow(hwnd) != FALSE;
+	AttachThreadInput(ownThread, foregroundThread, FALSE);
+
+	if (ok) {
+		// SetForegroundWindow alone does not always move keyboard focus to the window
+		SetFocus(hwnd);
+	}
+
+	return ok;
+}
+
+bool isOwnProcessWindow(HWND hwnd) {
+	if (hwnd == nullptr) return false;
+	DWORD pid = 0;
+	GetWindowThreadProcessId(hwnd, &pid);
+	return pid == GetCurrentProcessId();
+}
+
+void applyPanelDwmAttributes(HWND hwnd) {
+	if (hwnd == nullptr) return;
+
+	auto corner = static_cast<DWM_WINDOW_CORNER_PREFERENCE>(DWMWCP_DONOTROUND);
+	DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+
+	COLORREF border = DWMWA_COLOR_NONE;
+	DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &border, sizeof(border));
+
+	BOOL enabled = TRUE;
+	DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, &enabled, sizeof(enabled));
+	DwmSetWindowAttribute(hwnd, DWMWA_EXCLUDED_FROM_PEEK, &enabled, sizeof(enabled));
+
+	auto policy = static_cast<DWMNCRENDERINGPOLICY>(DWMNCRP_DISABLED);
+	DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, &policy, sizeof(policy));
+}
+
+void setExStyleBits(HWND hwnd, LONG_PTR bits, bool enabled) {
+	if (hwnd == nullptr) return;
+	auto style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+	auto newStyle = enabled ? (style | bits) : (style & ~bits);
+	if (newStyle != style) SetWindowLongPtrW(hwnd, GWL_EXSTYLE, newStyle);
+}
+
+} // namespace qs::windows

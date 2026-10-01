@@ -177,6 +177,12 @@ protected slots:
 	virtual void onHeightChanged();
 	virtual void onPolished();
 
+protected:
+	// Applies the resolved input mask to the backing window. `region` is the clickable area in
+	// window coordinates and `hasMask` is false when no mask is set at all (fully interactive).
+	// Backends that cannot use QWindow::setMask for input (windows) override this.
+	virtual void applyInputMask(const QRegion& region, bool hasMask);
+
 private slots:
 	void onSceneGraphError(QQuickWindow::SceneGraphError error, const QString& message);
 	void onVisibleChanged();

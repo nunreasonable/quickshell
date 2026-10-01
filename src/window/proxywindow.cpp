@@ -633,11 +633,15 @@ void ProxyWindowBase::onPolished() {
 			mask = this->mMask->applyTo(QRect(0, 0, this->width(), this->height()));
 		}
 
-		this->window->setFlag(Qt::WindowTransparentForInput, this->mMask != nullptr && mask.isEmpty());
-		this->window->setMask(mask);
+		this->applyInputMask(mask, this->mMask != nullptr);
 
 		this->pendingPolish.inputMask = false;
 	}
 
 	emit this->polished();
+}
+
+void ProxyWindowBase::applyInputMask(const QRegion& region, bool hasMask) {
+	this->window->setFlag(Qt::WindowTransparentForInput, hasMask && region.isEmpty());
+	this->window->setMask(region);
 }
