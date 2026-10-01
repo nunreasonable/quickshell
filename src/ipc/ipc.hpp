@@ -198,11 +198,19 @@ public:
 
 	template <typename T>
 	bool waitForResponse(T& slot) {
-		while (this->socket.waitForReadyRead(-1)) {
-			this->stream.startTransaction();
-			this->stream >> slot;
-			if (!this->stream.commitTransaction()) continue;
-			return true;
+		// Parse what is already buffered before waiting again, and once more after the connection
+		// closes: on Windows the server can write the response and close the pipe at once, and
+		// waitForReadyRead() then reports the closed pipe rather than the buffered data.
+		auto closed = false;
+		while (true) {
+			if (this->socket.bytesAvailable() > 0) {
+				this->stream.startTransaction();
+				this->stream >> slot;
+				if (this->stream.commitTransaction()) return true;
+			}
+
+			if (closed) break;
+			if (!this->socket.waitForReadyRead(-1)) closed = true;
 		}
 
 		qCCritical(logIpc) << "Error occurred while waiting for response.";

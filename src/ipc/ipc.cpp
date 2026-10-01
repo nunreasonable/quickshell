@@ -74,7 +74,13 @@ void IpcServerConnection::onReadyRead() {
 	this->stream.startTransaction();
 	IpcCommand command;
 	this->stream >> command;
-	if (!this->stream.commitTransaction()) return;
+	if (!this->stream.commitTransaction()) {
+		// Incomplete command: the inner commit only fails, so roll the outer transaction back too.
+		// Otherwise it stays open in ReadPastEnd and every later read fails. Unix sockets usually
+		// deliver a command in one piece; named pipes on Windows split it.
+		this->stream.rollbackTransaction();
+		return;
+	}
 
 	std::visit(
 	    [this]<typename Command>(Command& command) {
@@ -92,7 +98,10 @@ void IpcServerConnection::onReadyRead() {
 
 	// async connections reparent
 	if (dynamic_cast<IpcServer*>(this->parent()) != nullptr) {
-		this->deleteLater();
+		// Disconnect instead of deleting right away: the socket's destructor aborts writes still
+		// in flight, which drops the response on Windows where pipe writes are asynchronous.
+		// onDisconnected() deletes the connection once everything has been sent.
+		this->socket->disconnectFromServer();
 	}
 }
 
