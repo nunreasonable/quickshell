@@ -19,6 +19,7 @@
 #include <qthreadpool.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
+#include <qurl.h>
 
 #include "../core/logcat.hpp"
 #include "../core/util.hpp"
@@ -463,7 +464,12 @@ void FileView::updateState(FileViewState& newState) {
 QString FileView::path() const { return this->state.path; }
 
 void FileView::setPath(const QString& path) {
+#ifdef _WIN32
+	// file:///C:/x must become C:/x, not /C:/x.
+	auto p = path.startsWith("file://") ? QUrl(path).toLocalFile() : path;
+#else
 	auto p = path.startsWith("file://") ? path.sliced(7) : path;
+#endif
 	if (p == this->targetPath) return;
 
 	if (this->liveWriter()) {
