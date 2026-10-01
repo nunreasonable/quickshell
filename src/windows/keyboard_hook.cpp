@@ -228,8 +228,9 @@ LRESULT onModifier(const HookSnapshot& snapshot, const KBDLLHOOKSTRUCT* info, ui
 			gTapStart = info->time;
 		}
 
-		// Holds only observe, so they also run while the foreground is hidden from us.
-		if ((gHoldActive & bit) == 0 && !isDown(otherSide(info->vkCode))) {
+		// Holds only observe, so they also run while the foreground is hidden from us. A press
+		// is reported even if the last release was never seen (Win+L, elevated windows).
+		if (!isDown(otherSide(info->vkCode))) {
 			gHoldActive |= bit;
 			postAll(snapshot, HookTrigger::Hold, bit, HookPressed);
 		}
@@ -428,6 +429,7 @@ void KeyboardHook::stop() {
 }
 
 bool KeyboardHook::isRunning() { return gThread != nullptr; }
+bool KeyboardHook::foregroundBlocked() { return gForegroundBlocked.load(); }
 
 void KeyboardHook::setSnapshot(std::shared_ptr<const HookSnapshot> snapshot) {
 	gSnapshot.store(std::move(snapshot), std::memory_order_release);

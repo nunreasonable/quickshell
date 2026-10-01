@@ -80,6 +80,8 @@ public:
 	static bool start(HWND target, UINT messageBase);
 	static void stop();
 	[[nodiscard]] static bool isRunning();
+	// If the hook currently stays passive because the foreground window is hidden from it.
+	[[nodiscard]] static bool foregroundBlocked();
 
 	// Atomically replaces the triggers the hook matches.
 	static void setSnapshot(std::shared_ptr<const HookSnapshot> snapshot);
