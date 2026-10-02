@@ -68,6 +68,50 @@ QRect physicalRect(const RECT& rect) {
 	return {QPoint(rect.left, rect.top), QPoint(rect.right - 1, rect.bottom - 1)};
 }
 
+bool edgeIsHorizontal(TaskbarEdge edge) {
+	return edge == TaskbarEdge::Top || edge == TaskbarEdge::Bottom;
+}
+
+// The primary taskbar can report its own edge directly; the shell only answers this for the
+// main taskbar (ABM_GETTASKBARPOS), not secondary ones on other monitors.
+bool primaryBarEdge(HWND hwnd, TaskbarEdge& edge, int& thickness) {
+	APPBARDATA data {};
+	data.cbSize = sizeof(data);
+	data.hWnd = hwnd;
+	if (SHAppBarMessage(ABM_GETTASKBARPOS, &data) == 0) return false;
+
+	switch (data.uEdge) {
+	case ABE_LEFT: edge = TaskbarEdge::Left; break;
+	case ABE_TOP: edge = TaskbarEdge::Top; break;
+	case ABE_RIGHT: edge = TaskbarEdge::Right; break;
+	case ABE_BOTTOM: edge = TaskbarEdge::Bottom; break;
+	default: return false;
+	}
+
+	thickness = edgeIsHorizontal(edge) ? static_cast<int>(data.rc.bottom - data.rc.top)
+	                                    : static_cast<int>(data.rc.right - data.rc.left);
+
+	return true;
+}
+
+// Geometric fallback for bars the shell won't report an edge for (secondary monitors). Robust to
+// auto-hide: a hidden bar is slid almost entirely off its monitor, with only a ~TRIGGER_PX sliver
+// left inside - but GetWindowRect still reports the bar's full, un-shrunk size (only its position
+// moves), so the thin/wide axis and the touching edge are both still correct.
+TaskbarEdge inferBarEdge(const QRect& window, const QRect& monitor) {
+	// Horizontal (top/bottom) bars span the monitor's width; vertical (left/right) ones span its
+	// height, hidden or not.
+	if (window.width() >= window.height()) {
+		auto toTop = window.top() - monitor.top();
+		auto toBottom = monitor.bottom() - window.bottom();
+		return toTop <= toBottom ? TaskbarEdge::Top : TaskbarEdge::Bottom;
+	}
+
+	auto toLeft = window.left() - monitor.left();
+	auto toRight = monitor.right() - window.right();
+	return toLeft <= toRight ? TaskbarEdge::Left : TaskbarEdge::Right;
+}
+
 } // namespace
 
 TaskbarManager* TaskbarManager::instance() {
@@ -164,14 +208,28 @@ void TaskbarManager::findBars() {
 		    MONITORINFO info {};
 		    info.cbSize = sizeof(info);
 		    if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &info)) return TRUE;
+		    auto monitor = physicalRect(info.rcMonitor);
 
 		    RECT rect {};
 		    GetWindowRect(hwnd, &rect);
+		    auto window = physicalRect(rect);
+
+		    // Windows 11 always sits at the bottom; Windows 10 (and drag-and-drop on any version)
+		    // allows any edge, and secondary monitors' bars may differ from the primary one.
+		    TaskbarEdge edge = TaskbarEdge::Bottom;
+		    int thickness = 0;
+		    auto* primary = FindWindowW(L"Shell_TrayWnd", nullptr);
+
+		    if (hwnd != primary || !primaryBarEdge(hwnd, edge, thickness)) {
+			    edge = inferBarEdge(window, monitor);
+			    thickness = edgeIsHorizontal(edge) ? window.height() : window.width();
+		    }
 
 		    self->bars.append({
 		        .hwnd = hwnd,
-		        .monitor = physicalRect(info.rcMonitor),
-		        .height = static_cast<int>(rect.bottom - rect.top),
+		        .monitor = monitor,
+		        .edge = edge,
+		        .thickness = thickness,
 		    });
 
 		    return TRUE;
@@ -182,11 +240,23 @@ void TaskbarManager::findBars() {
 	qCDebug(logTaskbar) << "Found" << this->bars.length() << "taskbar windows";
 }
 
-// The Windows 11 taskbar always sits at the bottom of its monitor.
 bool TaskbarManager::atTrigger(QPoint position) const {
 	for (const auto& bar: this->bars) {
-		if (bar.monitor.contains(position) && position.y() > bar.monitor.bottom() - TRIGGER_PX) {
-			return true;
+		if (!bar.monitor.contains(position)) continue;
+
+		switch (bar.edge) {
+		case TaskbarEdge::Top:
+			if (position.y() < bar.monitor.top() + TRIGGER_PX) return true;
+			break;
+		case TaskbarEdge::Bottom:
+			if (position.y() > bar.monitor.bottom() - TRIGGER_PX) return true;
+			break;
+		case TaskbarEdge::Left:
+			if (position.x() < bar.monitor.left() + TRIGGER_PX) return true;
+			break;
+		case TaskbarEdge::Right:
+			if (position.x() > bar.monitor.right() - TRIGGER_PX) return true;
+			break;
 		}
 	}
 
@@ -195,12 +265,32 @@ bool TaskbarManager::atTrigger(QPoint position) const {
 
 bool TaskbarManager::overBar(QPoint position) const {
 	for (const auto& bar: this->bars) {
-		auto shown = QRect(
-		    bar.monitor.left(),
-		    bar.monitor.bottom() - bar.height + 1,
-		    bar.monitor.width(),
-		    bar.height
-		);
+		QRect shown;
+
+		switch (bar.edge) {
+		case TaskbarEdge::Top:
+			shown = QRect(bar.monitor.left(), bar.monitor.top(), bar.monitor.width(), bar.thickness);
+			break;
+		case TaskbarEdge::Bottom:
+			shown = QRect(
+			    bar.monitor.left(),
+			    bar.monitor.bottom() - bar.thickness + 1,
+			    bar.monitor.width(),
+			    bar.thickness
+			);
+			break;
+		case TaskbarEdge::Left:
+			shown = QRect(bar.monitor.left(), bar.monitor.top(), bar.thickness, bar.monitor.height());
+			break;
+		case TaskbarEdge::Right:
+			shown = QRect(
+			    bar.monitor.right() - bar.thickness + 1,
+			    bar.monitor.top(),
+			    bar.thickness,
+			    bar.monitor.height()
+			);
+			break;
+		}
 
 		if (shown.contains(position)) return true;
 	}
@@ -230,18 +320,25 @@ bool TaskbarManager::taskbarPopupActive() {
 	auto name = QFileInfo(QString::fromWCharArray(path, static_cast<qsizetype>(size))).fileName().toLower();
 
 	if (name == "shellexperiencehost.exe" || name == "startmenuexperiencehost.exe"
-	    || name == "searchhost.exe" || name == "shellhost.exe")
+	    || name == "searchhost.exe" || name == "shellhost.exe"
+	    // Windows 10's own search popup: searchapp.exe from the 2004 update onward,
+	    // searchui.exe (the older, Cortana based one) before that.
+	    || name == "searchapp.exe" || name == "searchui.exe")
 	{
 		return true;
 	}
 
-	// explorer.exe also runs File Explorer windows; only its menus and tray popups count.
+	// explorer.exe also runs File Explorer windows; only its menus, tray popups and jump lists
+	// count. The clock/volume/network flyouts and Action Center are ShellExperienceHost.exe
+	// CoreWindows on Windows 10 too, so they're already covered above by process name alone.
 	if (name == "explorer.exe") {
 		wchar_t cls[64] {};
 		GetClassNameW(foreground, cls, 64);
 		return wcscmp(cls, L"#32768") == 0 || wcscmp(cls, L"NotifyIconOverflowWindow") == 0
 		    || wcscmp(cls, L"TopLevelWindowForOverflowXamlIsland") == 0
-		    || wcscmp(cls, L"Xaml_WindowedPopupClass") == 0;
+		    || wcscmp(cls, L"Xaml_WindowedPopupClass") == 0
+		    // Jump list / taskband context menu host, Windows 7 through 10.
+		    || wcscmp(cls, L"DV2ControlHost") == 0;
 	}
 
 	return false;

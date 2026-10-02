@@ -9,8 +9,13 @@
 #include <qrect.h>
 #include <qtimer.h>
 #include <qtmetamacros.h>
+#include <qtypes.h>
 
 namespace qs::windows {
+
+// Which edge of its monitor a taskbar is docked to. Windows 11 always uses Bottom; Windows 10
+// (and any version, via drag-and-drop) allows any of the four.
+enum class TaskbarEdge : quint8 { Left, Top, Right, Bottom };
 
 // Process wide owner of the taskbar's visibility, so a config reload doesn't flash it.
 //
@@ -43,7 +48,8 @@ private:
 	struct Bar {
 		HWND hwnd = nullptr;
 		QRect monitor; // physical
-		int height = 0;
+		TaskbarEdge edge = TaskbarEdge::Bottom;
+		int thickness = 0; // full thickness along the thin axis, even while auto-hidden
 	};
 
 	void enable();
