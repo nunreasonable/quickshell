@@ -31,6 +31,10 @@ qt_add_library(quickshell-windows STATIC
 	system/night_light.cpp
 	system/screenshot.cpp
 	system/notification_settings.cpp
+	system/network.cpp
+	system/network_wifi.cpp
+	system/network_wifi_item.cpp
+	system/network_connectivity.cpp
 )
 
 qt_add_qml_module(quickshell-windows
@@ -74,6 +78,9 @@ target_link_libraries(quickshell-windows PRIVATE
 	runtimeobject
 	d3d11
 	dxgi
+	# network*.cpp
+	wlanapi
+	iphlpapi
 )
 target_link_libraries(quickshell-windows-init PRIVATE Qt::Quick Qt::Qml)
 
