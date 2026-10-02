@@ -34,7 +34,23 @@ std::atomic<DWORD> hookThreadId = 0;    // NOLINT
 std::atomic<bool> hookInstalled = false; // NOLINT
 std::atomic<int> buttonWatchers = 0;     // NOLINT
 
+constexpr DWORD LATE_INPUT_MS = 100;
+constexpr int LATE_REPORT_INTERVAL_MS = 10000;
+std::atomic<quint32> lateMouseEvents = 0; // NOLINT
+std::atomic<quint32> lateKeyEvents = 0;   // NOLINT
+std::atomic<DWORD> worstLateMs = 0;       // NOLINT
+
 } // namespace
+
+void noteHookDelay(bool keyboard, DWORD eventTime) {
+	auto delay = GetTickCount() - eventTime; // both wrap together
+	if (delay < LATE_INPUT_MS || delay > 60000) return;
+
+	(keyboard ? lateKeyEvents : lateMouseEvents).fetch_add(1, std::memory_order_relaxed);
+
+	auto worst = worstLateMs.load(std::memory_order_relaxed);
+	while (delay > worst && !worstLateMs.compare_exchange_weak(worst, delay)) {}
+}
 
 InputMaskTracker* InputMaskTracker::instance() {
 	static QPointer<InputMaskTracker> tracker; // NOLINT
@@ -77,6 +93,20 @@ InputMaskTracker::InputMaskTracker(QObject* parent): QObject(parent) {
 
 	this->pollTimer.setInterval(16);
 	QObject::connect(&this->pollTimer, &QTimer::timeout, this, &InputMaskTracker::refresh);
+
+	this->lateReportTimer.setInterval(LATE_REPORT_INTERVAL_MS);
+	QObject::connect(&this->lateReportTimer, &QTimer::timeout, this, []() {
+		auto mouse = lateMouseEvents.exchange(0);
+		auto keys = lateKeyEvents.exchange(0);
+		auto worst = worstLateMs.exchange(0);
+		if (mouse == 0 && keys == 0) return;
+
+		qCWarning(logInputMask).nospace()
+		    << "Input reached the hooks late in the last " << LATE_REPORT_INTERVAL_MS / 1000 << " s: "
+		    << mouse << " mouse and " << keys << " keyboard events over " << LATE_INPUT_MS
+		    << " ms, the worst " << worst << " ms.";
+	});
+	this->lateReportTimer.start();
 }
 
 InputMaskTracker::~InputMaskTracker() {
@@ -290,6 +320,7 @@ void InputMaskTracker::hookThreadMain(HANDLE readyEvent) {
 LRESULT CALLBACK InputMaskTracker::mouseHookProc(int code, WPARAM wParam, LPARAM lParam) {
 	if (code == HC_ACTION) {
 		auto* info = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam); // NOLINT(performance-no-int-to-ptr)
+		noteHookDelay(false, info->time);
 		cursorX.store(info->pt.x);
 		cursorY.store(info->pt.y);
 

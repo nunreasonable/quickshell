@@ -16,6 +16,11 @@
 
 namespace qs::windows {
 
+// From the low level hook threads: notes how long after it was generated an input event reached
+// the hook. InputMaskTracker logs a warning when events keep arriving late, so a laggy system
+// shows up in `qs log` together with whether the delay happens before ii's hooks.
+void noteHookDelay(bool keyboard, DWORD eventTime);
+
 // Input-only window masks.
 //
 // Windows has no per-pixel input region for top level windows: SetWindowRgn (QWindow::setMask)
@@ -88,6 +93,7 @@ private:
 	bool hookFailed = false;
 	int cursorWatchers = 0;
 	QTimer pollTimer;
+	QTimer lateReportTimer;
 };
 
 } // namespace qs::windows

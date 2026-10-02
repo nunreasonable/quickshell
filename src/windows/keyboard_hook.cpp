@@ -8,6 +8,8 @@
 
 #include <windows.h>
 
+#include "input_mask.hpp"
+
 namespace qs::windows::hotkeys {
 
 namespace {
@@ -312,6 +314,7 @@ LRESULT CALLBACK hookProc(int code, WPARAM wParam, LPARAM lParam) {
 	if (code != HC_ACTION) return CallNextHookEx(nullptr, code, wParam, lParam);
 
 	auto* info = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam); // NOLINT(performance-no-int-to-ptr)
+	qs::windows::noteHookDelay(true, info->time);
 
 	// Our own mask keys and re-sent releases. Other injected input (on-screen keyboards,
 	// automation tools) is handled like real input.
