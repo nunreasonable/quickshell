@@ -45,7 +45,6 @@ SystemStats::SystemStats(QObject* parent): QObject(parent) {
 
 	if (this->mActive) {
 		this->sample();
-		this->setupGpuCounters();
 		this->timer.start();
 	}
 }
@@ -59,12 +58,25 @@ void SystemStats::setActive(bool active) {
 
 	if (active) {
 		this->sample();
-		this->setupGpuCounters();
+		if (this->mGpuEnabled) this->setupGpuCounters();
 		this->timer.start();
 	} else {
 		this->timer.stop();
 		this->teardownGpuCounters();
 		this->havePrevCpuTimes = false;
+	}
+}
+
+void SystemStats::setGpuEnabled(bool enabled) {
+	if (this->mGpuEnabled == enabled) return;
+	this->mGpuEnabled = enabled;
+	emit this->gpuEnabledChanged();
+
+	if (enabled && this->mActive) {
+		this->setupGpuCounters();
+	} else if (!enabled) {
+		this->teardownGpuCounters();
+		this->bGpuUsage = -1.0;
 	}
 }
 

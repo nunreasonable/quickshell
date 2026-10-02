@@ -39,8 +39,11 @@ class SystemStats: public QObject {
 	Q_PROPERTY(qint64 uptimeSeconds READ default NOTIFY uptimeSecondsChanged BINDABLE bindableUptimeSeconds);
 	/// `ProcessorNameString` from the registry, read once.
 	Q_PROPERTY(QString cpuName READ cpuName CONSTANT);
+	/// Sample @@gpuUsage too. Off by default: collecting the GPU engine counters asks the graphics
+	/// driver about every process on every sample.
+	Q_PROPERTY(bool gpuEnabled READ gpuEnabled WRITE setGpuEnabled NOTIFY gpuEnabledChanged);
 	/// Summed `\GPU Engine(*engtype_3D)\Utilization Percentage` via PDH, in [0, 1].
-	/// -1 if no GPU engine counters are available on this machine.
+	/// -1 if no GPU engine counters are available on this machine or @@gpuEnabled is off.
 	Q_PROPERTY(qreal gpuUsage READ default NOTIFY gpuUsageChanged BINDABLE bindableGpuUsage);
 	// clang-format on
 
@@ -51,6 +54,9 @@ public:
 
 	[[nodiscard]] bool active() const { return this->mActive; }
 	void setActive(bool active);
+
+	[[nodiscard]] bool gpuEnabled() const { return this->mGpuEnabled; }
+	void setGpuEnabled(bool enabled);
 
 	[[nodiscard]] int updateIntervalMs() const { return this->mUpdateIntervalMs; }
 	void setUpdateIntervalMs(int interval);
@@ -75,6 +81,7 @@ public:
 
 signals:
 	void activeChanged();
+	void gpuEnabledChanged();
 	void updateIntervalMsChanged();
 	void cpuUsageChanged();
 	void memoryTotalKbChanged();
@@ -91,6 +98,7 @@ private:
 	void sampleGpu();
 
 	bool mActive = true;
+	bool mGpuEnabled = false;
 	int mUpdateIntervalMs = 2000;
 	QString mCpuName;
 	QTimer timer;
