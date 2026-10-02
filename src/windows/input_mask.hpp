@@ -49,10 +49,18 @@ public:
 	void acquireButtonEvents();
 	void releaseButtonEvents();
 
+	// Reference counted, like button events: cursorMoved is emitted while at least one user
+	// acquired it (the mouse hook runs for them even without any input mask).
+	void acquireCursorEvents();
+	void releaseCursorEvents();
+
 signals:
 	// A mouse button went down anywhere, in physical screen coordinates. `time` is the
 	// event's GetTickCount time. Emitted after the input masks saw the matching cursor move.
 	void buttonPressed(QPoint position, quint32 time);
+	// The cursor moved, in physical screen coordinates. Coalesced: at most once per event loop
+	// turn however fast the mouse goes.
+	void cursorMoved(QPoint position);
 
 private:
 	explicit InputMaskTracker(QObject* parent);
@@ -78,6 +86,7 @@ private:
 	std::thread hookThread;
 	bool hookRunning = false;
 	bool hookFailed = false;
+	int cursorWatchers = 0;
 	QTimer pollTimer;
 };
 

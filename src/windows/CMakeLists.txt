@@ -21,6 +21,7 @@ qt_add_library(quickshell-windows STATIC
 	focus_grab.cpp
 	virtual_desktops.cpp
 	window_tracker.cpp
+	taskbar.cpp
 	capture.cpp
 	desktopentry_backend.cpp
 	appicon.cpp

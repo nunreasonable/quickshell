@@ -140,6 +140,17 @@ void InputMaskTracker::releaseButtonEvents() {
 	this->updateHookState();
 }
 
+void InputMaskTracker::acquireCursorEvents() {
+	this->cursorWatchers++;
+	this->updateHookState();
+}
+
+void InputMaskTracker::releaseCursorEvents() {
+	if (this->cursorWatchers <= 0) return;
+	this->cursorWatchers--;
+	this->updateHookState();
+}
+
 void InputMaskTracker::onButtonPressed(QPoint position, quint32 time) {
 	emit this->buttonPressed(position, time);
 }
@@ -152,6 +163,8 @@ void InputMaskTracker::onCursorMoved() {
 }
 
 void InputMaskTracker::evaluate(POINT cursor) {
+	if (this->cursorWatchers > 0) emit this->cursorMoved(QPoint(cursor.x, cursor.y));
+
 	for (auto it = this->entries.begin(); it != this->entries.end();) {
 		auto* window = it->window.data();
 
@@ -194,7 +207,7 @@ void InputMaskTracker::evaluate(POINT cursor) {
 }
 
 void InputMaskTracker::updateHookState() {
-	auto needed = !this->entries.isEmpty() || buttonWatchers.load() > 0;
+	auto needed = !this->entries.isEmpty() || buttonWatchers.load() > 0 || this->cursorWatchers > 0;
 
 	if (needed && !this->hookRunning && !this->hookFailed) {
 		if (this->messageWindow == nullptr || !this->startHook()) {
@@ -203,7 +216,9 @@ void InputMaskTracker::updateHookState() {
 		}
 	}
 
-	if (needed && this->hookFailed && !this->entries.isEmpty() && !this->pollTimer.isActive()) {
+	if (needed && this->hookFailed && (!this->entries.isEmpty() || this->cursorWatchers > 0)
+	    && !this->pollTimer.isActive())
+	{
 		this->pollTimer.start();
 	}
 

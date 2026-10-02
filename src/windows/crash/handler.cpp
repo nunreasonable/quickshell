@@ -42,6 +42,7 @@
 #include "../../core/instanceinfo.hpp"
 #include "../../core/logcat.hpp"
 #include "../../core/paths.hpp"
+#include "../taskbar.hpp"
 
 namespace qs::crash {
 
@@ -213,6 +214,9 @@ void handleCrash(const wchar_t* reason, EXCEPTION_POINTERS* ep) {
 
 			CloseHandle(dumpFile);
 		}
+
+		// A taskbar hidden in hover only mode must not stay hidden with nobody to show it.
+		qs::windows::TaskbarManager::restoreForCrash();
 
 		// Relaunch before anything that needs the heap or locks the faulting thread may hold:
 		// if writing the supporting files hangs, the shell is already back.
