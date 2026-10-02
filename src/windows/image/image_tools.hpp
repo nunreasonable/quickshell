@@ -1,6 +1,7 @@
 #pragma once
 
 #include <qobject.h>
+#include <qsize.h>
 #include <qqmlintegration.h>
 #include <qstring.h>
 #include <qtmetamacros.h>
@@ -60,6 +61,10 @@ public:
 	/// matugen's two safe defaults for "auto" ii palette type. Returns `"scheme-tonal-spot"`
 	/// if `imagePath` couldn't be loaded, matching the Python script's fallback.
 	Q_INVOKABLE static QString schemeForImage(const QString& imagePath);
+
+	/// `magick identify -format "%w %h"`: the image's pixel size (EXIF orientation applied) as
+	/// `{width, height}`, read from the header only. Zero size if it can't be read.
+	Q_INVOKABLE static QSize imageSize(const QString& imagePath);
 };
 
 } // namespace qs::windows::image

@@ -8,6 +8,7 @@
 
 #include <qcolor.h>
 #include <qimage.h>
+#include <qimagereader.h>
 #include <qloggingcategory.h>
 #include <qpoint.h>
 #include <qrect.h>
@@ -358,6 +359,17 @@ QString ImageTools::schemeForImage(const QString& imagePath) {
 	                   + (0.3 * std::sqrt(meanRg * meanRg + meanYb * meanYb));
 
 	return colorfulness < 40 ? QStringLiteral("scheme-neutral") : QStringLiteral("scheme-tonal-spot");
+}
+
+QSize ImageTools::imageSize(const QString& imagePath) {
+	QImageReader reader(imagePath);
+	reader.setAutoTransform(true);
+	auto size = reader.size();
+	if (!size.isValid()) return {};
+
+	// size() is the stored size; a rotated EXIF orientation swaps the sides on display.
+	if (reader.transformation().testFlag(QImageIOHandler::TransformationRotate90)) size.transpose();
+	return size;
 }
 
 } // namespace qs::windows::image
