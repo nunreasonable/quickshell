@@ -7,6 +7,7 @@
 #include <qpixmap.h>
 #include <qsize.h>
 #include <qstring.h>
+#include <qstringlist.h>
 
 #include <qt_windows.h>
 
@@ -43,6 +44,16 @@ struct ComApartment {
 // freedesktop-style theme icon name.
 bool looksLikeWindowsPath(const QString& s) {
 	return s.length() > 2 && s[0].isLetter() && s[1] == u':' && (s[2] == u'/' || s[2] == u'\\');
+}
+
+bool isPlainImage(const QString& path) {
+	static const auto suffixes = QStringList {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".svg"};
+
+	for (const auto& suffix: suffixes) {
+		if (path.endsWith(suffix, Qt::CaseInsensitive)) return true;
+	}
+
+	return false;
 }
 
 // IShellItemImageFactory::GetImage returns a premultiplied-alpha top-down 32bpp DIB.
@@ -128,6 +139,10 @@ QPixmap iconForKey(const QString& key, const QSize& size) {
 		if (token.isEmpty()) return QPixmap();
 		parsingName = QStringLiteral("shell:AppsFolder\\") + token;
 	} else if (looksLikeWindowsPath(key)) {
+		// Plain images (notification app icons cached as PNG, for one) should show themselves,
+		// not the shell's icon for their file type: returning null lets the caller's
+		// QIcon::fromTheme() load the absolute path directly.
+		if (isPlainImage(key)) return QPixmap();
 		parsingName = key;
 		parsingName.replace(u'/', u'\\');
 	} else {
