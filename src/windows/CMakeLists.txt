@@ -15,6 +15,7 @@ qt_add_library(quickshell-windows STATIC
 	input_mask.cpp
 	panel_window.cpp
 	blur.cpp
+	blur_shapes.cpp
 	keyboard_hook.cpp
 	hotkeys.cpp
 	focus_grab.cpp

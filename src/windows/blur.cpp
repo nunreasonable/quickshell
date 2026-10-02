@@ -1,6 +1,5 @@
 #include "blur.hpp"
 #include <algorithm>
-#include <cmath>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -29,9 +28,9 @@
 #include <qtimer.h>
 #include <qvariant.h>
 #include <qwineventnotifier.h>
-#include <private/qquickrectangle_p.h>
 
 #include "../core/generation.hpp"
+#include "blur_shapes.hpp"
 #include "panel_window.hpp"
 
 // Windows Runtime and DWM headers last: they pull in the rpc headers, which define macros like
@@ -71,18 +70,6 @@ constexpr auto DEFAULT_FILE = "defaults/windows/layerrules.json";
 constexpr auto PERSONALIZE_KEY = L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 constexpr auto BACKDROP_CLASS = L"QuickshellBlurBackdrop";
 
-// Coverage at or above this is opaque: whatever is behind can't show through.
-constexpr qreal OPAQUE_ALPHA = 0.995;
-constexpr qreal INVISIBLE_ALPHA = 0.001;
-// Physical pixels the blur stays inside a rectangle's edge, so the rectangle's anti-aliased edge
-// and border are drawn over the plain backdrop instead of leaving a blurred halo outside it.
-constexpr qreal EDGE_INSET = 1.0;
-// Bounds the per frame item walk. Panels have a few hundred items; the walk stops early at the
-// first blurred or opaque rectangle of each branch anyway.
-constexpr int ITEM_BUDGET = 4000;
-constexpr int MAX_DEPTH = 96;
-constexpr qsizetype MAX_SHAPES = 48;
-
 bool gManagerDestroyed = false; // NOLINT
 
 QString hresultString(const winrt::hresult_error& error) {
@@ -91,51 +78,7 @@ QString hresultString(const winrt::hresult_error& error) {
 	    .arg(QString::fromWCharArray(error.message().c_str()));
 }
 
-// The fill's opacity. Gradients count with their most opaque stop.
-qreal fillAlpha(const QQuickRectangle* rectangle) {
-	auto gradient = rectangle->gradient();
-
-	if (gradient.isQObject()) {
-		if (auto* object = qobject_cast<QQuickGradient*>(gradient.toQObject())) {
-			qreal alpha = 0;
-			for (const auto& stop: object->gradientStops()) {
-				alpha = std::max(alpha, static_cast<qreal>(stop.second.alphaF()));
-			}
-			return alpha;
-		}
-	} else if (gradient.isNumber() || gradient.isString()) {
-		// a QGradient preset, which are opaque
-		return 1;
-	}
-
-	return rectangle->color().alphaF();
-}
-
-// Per corner radii (Qt 6.7+) fall back to `radius` when unset. Blur takes the roundest corner:
-// a sharper corner then keeps a sliver of plain backdrop instead of blur leaking past a rounder one.
-qreal cornerRadius(const QQuickRectangle* rectangle) {
-	return std::max(
-	    {rectangle->topLeftRadius(),
-	     rectangle->topRightRadius(),
-	     rectangle->bottomLeftRadius(),
-	     rectangle->bottomRightRadius(),
-	     0.0}
-	);
-}
-
 } // namespace
-
-bool BlurShape::fuzzyEquals(const BlurShape& other) const {
-	// (`near` is a windef.h macro)
-	auto same = [](qreal a, qreal b) { return std::abs(a - b) < 0.01; };
-	auto sameRect = [&](const QRectF& a, const QRectF& b) {
-		return same(a.x(), b.x()) && same(a.y(), b.y()) && same(a.width(), b.width())
-		    && same(a.height(), b.height());
-	};
-
-	return sameRect(this->rect, other.rect) && same(this->radius, other.radius)
-	    && sameRect(this->clip, other.clip);
-}
 
 // BackdropWindow
 
@@ -551,13 +494,7 @@ void BlurManager::shutdown() {
 	for (auto* panel: QList(this->panels)) panel->updateActive();
 
 	if (this->composition != nullptr) {
-		try {
-			this->composition->compositor.Close();
-		} catch (const winrt::hresult_error& e) {
-			qCDebug(logBlur) << "Closing the compositor:" << hresultString(e);
-		}
-
-		this->composition->compositor = nullptr;
+		this->closeCompositor();
 		// A DispatcherQueue of the current thread wants ShutdownQueueAsync and a running message
 		// loop to go away cleanly. The process is exiting; leave it to the system.
 		winrt::detach_abi(this->composition->controller);
@@ -565,18 +502,34 @@ void BlurManager::shutdown() {
 	}
 }
 
+void BlurManager::closeCompositor() {
+	if (this->composition == nullptr || this->composition->compositor == nullptr) return;
+
+	try {
+		this->composition->compositor.Close();
+	} catch (const winrt::hresult_error& e) {
+		qCDebug(logBlur) << "Closing the compositor:" << hresultString(e);
+	}
+
+	this->composition->compositor = nullptr;
+}
+
 BlurManager::Composition* BlurManager::ensureComposition() {
-	if (this->composition != nullptr) return this->composition.get();
 	if (this->unsupported || this->mShutDown) return nullptr;
 
-	auto state = std::make_unique<Composition>();
+	if (this->composition == nullptr) this->composition = std::make_unique<Composition>();
+	auto* state = this->composition.get();
+	if (state->compositor != nullptr) return state;
 
 	try {
 		// Windows.UI.Composition needs a DispatcherQueue on the thread that uses it. Everything
 		// here runs on the gui thread, whose message loop (Qt's) also runs the queue: the
 		// compositor's calls don't block and nothing here is asynchronous, so unlike the other
-		// WinRT backends this needs no worker thread or apartment of its own.
-		if (winrt::Windows::System::DispatcherQueue::GetForCurrentThread() == nullptr) {
+		// WinRT backends this needs no worker thread or apartment of its own (COM is already
+		// initialized on this thread by Qt).
+		if (state->controller == nullptr
+		    && winrt::Windows::System::DispatcherQueue::GetForCurrentThread() == nullptr)
+		{
 			DispatcherQueueOptions options {
 			    .dwSize = sizeof(DispatcherQueueOptions),
 			    .threadType = DQTYPE_THREAD_CURRENT,
@@ -591,13 +544,14 @@ BlurManager::Composition* BlurManager::ensureComposition() {
 
 		state->compositor = wuc::Compositor();
 	} catch (const winrt::hresult_error& e) {
-		this->markUnsupported("could not create a compositor: " + hresultString(e));
+		// retried on the next state change
+		qCWarning(logBlur).noquote() << "Could not create a compositor for blur:" << hresultString(e);
+		state->compositor = nullptr;
 		return nullptr;
 	}
 
 	qCDebug(logBlur) << "Compositor created.";
-	this->composition = std::move(state);
-	return this->composition.get();
+	return state;
 }
 
 void BlurManager::markUnsupported(const QString& reason) {
@@ -671,18 +625,7 @@ void BlurManager::scheduleSystemCheck(bool recreate) {
 
 			// The compositor may not survive a DWM restart either. Backdrops are gone, so it can
 			// be dropped here and created again when the panels come back.
-			if (this->composition != nullptr) {
-				try {
-					this->composition->compositor.Close();
-				} catch (const winrt::hresult_error& e) {
-					qCDebug(logBlur) << "Closing the compositor:" << hresultString(e);
-				}
-
-				this->composition->compositor = nullptr;
-				winrt::detach_abi(this->composition->controller);
-				this->composition.reset();
-			}
-
+			this->closeCompositor();
 			this->notifyPanels();
 		}
 	});
@@ -1153,9 +1096,18 @@ void PanelBlur::updateShapes() {
 		}
 
 		if (logBlur().isDebugEnabled()) {
-			auto debug = qDebug().noquote();
-			debug << "Blur shapes of" << this->panel->ns() << ":";
-			for (const auto& shape: next) debug << shape.rect << "r" << shape.radius;
+			QStringList list;
+			for (const auto& shape: next) {
+				list.append(QString("%1x%2+%3+%4 r%5")
+				                .arg(shape.rect.width())
+				                .arg(shape.rect.height())
+				                .arg(shape.rect.x())
+				                .arg(shape.rect.y())
+				                .arg(shape.radius));
+			}
+
+			qCDebug(logBlur).noquote() << "Blur shapes of" << this->panel->ns() << ":"
+			                           << (list.isEmpty() ? "none" : list.join(", "));
 		}
 
 		this->shapes = std::move(next);
@@ -1183,121 +1135,23 @@ void PanelBlur::syncPlacement() {
 
 void PanelBlur::collectShapes(QList<BlurShape>& shapes) {
 	auto* window = this->mWindow.data();
-	if (window == nullptr || window->contentItem() == nullptr) return;
-	// a fully click-through panel (empty mask) is decoration; ii hides such panels' contents
-	if (this->hasMask && this->mask.isEmpty()) return;
+	if (window == nullptr) return;
 
-	this->dpr = window->devicePixelRatio();
-	this->collected.clear();
-
-	auto windowRect = QRectF(0, 0, window->width(), window->height());
-	auto base = static_cast<qreal>(window->color().alphaF());
-
-	auto wholeSurface = [&]() {
-		if (this->hasMask) {
-			for (const auto& rect: this->mask) this->addShape(rect, 0, windowRect);
-		} else {
-			this->addShape(windowRect, 0, windowRect);
-		}
+	auto query = BlurShapeQuery {
+	    .ignoreAlpha = this->rule.ignoreAlpha,
+	    .mask = this->mask,
+	    .hasMask = this->hasMask,
+	    .dpr = window->devicePixelRatio(),
 	};
 
-	if (!this->rule.ignoreAlpha.has_value()) {
-		if (base < OPAQUE_ALPHA) wholeSurface();
-	} else if (base < OPAQUE_ALPHA) {
-		this->threshold = *this->rule.ignoreAlpha;
+	auto result = collectBlurShapes(window, query);
+	shapes = std::move(result.shapes);
 
-		if (base > this->threshold) {
-			// the window's own background color is the surface
-			wholeSurface();
-		} else {
-			this->budget = ITEM_BUDGET;
-			this->collectItem(window->contentItem(), 1, base, windowRect, 0);
-
-			if (this->budget < 0 && !this->budgetWarned) {
-				this->budgetWarned = true;
-				qCWarning(logBlur) << "Item tree of" << this->panel->ns() << "is larger than" << ITEM_BUDGET
-				                   << "items, blur only covers part of it.";
-			}
-		}
+	if (result.truncated && !this->truncatedWarned) {
+		this->truncatedWarned = true;
+		qCWarning(logBlur) << "Item tree of" << this->panel->ns()
+		                   << "is too large to walk every frame, blur only covers part of it.";
 	}
-
-	shapes = std::move(this->collected);
-	this->collected.clear();
-}
-
-void PanelBlur::collectItem(
-    QQuickItem* item,
-    qreal opacity,
-    qreal coverage,
-    const QRectF& clip,
-    int depth
-) {
-	if (item == nullptr || depth > MAX_DEPTH || --this->budget < 0) return;
-	if (!item->isVisible()) return;
-
-	opacity *= item->opacity();
-	if (opacity <= INVISIBLE_ALPHA) return;
-
-	auto* rectangle = qobject_cast<QQuickRectangle*>(item);
-	auto clips = item->clip();
-
-	QRectF sceneRect;
-	if (rectangle != nullptr || clips) {
-		sceneRect = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
-	}
-
-	auto childClip = clip;
-	if (clips) {
-		childClip = clip.intersected(sceneRect);
-		if (childClip.isEmpty()) return;
-	}
-
-	if (rectangle != nullptr) {
-		// What shows through at this rectangle: its own fill over the rectangles it's drawn on.
-		auto alpha = std::clamp(fillAlpha(rectangle) * opacity, 0.0, 1.0);
-		auto combined = 1.0 - (1.0 - coverage) * (1.0 - alpha);
-
-		// Opaque: blur behind it would be invisible, and so would blur behind its children.
-		if (combined >= OPAQUE_ALPHA) return;
-
-		if (combined > this->threshold) {
-			auto scale = item->width() > 0 ? sceneRect.width() / item->width() : 1.0;
-			this->addShape(sceneRect, cornerRadius(rectangle) * scale, childClip);
-			return;
-		}
-
-		coverage = combined;
-	}
-
-	const auto children = item->childItems();
-	for (auto* child: children) {
-		this->collectItem(child, opacity, coverage, childClip, depth + 1);
-	}
-}
-
-void PanelBlur::addShape(const QRectF& rect, qreal radius, const QRectF& clip) {
-	if (this->collected.size() >= MAX_SHAPES) return;
-
-	auto visible = rect.intersected(clip);
-	if (visible.isEmpty()) return;
-	// Only what the input mask covers: ii's masks are the visible surfaces of its panels.
-	if (this->hasMask && !this->mask.intersects(visible.toAlignedRect())) return;
-
-	auto toPhysical = [this](const QRectF& r) {
-		return QRectF(r.x() * this->dpr, r.y() * this->dpr, r.width() * this->dpr, r.height() * this->dpr);
-	};
-
-	auto physical = toPhysical(rect).adjusted(EDGE_INSET, EDGE_INSET, -EDGE_INSET, -EDGE_INSET);
-	if (physical.width() < 1 || physical.height() < 1) return;
-
-	auto maxRadius = std::min(physical.width(), physical.height()) / 2;
-	auto physicalRadius = std::clamp(radius * this->dpr - EDGE_INSET, 0.0, maxRadius);
-
-	this->collected.append(BlurShape {
-	    .rect = physical,
-	    .radius = physicalRadius,
-	    .clip = toPhysical(clip),
-	});
 }
 
 // BackdropBlur

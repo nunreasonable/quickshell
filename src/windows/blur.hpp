@@ -24,6 +24,8 @@
 #include <qtypes.h>
 #include <qvariant.h>
 
+#include "blur_shapes.hpp"
+
 class QQuickItem;
 class QWinEventNotifier;
 
@@ -41,29 +43,15 @@ class WinPanelWindow;
 // Windows 11 22000), which DWM fills with the blurred desktop behind the window, clipped to
 // anti-aliased rounded rectangles.
 //
-// The rectangles come from the panel's item tree instead of its pixels. ignore_alpha blurs
-// behind pixels more opaque than a threshold; here the Rectangle items whose fill (opacity, and
-// the rectangles they are drawn on, included) is more opaque than the rule's ignoreAlpha are
-// blurred behind. Text, images and other item types are not considered. The search stops at the
-// first such rectangle on each branch, skips fully opaque ones (blur behind them is invisible,
-// so panels without transparency cost nothing), and only keeps shapes that touch the panel's
-// input mask when it has one. Shapes are recomputed on each frame the panel renders: an idle
-// panel costs nothing, an animating one a walk of its item tree per frame.
+// The rectangles come from the panel's item tree instead of its pixels (blur_shapes.hpp): the
+// Rectangle items more opaque than the rule's ignoreAlpha, but not fully opaque, so panels
+// without transparency cost nothing. Shapes are recomputed on each frame the panel renders: an
+// idle panel costs nothing, an animating one a walk of its item tree per frame.
 
 struct BlurRule {
 	bool blur = false;
 	// Unset: blur behind the whole surface (the input mask if set, else the window).
 	std::optional<qreal> ignoreAlpha;
-};
-
-// A rounded rectangle to blur behind, in physical pixels relative to the panel window, cut to
-// `clip` (an ancestor item's clip).
-struct BlurShape {
-	QRectF rect;
-	qreal radius = 0;
-	QRectF clip;
-
-	[[nodiscard]] bool fuzzyEquals(const BlurShape& other) const;
 };
 
 class BackdropWindow;
@@ -147,6 +135,7 @@ private:
 	void notifyPanels();
 	void scheduleNotifyPanels();
 	void shutdown();
+	void closeCompositor();
 
 	[[nodiscard]] QString userFilePath() const;
 	[[nodiscard]] QString defaultFilePath() const;
@@ -225,8 +214,6 @@ private:
 	void disconnectFrames();
 	void scheduleShapes();
 	void collectShapes(QList<BlurShape>& shapes);
-	void collectItem(QQuickItem* item, qreal opacity, qreal coverage, const QRectF& clip, int depth);
-	void addShape(const QRectF& rect, qreal radius, const QRectF& clip);
 	bool ensureBackdrop();
 	void destroyBackdrop();
 	[[nodiscard]] bool panelShown() const;
@@ -245,13 +232,7 @@ private:
 	QRegion mask;
 	bool hasMask = false;
 	QList<BlurShape> shapes;
-
-	// collection state
-	QList<BlurShape> collected;
-	qreal threshold = 0;
-	qreal dpr = 1;
-	int budget = 0;
-	bool budgetWarned = false;
+	bool truncatedWarned = false;
 };
 
 ///! Blur behind panels on Windows.
