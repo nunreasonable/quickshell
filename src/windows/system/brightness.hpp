@@ -11,6 +11,8 @@ namespace qs::windows::sys {
 
 ///! Per-screen display brightness. External monitors go through DDC/CI (dxva2); internal
 /// panels go through the `root\wmi` `WmiMonitorBrightness`/`WmiMonitorBrightnessMethods` classes.
+/// A screen that answers neither (DDC/CI off or unsupported, a virtual machine's display) is
+/// dimmed in software through its gamma ramp instead (GammaController), which can't go as dark.
 /// Both are slow (DDC is an I2C round trip, WMI is COM), so every operation runs on a worker
 /// thread and reports back asynchronously.
 ///
@@ -28,8 +30,14 @@ public:
 	/// its current brightness. Emits @@queried when done.
 	Q_INVOKABLE void query(const QString& screenName);
 
+	/// Like @@query, but only asks WMI and never talks DDC/CI to the monitor (some monitors'
+	/// firmware hangs on DDC traffic at startup). Reports an internal panel with its brightness,
+	/// and anything else as an unavailable DDC/CI screen at full brightness.
+	Q_INVOKABLE void probe(const QString& screenName);
+
 	/// Asynchronously sets `screenName`'s brightness to `value` (0..1). `isDdc` must be whatever
-	/// @@queried last reported for this screen.
+	/// @@queried last reported for this screen. A DDC/CI screen that refuses switches to software
+	/// dimming for the rest of the session.
 	Q_INVOKABLE void setBrightness(const QString& screenName, bool isDdc, qreal value);
 
 signals:
@@ -46,6 +54,8 @@ private:
 	// see brightness.cpp.
 	QHash<QString, int> screenRoute;
 	int nextWmiInstanceIndex = 0;
+	// Screens dimmed through the gamma ramp, because DDC/CI didn't take.
+	QHash<QString, bool> software;
 };
 
 } // namespace qs::windows::sys

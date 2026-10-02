@@ -20,6 +20,7 @@
 
 #include "../../core/logcat.hpp"
 #include "../util.hpp"
+#include "gamma.hpp"
 
 namespace qs::windows::sys {
 
@@ -347,6 +348,34 @@ void Brightness::query(const QString& screenName) {
 	QThreadPool::globalInstance()->start(task);
 }
 
+void Brightness::probe(const QString& screenName) {
+	auto cachedRoute = this->screenRoute.value(screenName, -2);
+	auto wmiCandidateIndex = cachedRoute >= 0 ? cachedRoute : this->nextWmiInstanceIndex;
+
+	auto* self = this;
+	auto* task = QRunnable::create([self, screenName, cachedRoute, wmiCandidateIndex]() {
+		auto brightness = 1.0;
+		auto internal = cachedRoute != -1 && queryWmiBrightness(wmiCandidateIndex, brightness);
+
+		QMetaObject::invokeMethod(
+		    self,
+		    [self, screenName, internal, brightness, wmiCandidateIndex]() {
+			    if (internal && !self->screenRoute.contains(screenName)) {
+				    self->screenRoute.insert(screenName, wmiCandidateIndex);
+				    self->nextWmiInstanceIndex =
+				        std::max(self->nextWmiInstanceIndex, wmiCandidateIndex + 1);
+			    }
+
+			    if (internal) emit self->queried(screenName, true, false, brightness);
+			    else emit self->queried(screenName, false, true, 1.0);
+		    },
+		    Qt::QueuedConnection
+		);
+	});
+
+	QThreadPool::globalInstance()->start(task);
+}
+
 void Brightness::setBrightness(const QString& screenName, bool isDdc, qreal value) {
 	QScreen* target = nullptr;
 	for (auto* screen: QGuiApplication::screens()) {
@@ -360,6 +389,12 @@ void Brightness::setBrightness(const QString& screenName, bool isDdc, qreal valu
 	auto wmiIndex = this->screenRoute.value(screenName, -1);
 	auto clamped = std::clamp(value, 0.0, 1.0);
 
+	if (isDdc && this->software.contains(screenName)) {
+		GammaController::instance()->setBrightness(screenName, clamped);
+		emit this->brightnessSetFinished(screenName, true);
+		return;
+	}
+
 	auto* self = this;
 	auto* task = QRunnable::create([self, screenName, hMonitor, isDdc, wmiIndex, clamped]() {
 		auto ok = false;
@@ -371,7 +406,18 @@ void Brightness::setBrightness(const QString& screenName, bool isDdc, qreal valu
 
 		QMetaObject::invokeMethod(
 		    self,
-		    [self, screenName, ok]() { emit self->brightnessSetFinished(screenName, ok); },
+		    [self, screenName, isDdc, clamped, ok]() {
+			    if (isDdc && !ok) {
+				    qCInfo(logBrightness) << screenName
+				                          << "doesn't take DDC/CI brightness; dimming it in software";
+				    self->software.insert(screenName, true);
+				    GammaController::instance()->setBrightness(screenName, clamped);
+				    emit self->brightnessSetFinished(screenName, true);
+				    return;
+			    }
+
+			    emit self->brightnessSetFinished(screenName, ok);
+		    },
 		    Qt::QueuedConnection
 		);
 	});

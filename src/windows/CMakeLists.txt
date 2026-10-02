@@ -33,6 +33,7 @@ qt_add_library(quickshell-windows STATIC
 	system/credentials.cpp
 	system/input.cpp
 	system/night_light.cpp
+	system/gamma.cpp
 	system/screenshot.cpp
 	system/notification_settings.cpp
 	system/network.cpp
