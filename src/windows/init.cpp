@@ -3,6 +3,7 @@
 #include <qdiriterator.h>
 #include <qfont.h>
 #include <qfontdatabase.h>
+#include <qicon.h>
 #include <qguiapplication.h>
 #include <qlist.h>
 #include <qlogging.h>
@@ -40,6 +41,18 @@ void loadBundledFonts() {
 	QFont::insertSubstitution("JetBrains Mono", "JetBrainsMono Nerd Font");
 }
 
+// Icons shipped next to the executable (<exe dir>/icons). Windows has no freedesktop icon
+// theme, so names configs look up through Quickshell.iconPath (their own logo, distro logos,
+// generic fallbacks like image-missing) are found there.
+void addBundledIconPath() {
+	auto dir = QCoreApplication::applicationDirPath() + "/icons";
+	if (!QDir(dir).exists()) return;
+
+	auto paths = QIcon::fallbackSearchPaths();
+	if (!paths.contains(dir)) paths.prepend(dir);
+	QIcon::setFallbackSearchPaths(paths);
+}
+
 // Windows backend plugin. Registered after _Window so module overlays apply in the right order,
 // exactly like the wayland and x11 plugins.
 class WindowsPlugin: public QsEnginePlugin {
@@ -50,6 +63,7 @@ class WindowsPlugin: public QsEnginePlugin {
 
 	void init() override {
 		loadBundledFonts();
+		addBundledIconPath();
 		// Before anything can touch DesktopEntries / DesktopEntryManager::instance(): it
 		// decides how to perform its initial scan (sync Linux .desktop walk vs. async backend
 		// scan) at construction time.

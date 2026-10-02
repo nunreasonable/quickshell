@@ -170,6 +170,7 @@ private:
 	void updateDimensionsCb() { this->updateDimensions(); }
 	void grabKeyboardFocus();
 	void scheduleFocusGrab();
+	void stickToAllDesktops();
 
 	QPointer<QScreen> mTrackedScreen;
 	WinAppBar appBar;
@@ -177,6 +178,7 @@ private:
 	QObject* mLayershellAttached = nullptr;
 	bool dimensionsUpdatePending = false;
 	bool focusGrabPending = false;
+	bool pinnedToAllDesktops = false;
 
 	// clang-format off
 	Q_OBJECT_BINDABLE_PROPERTY_WITH_ARGS(WinPanelWindow, PanelLayer, bLayer, PanelLayer::Top, &WinPanelWindow::layerChanged);

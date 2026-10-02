@@ -149,4 +149,48 @@ void Session::playSystemSound(const QString& name) {
 	PlaySoundW(alias, nullptr, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
 }
 
+QVariantMap Session::osInfo() {
+	auto readString = [](const wchar_t* name) {
+		wchar_t buffer[256] {};
+		DWORD size = sizeof(buffer);
+		auto status = RegGetValueW(
+		    HKEY_LOCAL_MACHINE,
+		    L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+		    name,
+		    RRF_RT_REG_SZ,
+		    nullptr,
+		    buffer,
+		    &size
+		);
+		return status == ERROR_SUCCESS ? QString::fromWCharArray(buffer) : QString();
+	};
+
+	DWORD ubr = 0;
+	DWORD ubrSize = sizeof(ubr);
+	auto hasUbr = RegGetValueW(
+	                  HKEY_LOCAL_MACHINE,
+	                  L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+	                  L"UBR",
+	                  RRF_RT_REG_DWORD,
+	                  nullptr,
+	                  &ubr,
+	                  &ubrSize
+	              )
+	           == ERROR_SUCCESS;
+
+	auto build = readString(L"CurrentBuildNumber");
+	auto name = readString(L"ProductName");
+
+	// ProductName was never updated for Windows 11, which is told apart by its build number.
+	if (build.toInt() >= 22000) name.replace("Windows 10", "Windows 11");
+	if (name.isEmpty()) name = "Windows";
+
+	return {
+	    {"name", name},
+	    {"version", readString(L"DisplayVersion")},
+	    {"build", hasUbr ? build + "." + QString::number(ubr) : build},
+	    {"edition", readString(L"EditionID")},
+	};
+}
+
 } // namespace qs::windows::sys

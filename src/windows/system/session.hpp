@@ -2,6 +2,7 @@
 
 #include <qobject.h>
 #include <qstring.h>
+#include <qvariant.h>
 #include <qqmlintegration.h>
 #include <qtmetamacros.h>
 
@@ -37,6 +38,9 @@ public:
 	/// `dialog-warning`, `power-plug`, `alarm-clock-elapsed`...), asynchronously. Follows the
 	/// user's sound scheme: an event set to "(None)" stays silent.
 	Q_INVOKABLE static void playSystemSound(const QString& name);
+	/// What /etc/os-release says on Linux: `{name, version, build, edition}`, e.g.
+	/// `{"Windows 11 Pro", "25H2", "26200.6584", "Professional"}`.
+	Q_INVOKABLE static QVariantMap osInfo();
 
 	[[nodiscard]] static bool canHibernate();
 };

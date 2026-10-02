@@ -28,6 +28,7 @@
 #include "blur.hpp"
 #include "input_mask.hpp"
 #include "util.hpp"
+#include "virtual_desktops.hpp"
 
 namespace qs::windows {
 
@@ -44,9 +45,30 @@ public:
 
 		if (stack == nullptr) {
 			stack = new WinPanelStack();
+
+			QObject::connect(
+			    VirtualDesktops::instance(),
+			    &VirtualDesktops::currentChanged,
+			    VirtualDesktops::instance(),
+			    [] { stack->followCurrentDesktop(); }
+			);
 		}
 
 		return stack;
+	}
+
+	// Panels belong to no virtual desktop, like the taskbar. Ones the shell refused to pin
+	// (no VirtualDesktopAccessor.dll, or an unsupported build) are moved along instead, with the
+	// documented IVirtualDesktopManager.
+	void followCurrentDesktop() {
+		auto* desktops = VirtualDesktops::instance();
+
+		for (auto* panel: this->mPanels) {
+			if (panel->pinnedToAllDesktops) continue;
+			auto* hwnd = panel->hwnd();
+			if (hwnd == nullptr || desktops->isWindowOnCurrent(hwnd)) continue;
+			desktops->moveWindow(hwnd, desktops->currentIndex());
+		}
 	}
 
 	void addPanel(WinPanelWindow* panel) {
@@ -269,7 +291,10 @@ void WinPanelWindow::nativeInit() {
 	if (this->hwnd() == nullptr) return;
 
 	// A window reused across a reload is already visible and emits no visibleChanged.
-	if (this->window->isVisible()) WinPanelStack::instance()->addPanel(this);
+	if (this->window->isVisible()) {
+		WinPanelStack::instance()->addPanel(this);
+		this->stickToAllDesktops();
+	}
 
 	applyPanelDwmAttributes(this->hwnd());
 	this->applyNativeStyles();
@@ -284,11 +309,35 @@ void WinPanelWindow::applyNativeStyles() {
 	setExStyleBits(this->hwnd(), WS_EX_TOOLWINDOW, true);
 }
 
+void WinPanelWindow::stickToAllDesktops() {
+	auto* hwnd = this->hwnd();
+	if (hwnd == nullptr || this->pinnedToAllDesktops) return;
+
+	auto* desktops = VirtualDesktops::instance();
+
+	// Shown on whatever desktop is current; it may have been created on another one.
+	if (!desktops->isWindowOnCurrent(hwnd)) desktops->moveWindow(hwnd, desktops->currentIndex());
+
+	// The shell only knows a window (and can pin it) once it was shown, so pin on the next turn.
+	QTimer::singleShot(0, this, [this] {
+		auto* hwnd = this->hwnd();
+		if (hwnd == nullptr || !this->window->isVisible() || this->pinnedToAllDesktops) return;
+
+		auto* desktops = VirtualDesktops::instance();
+		this->pinnedToAllDesktops = desktops->isWindowPinned(hwnd) || desktops->pinWindow(hwnd, true);
+
+		if (!this->pinnedToAllDesktops) {
+			qCDebug(logPanel) << "Could not pin" << this << "to all desktops; it will follow the current one";
+		}
+	});
+}
+
 void WinPanelWindow::onWindowVisibleChanged() {
 	if (this->window->isVisible()) {
 		WinPanelStack::instance()->addPanel(this);
 		this->updateDimensions();
 		this->updateLayer();
+		this->stickToAllDesktops();
 
 		if (this->bKeyboardFocus == PanelKeyboardFocus::Exclusive) this->grabKeyboardFocus();
 	} else {
