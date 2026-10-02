@@ -120,6 +120,9 @@ public:
 
 	void emitEvent(const QByteArray& name, const QByteArray& data);
 
+	// A workspace gained its first window or lost its last one.
+	void workspaceOccupancyChanged() { this->updateVisibleWorkspaces(); }
+
 	// The last argument may contain commas, so the count is required.
 	[[nodiscard]] static QVector<QByteArrayView> parseEventArgs(QByteArrayView event, quint16 count);
 
@@ -154,6 +157,7 @@ private:
 
 	void syncMonitors(bool initial);
 	void syncWorkspaces(bool initial);
+	void updateVisibleWorkspaces(bool initial = false);
 	void updateFocusedMonitor(HyprlandMonitor* monitor);
 	void updateFocusedWorkspace();
 
@@ -162,6 +166,9 @@ private:
 	Dispatcher* dispatcher = nullptr;
 
 	ObjectModel<HyprlandMonitor> mMonitors {this};
+	// One workspace per virtual desktop, by index. Like Hyprland, only workspaces with windows
+	// and the focused one are listed in mWorkspaces; the rest exist as empty desktops only.
+	QList<HyprlandWorkspace*> mAllWorkspaces;
 	ObjectModel<HyprlandWorkspace> mWorkspaces {this};
 	ObjectModel<HyprlandToplevel> mToplevels {this};
 	QHash<qs::windows::TrackedWindow*, HyprlandToplevel*> byWindow;

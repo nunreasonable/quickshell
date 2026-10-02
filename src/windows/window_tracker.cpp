@@ -365,6 +365,18 @@ WindowTracker::WindowTracker() {
 	this->flushTimer.setInterval(0);
 	QObject::connect(&this->flushTimer, &QTimer::timeout, this, &WindowTracker::flush);
 
+	// Windows destroyed while their thread exits (apps that end with ExitProcess, crashes, kills)
+	// never send EVENT_OBJECT_DESTROY, so dead handles are also looked for on every foreground
+	// change and every few seconds. IsWindow is a handle table lookup, so this costs nothing.
+	this->sweepTimer.setInterval(2000);
+	QObject::connect(&this->sweepTimer, &QTimer::timeout, this, [this]() {
+		if (this->sweepDestroyed()) {
+			this->updateActive();
+			emit this->flushed();
+		}
+	});
+	this->sweepTimer.start();
+
 	this->updateScreens();
 
 	if (auto* app = qobject_cast<QGuiApplication*>(QGuiApplication::instance())) {
@@ -527,10 +539,24 @@ void WindowTracker::flush() {
 
 	if (this->foregroundDirty) {
 		this->foregroundDirty = false;
+		this->sweepDestroyed();
 		this->updateActive();
 	}
 
 	emit this->flushed();
+}
+
+bool WindowTracker::sweepDestroyed() {
+	auto removed = false;
+
+	for (auto* window: QList(this->mWindows)) {
+		if (!IsWindow(window->hwnd())) {
+			this->removeWindow(window);
+			removed = true;
+		}
+	}
+
+	return removed;
 }
 
 bool WindowTracker::isEligible(HWND hwnd) const {

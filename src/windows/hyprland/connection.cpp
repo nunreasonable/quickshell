@@ -161,14 +161,14 @@ HyprlandMonitor* HyprlandIpc::monitorFor(QuickshellScreenInfo* screen) {
 }
 
 HyprlandWorkspace* HyprlandIpc::workspaceById(qint32 id) const {
-	const auto& list = this->mWorkspaces.valueList();
+	const auto& list = this->mAllWorkspaces;
 	if (id < 1 || id > list.length()) return nullptr;
 	auto* workspace = list[id - 1];
 	return workspace->bindableId().value() == id ? workspace : nullptr;
 }
 
 HyprlandWorkspace* HyprlandIpc::workspaceByName(const QString& name) const {
-	for (auto* workspace: this->mWorkspaces.valueList()) {
+	for (auto* workspace: this->mAllWorkspaces) {
 		if (workspace->bindableName().value() == name) return workspace;
 	}
 
@@ -192,7 +192,7 @@ void HyprlandIpc::refreshMonitors() {
 }
 
 void HyprlandIpc::refreshWorkspaces() {
-	for (auto* workspace: this->mWorkspaces.valueList()) workspace->refreshIpcObject();
+	for (auto* workspace: this->mAllWorkspaces) workspace->refreshIpcObject();
 }
 
 void HyprlandIpc::refreshToplevels() {
@@ -260,7 +260,7 @@ void HyprlandIpc::syncMonitors(bool initial) {
 void HyprlandIpc::syncWorkspaces(bool initial) {
 	const auto& desktops = this->mDesktops->desktops();
 	auto count = desktops.length();
-	const auto& list = this->mWorkspaces.valueList();
+	auto& list = this->mAllWorkspaces;
 
 	auto nameFor = [&desktops](qsizetype index) {
 		const auto& name = desktops[index].name;
@@ -269,20 +269,11 @@ void HyprlandIpc::syncWorkspaces(bool initial) {
 
 	// Workspace ids are positions, so a desktop removed in the middle shows up as the last
 	// workspace going away and the others being renamed; windows are re-queried by the tracker.
+	QList<HyprlandWorkspace*> removed;
 	while (list.length() > count) {
-		auto* workspace = list.last();
-		auto id = workspaceId(workspace);
-		auto name = workspaceName(workspace);
-
+		auto* workspace = list.takeLast();
 		if (this->bFocusedWorkspace.value() == workspace) this->bFocusedWorkspace = nullptr;
-		this->mWorkspaces.removeAt(list.length() - 1);
-
-		if (!initial) {
-			this->emitEvent("destroyworkspacev2", id + "," + name);
-			this->emitEvent("destroyworkspace", name);
-		}
-
-		workspace->deleteLater();
+		removed.append(workspace);
 	}
 
 	for (qsizetype i = 0; i < list.length(); i++) {
@@ -291,27 +282,68 @@ void HyprlandIpc::syncWorkspaces(bool initial) {
 
 		if (workspace->bindableName().value() != name) {
 			workspace->bindableName().setValue(name);
-			if (!initial) this->emitEvent("renameworkspace", workspaceId(workspace) + "," + name.toUtf8());
+
+			if (!initial && this->mWorkspaces.valueList().contains(workspace)) {
+				this->emitEvent("renameworkspace", workspaceId(workspace) + "," + name.toUtf8());
+			}
 		}
 	}
 
 	for (auto i = list.length(); i < count; i++) {
 		auto* workspace = new HyprlandWorkspace(this);
 		workspace->updateInitial(static_cast<qint32>(i + 1), nameFor(i));
-		this->mWorkspaces.insertObject(workspace);
-
-		if (!initial) {
-			this->emitEvent("createworkspacev2", workspaceId(workspace) + "," + workspaceName(workspace));
-			this->emitEvent("createworkspace", workspaceName(workspace));
-		}
+		list.append(workspace);
 	}
 
 	this->bWorkspacesVersion = this->bWorkspacesVersion.value() + 1;
 	this->updateFocusedWorkspace();
+	this->updateVisibleWorkspaces(initial);
+
+	// like upstream: keep the objects around for a cycle in case something still references them
+	for (auto* workspace: removed) workspace->deleteLater();
+}
+
+void HyprlandIpc::updateVisibleWorkspaces(bool initial) {
+	auto* focused = this->bFocusedWorkspace.value();
+	QList<HyprlandWorkspace*> visible;
+
+	for (auto* workspace: this->mAllWorkspaces) {
+		if (workspace == focused || !workspace->toplevels()->valueList().isEmpty()) {
+			visible.append(workspace);
+		}
+	}
+
+	const auto& current = this->mWorkspaces.valueList();
+	if (visible == current) return;
+
+	QList<HyprlandWorkspace*> gone;
+	for (auto* workspace: current) {
+		if (!visible.contains(workspace)) gone.append(workspace);
+	}
+
+	QList<HyprlandWorkspace*> added;
+	for (auto* workspace: visible) {
+		if (!current.contains(workspace)) added.append(workspace);
+	}
+
+	this->mWorkspaces.diffUpdate(visible);
+	if (initial) return;
+
+	for (auto* workspace: gone) {
+		auto id = workspaceId(workspace);
+		auto name = workspaceName(workspace);
+		this->emitEvent("destroyworkspacev2", id + "," + name);
+		this->emitEvent("destroyworkspace", name);
+	}
+
+	for (auto* workspace: added) {
+		this->emitEvent("createworkspacev2", workspaceId(workspace) + "," + workspaceName(workspace));
+		this->emitEvent("createworkspace", workspaceName(workspace));
+	}
 }
 
 void HyprlandIpc::updateFocusedWorkspace() {
-	const auto& list = this->mWorkspaces.valueList();
+	const auto& list = this->mAllWorkspaces;
 	auto index = this->mDesktops->currentIndex();
 	auto* workspace = index >= 0 && index < list.length() ? list[index] : nullptr;
 	this->bFocusedWorkspace = workspace;
@@ -414,6 +446,7 @@ void HyprlandIpc::onDesktopsChanged() { this->syncWorkspaces(false); }
 void HyprlandIpc::onCurrentDesktopChanged() {
 	auto* previous = this->bFocusedWorkspace.value();
 	this->updateFocusedWorkspace();
+	this->updateVisibleWorkspaces();
 	auto* workspace = this->bFocusedWorkspace.value();
 	if (workspace == nullptr || workspace == previous) return;
 

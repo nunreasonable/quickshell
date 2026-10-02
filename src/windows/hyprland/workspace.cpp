@@ -53,6 +53,7 @@ void HyprlandWorkspace::insertToplevel(HyprlandToplevel* toplevel) {
 	if (std::ranges::find(list, toplevel) != list.end()) return;
 
 	this->mToplevels.insertObject(toplevel);
+	if (list.length() == 1) this->ipc->workspaceOccupancyChanged();
 
 	if (auto* window = toplevel->window()) {
 		QObject::connect(
@@ -70,8 +71,9 @@ void HyprlandWorkspace::removeToplevel(HyprlandToplevel* toplevel) {
 	if (toplevel == nullptr) return;
 
 	if (auto* window = toplevel->window()) QObject::disconnect(window, nullptr, this, nullptr);
-	this->mToplevels.removeObject(toplevel);
+	if (!this->mToplevels.removeObject(toplevel)) return;
 	this->updateFullscreen();
+	if (this->mToplevels.valueList().isEmpty()) this->ipc->workspaceOccupancyChanged();
 }
 
 void HyprlandWorkspace::updateFullscreen() {
@@ -104,7 +106,7 @@ void HyprlandWorkspace::refreshIpcObject() {
 	    {"hasfullscreen", this->bHasFullscreen.value()},
 	    {"lastwindow", last == nullptr ? QString("0x0") : "0x" + last->addressStr()},
 	    {"lastwindowtitle", last == nullptr ? QString() : last->bindableTitle().value()},
-	    {"ispersistent", true},
+	    {"ispersistent", false},
 	};
 
 	if (object == this->mLastIpcObject) return;

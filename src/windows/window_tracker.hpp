@@ -183,6 +183,7 @@ private:
 	bool isEligible(HWND hwnd) const;
 	void addWindow(HWND hwnd);
 	void removeWindow(TrackedWindow* window);
+	bool sweepDestroyed();
 	void updateActive();
 	void setActive(TrackedWindow* window);
 	void updateScreens();
@@ -200,6 +201,7 @@ private:
 	bool foregroundDirty = false;
 	bool desktopsDirty = false;
 	QTimer flushTimer;
+	QTimer sweepTimer;
 
 	QHash<HMONITOR, QScreen*> screensByMonitor;
 };

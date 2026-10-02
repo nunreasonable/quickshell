@@ -261,10 +261,10 @@ qsizetype Dispatcher::resolveWorkspace(const QString& arg, bool& create) const {
 	}
 
 	if (a == "empty") {
-		for (auto* workspace: this->ipc->workspaces()->valueList()) {
-			if (workspace->toplevels()->valueList().isEmpty()) {
-				return workspace->bindableId().value() - 1;
-			}
+		// Every desktop, not just the listed workspaces: empty desktops are left out of those.
+		for (qsizetype i = 0; i < count; i++) {
+			auto* workspace = this->ipc->workspaceById(static_cast<qint32>(i + 1));
+			if (workspace != nullptr && workspace->toplevels()->valueList().isEmpty()) return i;
 		}
 
 		create = true;
