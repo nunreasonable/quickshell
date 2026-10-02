@@ -165,6 +165,16 @@ int main(int argc, char** argv) {
 	auto code = runCommand(argc, argv, coreApplication);
 
 	exitDaemon(code);
+
+#ifdef _WIN32
+	// Qt and the shell have cleaned up by now. Skip the DLL detach notifications ExitProcess
+	// sends: third party DLLs make cross-process COM calls there (VirtualDesktopAccessor
+	// releasing its explorer objects), and with ExitProcess having already ended every other
+	// thread, including RPC's, they never get an answer and leave a one-thread process behind.
+	fflush(nullptr);
+	TerminateProcess(GetCurrentProcess(), static_cast<UINT>(code));
+#endif
+
 	return code;
 }
 
