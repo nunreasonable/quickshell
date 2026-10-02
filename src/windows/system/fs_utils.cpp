@@ -1,0 +1,14 @@
+#include "fs_utils.hpp"
+
+#include <qt_windows.h>
+
+namespace qs::windows::sys {
+
+QString FsUtils::classify(const QString& path) {
+	auto wpath = path.toStdWString();
+	auto attrs = GetFileAttributesW(wpath.c_str());
+	if (attrs == INVALID_FILE_ATTRIBUTES) return QStringLiteral("invalid");
+	return (attrs & FILE_ATTRIBUTE_DIRECTORY) ? QStringLiteral("dir") : QStringLiteral("file");
+}
+
+} // namespace qs::windows::sys
