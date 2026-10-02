@@ -51,6 +51,10 @@ private:
 // foreground thread, so temporarily share input state with it (the AttachThreadInput trick).
 bool forceForegroundWindow(HWND hwnd);
 
+// The Windows build number (19045 on Windows 10 22H2, 22000 and up on Windows 11), from
+// RtlGetVersion so no manifest can make it lie.
+DWORD windowsBuild();
+
 // True if the window belongs to this process (used to avoid fighting our own popups for focus).
 [[nodiscard]] bool isOwnProcessWindow(HWND hwnd);
 

@@ -86,6 +86,23 @@ RECT toRECT(const QRect& rect) {
 	};
 }
 
+DWORD windowsBuild() {
+	static const DWORD build = []() -> DWORD {
+		using RtlGetVersionFn = LONG(WINAPI*)(OSVERSIONINFOW*);
+		auto* ntdll = GetModuleHandleW(L"ntdll.dll");
+		auto rtlGetVersion = ntdll == nullptr
+		                       ? nullptr
+		                       : reinterpret_cast<RtlGetVersionFn>(GetProcAddress(ntdll, "RtlGetVersion"));
+		if (rtlGetVersion == nullptr) return 0;
+
+		OSVERSIONINFOW info {};
+		info.dwOSVersionInfoSize = sizeof(info);
+		return rtlGetVersion(&info) == 0 ? info.dwBuildNumber : 0;
+	}();
+
+	return build;
+}
+
 bool forceForegroundWindow(HWND hwnd) {
 	if (hwnd == nullptr) return false;
 	if (GetForegroundWindow() == hwnd) return true;

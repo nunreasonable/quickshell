@@ -221,7 +221,10 @@ VirtualDesktops::~VirtualDesktops() {
 }
 
 void VirtualDesktops::loadAccessor() {
-	auto path = QCoreApplication::applicationDirPath() + "/VirtualDesktopAccessor.dll";
+	// Ciantic ships the dll per Windows generation: the Windows 11 build next to the executable,
+	// the Windows 10 one (no CreateDesktop/RemoveDesktop) in win10\.
+	auto path = QCoreApplication::applicationDirPath()
+	          + (windowsBuild() < 22000 ? "/win10/VirtualDesktopAccessor.dll" : "/VirtualDesktopAccessor.dll");
 	auto wpath = path.toStdWString();
 	auto* module = LoadLibraryW(wpath.c_str());
 
