@@ -1,6 +1,7 @@
 #pragma once
 
 #include <qobject.h>
+#include <qstring.h>
 #include <qqmlintegration.h>
 #include <qtmetamacros.h>
 
@@ -32,6 +33,10 @@ public:
 	Q_INVOKABLE static void hibernate();
 	/// Reboots directly into UEFI/BIOS firmware setup.
 	Q_INVOKABLE static void rebootToFirmware();
+	/// Plays the Windows sound event matching a freedesktop sound theme name (`complete`,
+	/// `dialog-warning`, `power-plug`, `alarm-clock-elapsed`...), asynchronously. Follows the
+	/// user's sound scheme: an event set to "(None)" stays silent.
+	Q_INVOKABLE static void playSystemSound(const QString& name);
 
 	[[nodiscard]] static bool canHibernate();
 };

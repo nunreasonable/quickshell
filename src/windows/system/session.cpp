@@ -2,10 +2,12 @@
 
 #include <qt_windows.h>
 
+#include <mmsystem.h>
 #include <powrprof.h>
 #include <winbase.h>
 #include <winreg.h>
 
+#include <qhash.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
 
@@ -119,6 +121,32 @@ bool Session::canHibernate() {
 	SYSTEM_POWER_CAPABILITIES caps {};
 	if (!GetPwrCapabilities(&caps)) return false;
 	return caps.HiberFilePresent != FALSE;
+}
+
+void Session::playSystemSound(const QString& name) {
+	// Sound event aliases from HKCU\AppEvents\Schemes\Apps\.Default, the ones Windows itself
+	// plays for the same situations.
+	static const QHash<QString, const wchar_t*> EVENTS = {
+	    {"dialog-warning", L"SystemExclamation"},
+	    {"dialog-error", L"SystemHand"},
+	    {"dialog-information", L"SystemAsterisk"},
+	    {"suspend-error", L"CriticalBatteryAlarm"},
+	    {"battery-low", L"LowBatteryAlarm"},
+	    {"battery-caution", L"CriticalBatteryAlarm"},
+	    {"complete", L"Notification.Default"},
+	    {"message", L"Notification.Default"},
+	    {"message-new-instant", L"Notification.IM"},
+	    {"power-plug", L"DeviceConnect"},
+	    {"power-unplug", L"DeviceDisconnect"},
+	    {"device-added", L"DeviceConnect"},
+	    {"device-removed", L"DeviceDisconnect"},
+	    {"alarm-clock-elapsed", L"Notification.Looping.Alarm"},
+	    {"bell", L"SystemDefault"},
+	};
+
+	const auto* alias = EVENTS.value(name, L"Notification.Default");
+	// SND_NODEFAULT: an event the scheme silences must not fall back to the default beep.
+	PlaySoundW(alias, nullptr, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
 }
 
 } // namespace qs::windows::sys

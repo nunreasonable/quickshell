@@ -87,6 +87,7 @@ target_link_libraries(quickshell-windows PRIVATE
 	gdi32
 	advapi32
 	powrprof
+	winmm # PlaySound (Session.playSystemSound)
 	dxva2
 	pdh
 	wbemuuid
