@@ -65,6 +65,18 @@ public:
 		}
 	}
 
+	// Background panels go below Bottom panels, and both below every application window.
+	// HWND_BOTTOM puts a window under all others, so backgrounds are re-lowered after a Bottom
+	// panel was placed.
+	void lowerBackgrounds() {
+		for (auto* panel: this->mPanels) {
+			if (panel->bLayer != PanelLayer::Background) continue;
+			auto* hwnd = panel->hwnd();
+			if (hwnd == nullptr) continue;
+			SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+		}
+	}
+
 	[[nodiscard]] bool fullscreenAppActive() const { return this->mFullscreenApp; }
 
 	void setFullscreenAppActive(bool active) {
@@ -428,9 +440,10 @@ void WinPanelWindow::updateLayer() {
 	HWND insertAfter = nullptr;
 	switch (layer) {
 	// Progman (the desktop) is kept bottom-most by the window manager, so HWND_BOTTOM lands
-	// directly above it. WM_WINDOWPOSCHANGING keeps the window there.
-	case PanelLayer::Background: insertAfter = HWND_BOTTOM; break;
-	case PanelLayer::Bottom: insertAfter = HWND_NOTOPMOST; break;
+	// directly above it. Like on a compositor, Bottom panels stay under application windows too
+	// (ii's wallpaper and desktop widgets are one); WM_WINDOWPOSCHANGING keeps both down there.
+	case PanelLayer::Background:
+	case PanelLayer::Bottom: insertAfter = HWND_BOTTOM; break;
 	// Like the taskbar: drop out of the topmost band while a fullscreen app is active.
 	case PanelLayer::Top:
 		insertAfter = WinPanelStack::instance()->fullscreenAppActive() ? HWND_BOTTOM : HWND_TOPMOST;
@@ -440,6 +453,7 @@ void WinPanelWindow::updateLayer() {
 
 	SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
+	if (layer == PanelLayer::Bottom) WinPanelStack::instance()->lowerBackgrounds();
 	if (layer != PanelLayer::Overlay) WinPanelStack::instance()->raiseOverlays();
 
 	// style rewrites by qt drop WS_EX_TRANSPARENT
@@ -538,10 +552,14 @@ bool WinPanelWindow::handleNativeMessage(MSG* msg, qintptr* result) {
 		InputMaskTracker::instance()->refresh();
 		break;
 	case WM_WINDOWPOSCHANGING:
-		if (this->bLayer == PanelLayer::Background) {
+		if (this->bLayer == PanelLayer::Background || this->bLayer == PanelLayer::Bottom) {
 			auto* pos = reinterpret_cast<WINDOWPOS*>(msg->lParam); // NOLINT(performance-no-int-to-ptr)
 			// Activation and qt's style rewrites try to raise the window; keep it on the desktop.
-			if (!(pos->flags & SWP_NOZORDER)) pos->hwndInsertAfter = HWND_BOTTOM;
+			// Only updateLayer() moves it, always to HWND_BOTTOM.
+			if (!(pos->flags & SWP_NOZORDER) && pos->hwndInsertAfter != HWND_BOTTOM) {
+				if (this->bLayer == PanelLayer::Background) pos->hwndInsertAfter = HWND_BOTTOM;
+				else pos->flags |= SWP_NOZORDER;
+			}
 		}
 		break;
 	default: break;
