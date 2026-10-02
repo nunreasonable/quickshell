@@ -174,9 +174,13 @@ bool SharedFrameReader::open(ID3D11Device* device, const std::shared_ptr<SharedF
 bool SharedFrameReader::copyTo(ID3D11DeviceContext* context, ID3D11Texture2D* dest) {
 	if (this->mutex == nullptr) return false;
 
-	// The producer only holds the key for the duration of its own copy, so a short wait
-	// covers it; a timeout means it was mid-write and the caller should retry next frame.
+	// A freshly published frame sits at the consumer key. One this reader already copied (or
+	// another reader did, before a scene graph rebuild) rests at the producer key with its
+	// content intact, so take it under that key instead of waiting for a frame that may never
+	// come (static window, single shot session). The producer only holds the mutex for its
+	// own copy, so the short waits cover a mid-write; both timing out means retry next frame.
 	auto hr = this->mutex->AcquireSync(KEY_CONSUMER, 2);
+	if (hr != S_OK) hr = this->mutex->AcquireSync(KEY_PRODUCER, 2);
 	if (hr != S_OK) return false;
 
 	context->CopyResource(dest, this->opened);
@@ -489,6 +493,8 @@ struct SessionCore {
 	SizeInt32 poolSize {};
 
 	std::shared_ptr<SharedFrame> slot;
+	// Size a slot could not be created for; don't retry (and log) every frame for it.
+	QSize slotFailedSize;
 	std::shared_ptr<SharedFrame> latest;
 	quint64 serial = 0;
 };
@@ -717,8 +723,13 @@ void CaptureSession::onFrameArrived(
 			         && static_cast<UINT>(content.Height) <= desc.Height;
 
 			if (fits) {
-				if (!c.slot || c.slot->size != QSize(content.Width, content.Height)) {
-					c.slot = createSharedFrame(c.device.get(), content);
+				auto size = QSize(content.Width, content.Height);
+				if (!c.slot || c.slot->size != size) {
+					c.slot = nullptr;
+					if (c.slotFailedSize != size) {
+						c.slot = createSharedFrame(c.device.get(), content);
+						if (!c.slot) c.slotFailedSize = size;
+					}
 				}
 
 				// The consumer still owns the texture (it hasn't copied the previous frame out

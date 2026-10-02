@@ -255,8 +255,14 @@ void ScreencopyView::destroyContext(bool update) {
 		this->toplevel = nullptr;
 	}
 
-	delete this->mHandle;
-	this->mHandle = nullptr;
+	if (this->mHandle) {
+		// Can run from inside the handle's own stopped() emission, so no plain delete.
+		this->mHandle->stop();
+		QObject::disconnect(this->mHandle, nullptr, this, nullptr);
+		this->mHandle->deleteLater();
+		this->mHandle = nullptr;
+	}
+
 	this->wantFrame = false;
 	this->mHasFrame = false;
 	this->bHasContent = false;
