@@ -41,6 +41,8 @@ qt_add_library(quickshell-windows STATIC
 	system/network_connectivity.cpp
 	system/wallpaper.cpp
 	system/fs_utils.cpp
+	system/terminal_colors.cpp
+	system/terminal_colors_math.cpp
 	image/image_tools.cpp
 	image/thumbnailer.cpp
 	system/ocr.cpp
@@ -70,6 +72,7 @@ add_subdirectory(wayland)
 add_subdirectory(services)
 add_subdirectory(hyprland)
 add_subdirectory(bluetooth)
+add_subdirectory(third_party/material_color)
 
 if (CRASH_HANDLER)
 	add_subdirectory(crash)
@@ -105,6 +108,8 @@ target_link_libraries(quickshell-windows PRIVATE
 	iphlpapi
 	# blur.cpp: CreateDispatcherQueueController for Windows.UI.Composition
 	CoreMessaging
+	# system/terminal_colors_math.cpp: HCT
+	material-color
 )
 target_link_libraries(quickshell-windows-init PRIVATE Qt::Quick Qt::Qml)
 
