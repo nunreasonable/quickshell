@@ -65,6 +65,27 @@ QChar punctuationChar(const QString& name) {
 	return chars.value(name.toLower());
 }
 
+// The key that types `ch` in `layout`, preferring one that needs no modifier at all: VkKeyScanEx
+// alone returns the first match by key code, which on ABNT2 is AltGr+Q rather than the
+// dedicated "/" key. Numpad keys are skipped; their characters don't depend on the layout.
+uint8_t layoutVkForChar(QChar ch, HKL layout, bool& needsShift) {
+	needsShift = false;
+
+	for (UINT vk = 1; vk < 0xFF; vk++) {
+		if (vk >= VK_NUMPAD0 && vk <= VK_DIVIDE) continue;
+		if ((MapVirtualKeyExW(vk, MAPVK_VK_TO_CHAR, layout) & 0x7FFF) == ch.unicode()) {
+			return static_cast<uint8_t>(vk);
+		}
+	}
+
+	auto scan = VkKeyScanExW(ch.unicode(), layout);
+	// Behind AltGr (Ctrl+Alt) it can't share a combo with Super.
+	if (scan == -1 || LOBYTE(scan) == 0 || (HIBYTE(scan) & 6) != 0) return 0;
+
+	needsShift = (HIBYTE(scan) & 1) != 0;
+	return LOBYTE(scan);
+}
+
 uint8_t modifierFromName(const QString& name) {
 	static const QHash<QString, uint8_t> modifiers = {
 	    {"ctrl", ModCtrl},      {"control", ModCtrl},   {"ctl", ModCtrl},      {"alt", ModAlt},
@@ -267,14 +288,13 @@ bool parseKeys(const QString& text, KeyCombo& combo, QString& error) {
 		auto vk = keyNameToVk(token);
 
 		if (auto ch = punctuationChar(token); !ch.isNull()) {
-			auto scan = VkKeyScanExW(ch.unicode(), activeKeyboardLayout());
-			auto shiftState = HIBYTE(scan);
+			auto needsShift = false;
 
-			// A character behind AltGr can't share a combo with Super; keep the US key then.
-			if (scan != -1 && LOBYTE(scan) != 0 && (shiftState & 6) == 0) {
-				vk = LOBYTE(scan);
+			// Not typeable without AltGr: keep the US key.
+			if (auto layoutVk = layoutVkForChar(ch, activeKeyboardLayout(), needsShift); layoutVk != 0) {
+				vk = layoutVk;
 
-				if ((shiftState & 1) != 0 && (mods & ModShift) == 0) {
+				if (needsShift && (mods & ModShift) == 0) {
 					mods |= ModShift;
 					modCount++;
 				}
