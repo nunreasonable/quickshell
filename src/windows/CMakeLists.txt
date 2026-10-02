@@ -39,6 +39,9 @@ qt_add_library(quickshell-windows STATIC
 	system/fs_utils.cpp
 	image/image_tools.cpp
 	image/thumbnailer.cpp
+	system/ocr.cpp
+	system/ocr_backend.cpp
+	system/ocr_worker.cpp
 )
 
 qt_add_qml_module(quickshell-windows

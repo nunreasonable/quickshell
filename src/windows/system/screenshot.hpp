@@ -24,6 +24,13 @@ public:
 	///
 	/// Blocks the caller until the frame is read back, typically well under 100 ms.
 	Q_INVOKABLE bool captureScreen(const QString& screenName, const QString& path);
+
+	/// Crops `srcPath` to the device-pixel rect `(x, y, width, height)` and saves the result as
+	/// a PNG at `dstPath` (directories are created), returning true on success. `x`/`y` are
+	/// clamped into the source image, same as ImageMagick's `-crop` would after a `+repage`.
+	/// Replaces the region selector's `magick ... -crop WxH+X+Y` step.
+	Q_INVOKABLE bool
+	cropToFile(const QString& srcPath, int x, int y, int width, int height, const QString& dstPath);
 };
 
 } // namespace qs::windows::sys

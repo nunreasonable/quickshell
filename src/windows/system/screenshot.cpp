@@ -87,4 +87,41 @@ bool Screenshot::captureScreen(const QString& screenName, const QString& path) {
 	return true;
 }
 
+bool Screenshot::cropToFile(
+    const QString& srcPath,
+    int x,
+    int y,
+    int width,
+    int height,
+    const QString& dstPath
+) {
+	QImage source(srcPath);
+	if (source.isNull()) {
+		qCWarning(logScreenshot) << "Cannot load" << srcPath;
+		return false;
+	}
+
+	auto rect = QRect(x, y, width, height).intersected(source.rect());
+	if (rect.isEmpty()) {
+		qCWarning(logScreenshot) << "Crop rect" << QRect(x, y, width, height)
+		                          << "is empty after clamping to" << source.rect();
+		return false;
+	}
+
+	auto cropped = source.copy(rect);
+
+	auto info = QFileInfo(dstPath);
+	if (!QDir().mkpath(info.absolutePath())) {
+		qCWarning(logScreenshot) << "Cannot create" << info.absolutePath();
+		return false;
+	}
+
+	if (!cropped.save(dstPath, "PNG")) {
+		qCWarning(logScreenshot) << "Cannot write" << dstPath;
+		return false;
+	}
+
+	return true;
+}
+
 } // namespace qs::windows::sys

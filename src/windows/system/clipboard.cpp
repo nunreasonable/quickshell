@@ -247,6 +247,50 @@ void Clipboard::rebuildEntriesProperty() {
 	this->bEntries = lines;
 }
 
+void Clipboard::writeImageToClipboard(const QImage& imageIn) {
+	auto image = imageIn.convertToFormat(QImage::Format_RGB32);
+
+	BITMAPINFOHEADER bih {};
+	bih.biSize = sizeof(BITMAPINFOHEADER);
+	bih.biWidth = image.width();
+	bih.biHeight = image.height(); // bottom-up, classic CF_DIB convention
+	bih.biPlanes = 1;
+	bih.biBitCount = 32;
+	bih.biCompression = BI_RGB;
+
+	auto pixelBytes = static_cast<SIZE_T>(image.width()) * image.height() * 4;
+	auto* mem = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + pixelBytes);
+	if (mem == nullptr) return;
+
+	auto* dst = static_cast<unsigned char*>(GlobalLock(mem));
+	if (dst == nullptr) return;
+
+	memcpy(dst, &bih, sizeof(bih)); // NOLINT
+	// CF_DIB rows are bottom-up; QImage rows are top-down.
+	for (int y = 0; y < image.height(); y++) {
+		memcpy( // NOLINT
+		    dst + sizeof(bih) + static_cast<SIZE_T>(y) * image.width() * 4,
+		    image.constScanLine(image.height() - 1 - y),
+		    static_cast<SIZE_T>(image.width()) * 4
+		);
+	}
+	GlobalUnlock(mem);
+	SetClipboardData(CF_DIB, mem);
+}
+
+void Clipboard::writeTextToClipboard(const QString& text) {
+	auto bytes = (text.size() + 1) * sizeof(wchar_t);
+	auto* mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+	if (mem == nullptr) return;
+
+	auto* dst = GlobalLock(mem);
+	if (dst == nullptr) return;
+
+	memcpy(dst, text.utf16(), bytes); // NOLINT
+	GlobalUnlock(mem);
+	SetClipboardData(CF_UNICODETEXT, mem);
+}
+
 void Clipboard::copy(qint64 id) {
 	auto iter = std::find_if(this->storage.begin(), this->storage.end(), [id](const auto& e) {
 		return e.id == id;
@@ -264,52 +308,36 @@ void Clipboard::copy(qint64 id) {
 
 	if (entry.isImage) {
 		QImage image(entry.imagePath);
-		if (!image.isNull()) {
-			image = image.convertToFormat(QImage::Format_RGB32);
-
-			BITMAPINFOHEADER bih {};
-			bih.biSize = sizeof(BITMAPINFOHEADER);
-			bih.biWidth = image.width();
-			bih.biHeight = image.height(); // bottom-up, classic CF_DIB convention
-			bih.biPlanes = 1;
-			bih.biBitCount = 32;
-			bih.biCompression = BI_RGB;
-
-			auto pixelBytes = static_cast<SIZE_T>(image.width()) * image.height() * 4;
-			auto* mem = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + pixelBytes);
-			if (mem != nullptr) {
-				auto* dst = static_cast<unsigned char*>(GlobalLock(mem));
-				if (dst != nullptr) {
-					memcpy(dst, &bih, sizeof(bih)); // NOLINT
-					// CF_DIB rows are bottom-up; QImage rows are top-down.
-					for (int y = 0; y < image.height(); y++) {
-						memcpy( // NOLINT
-						    dst + sizeof(bih) + static_cast<SIZE_T>(y) * image.width() * 4,
-						    image.constScanLine(image.height() - 1 - y),
-						    static_cast<SIZE_T>(image.width()) * 4
-						);
-					}
-					GlobalUnlock(mem);
-					SetClipboardData(CF_DIB, mem);
-				}
-			}
-		}
+		if (!image.isNull()) this->writeImageToClipboard(image);
 	} else {
-		auto utf16 = entry.text;
-		auto bytes = (utf16.size() + 1) * sizeof(wchar_t);
-		auto* mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
-		if (mem != nullptr) {
-			auto* dst = GlobalLock(mem);
-			if (dst != nullptr) {
-				memcpy(dst, utf16.utf16(), bytes); // NOLINT
-				GlobalUnlock(mem);
-				SetClipboardData(CF_UNICODETEXT, mem);
-			}
-		}
+		this->writeTextToClipboard(entry.text);
 	}
 
 	CloseClipboard();
 	this->suppressNextCaptureFor = id;
+}
+
+bool Clipboard::copyImageFile(const QString& path) {
+	QImage image(path);
+	if (image.isNull()) {
+		qCWarning(logClipboard) << "Cannot load image" << path;
+		return false;
+	}
+
+	auto* window = qs::windows::services::ServiceMessageWindow::instance();
+	if (!OpenClipboard(window->hwnd())) return false;
+	EmptyClipboard();
+	this->writeImageToClipboard(image);
+	CloseClipboard();
+	return true;
+}
+
+void Clipboard::copyText(const QString& text) {
+	auto* window = qs::windows::services::ServiceMessageWindow::instance();
+	if (!OpenClipboard(window->hwnd())) return;
+	EmptyClipboard();
+	this->writeTextToClipboard(text);
+	CloseClipboard();
 }
 
 void Clipboard::deleteEntry(qint64 id) {
