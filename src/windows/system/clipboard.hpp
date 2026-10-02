@@ -10,6 +10,8 @@
 #include <qtmetamacros.h>
 #include <qtypes.h>
 
+class QImage;
+
 namespace qs::windows::sys {
 
 struct ClipboardEntry {
@@ -46,6 +48,16 @@ public:
 	/// Absolute path to entry `id`'s cached PNG, or an empty string if it's not an image entry.
 	Q_INVOKABLE QString imagePath(qint64 id) const;
 
+	/// Writes the image file at `path` to the system clipboard (not added to history under its
+	/// own id - the resulting WM_CLIPBOARDUPDATE round-trip captures it like any other image
+	/// copy would). Used by the region selector in place of `wl-copy` on a cropped screenshot.
+	/// Returns false if `path` can't be loaded as an image.
+	Q_INVOKABLE bool copyImageFile(const QString& path);
+
+	/// Writes `text` to the system clipboard, same as @@copy would for a text entry. Used by
+	/// the region selector to place OCR results on the clipboard.
+	Q_INVOKABLE void copyText(const QString& text);
+
 signals:
 	void entriesChanged();
 
@@ -56,6 +68,10 @@ private:
 	void captureText(const QString& text);
 	void captureImage();
 	QString cacheDir();
+
+	// Assumes the clipboard is already open and emptied by the caller.
+	void writeImageToClipboard(const QImage& image);
+	void writeTextToClipboard(const QString& text);
 
 	std::vector<ClipboardEntry> storage; // index 0 = most recent
 	qint64 nextId = 1;

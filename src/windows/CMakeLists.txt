@@ -35,6 +35,9 @@ qt_add_library(quickshell-windows STATIC
 	system/network_wifi.cpp
 	system/network_wifi_item.cpp
 	system/network_connectivity.cpp
+	system/ocr.cpp
+	system/ocr_backend.cpp
+	system/ocr_worker.cpp
 )
 
 qt_add_qml_module(quickshell-windows
