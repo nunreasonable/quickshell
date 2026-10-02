@@ -209,7 +209,8 @@ public:
 
 	// The panel moved, was resized, restacked, shown or hidden (WM_WINDOWPOSCHANGED).
 	void syncPlacement();
-	// Drops and rebuilds the native backdrop (DWM restarted).
+	// Drops the native backdrop so the next updateActive() builds a new one (DWM restarted, or
+	// the window styles changed).
 	void recreate();
 
 	// Re-evaluates the rule and the system state.

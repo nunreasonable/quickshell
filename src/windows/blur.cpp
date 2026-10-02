@@ -669,7 +669,8 @@ void BlurManager::scheduleSystemCheck(bool recreate) {
 
 			for (auto* panel: QList(this->panels)) panel->recreate();
 
-			// the compositor may not survive a DWM restart either
+			// The compositor may not survive a DWM restart either. Backdrops are gone, so it can
+			// be dropped here and created again when the panels come back.
 			if (this->composition != nullptr) {
 				try {
 					this->composition->compositor.Close();
@@ -998,10 +999,10 @@ void PanelBlur::release() {
 }
 
 void PanelBlur::recreate() {
+	// The caller re-evaluates (BlurManager::notifyPanels) once everything is torn down.
 	this->disconnectFrames();
 	this->destroyBackdrop();
 	this->active = false;
-	this->updateActive();
 }
 
 void PanelBlur::destroyBackdrop() {
