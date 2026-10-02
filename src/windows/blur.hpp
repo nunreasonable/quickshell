@@ -227,6 +227,7 @@ private:
 	void collectShapes(QList<BlurShape>& shapes);
 	void collectItem(QQuickItem* item, qreal opacity, qreal coverage, const QRectF& clip, int depth);
 	void addShape(const QRectF& rect, qreal radius, const QRectF& clip);
+	bool ensureBackdrop();
 	void destroyBackdrop();
 	[[nodiscard]] bool panelShown() const;
 

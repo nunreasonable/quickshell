@@ -1050,33 +1050,6 @@ void PanelBlur::updateActive() {
 	           && (!this->rule.ignoreAlpha.has_value() || *this->rule.ignoreAlpha < 1.0)
 	           && hwnd != nullptr && this->mWindow != nullptr;
 
-	if (wanted && this->backdrop == nullptr) {
-		if (auto* composition = manager->ensureComposition()) {
-			QString error;
-			auto unsupported = false;
-
-			this->backdrop = BackdropWindow::create(
-			    composition->compositor,
-			    manager->layeredBackdrops(),
-			    manager->debugTint(),
-			    error,
-			    unsupported
-			);
-
-			if (this->backdrop == nullptr) {
-				if (unsupported) manager->markUnsupported(error);
-				else qCWarning(logBlur).noquote() << "No blur for" << this->panel->ns() << ":" << error;
-			}
-		}
-
-		if (this->backdrop == nullptr) {
-			wanted = false;
-		} else {
-			this->shapes.clear();
-			this->stale = true;
-		}
-	}
-
 	if (!wanted) {
 		if (this->active) qCDebug(logBlur) << "Blur off for" << this->panel->ns();
 		this->active = false;
@@ -1086,10 +1059,39 @@ void PanelBlur::updateActive() {
 	}
 
 	if (!this->active) qCDebug(logBlur) << "Blur on for" << this->panel->ns();
-	this->backdrop->setPanel(hwnd);
 	this->active = true;
+	if (this->backdrop != nullptr) this->backdrop->setPanel(hwnd);
 	this->connectFrames();
 	this->scheduleShapes();
+}
+
+bool PanelBlur::ensureBackdrop() {
+	if (this->backdrop != nullptr) return true;
+
+	auto* manager = BlurManager::instance();
+	auto* composition = manager != nullptr ? manager->ensureComposition() : nullptr;
+	if (composition == nullptr) return false;
+
+	QString error;
+	auto unsupported = false;
+
+	this->backdrop = BackdropWindow::create(
+	    composition->compositor,
+	    manager->layeredBackdrops(),
+	    manager->debugTint(),
+	    error,
+	    unsupported
+	);
+
+	if (this->backdrop == nullptr) {
+		if (unsupported) manager->markUnsupported(error);
+		else qCWarning(logBlur).noquote() << "No blur for" << this->panel->ns() << ":" << error;
+		return false;
+	}
+
+	this->backdrop->setPanel(this->panel->hwnd());
+	this->shapes.clear();
+	return true;
 }
 
 void PanelBlur::setInputMask(const QRegion& region, bool hasMask) {
@@ -1118,10 +1120,23 @@ bool PanelBlur::panelShown() const {
 }
 
 void PanelBlur::updateShapes() {
-	if (!this->active || this->backdrop == nullptr) return;
+	if (!this->active) return;
 
 	QList<BlurShape> next;
 	if (this->panelShown()) this->collectShapes(next);
+
+	// The native backdrop only exists once there is something to blur: panels without
+	// transparency never get one.
+	if (this->backdrop == nullptr) {
+		if (next.isEmpty()) return;
+
+		if (!this->ensureBackdrop()) {
+			// retried on the next rule or system change
+			this->active = false;
+			this->disconnectFrames();
+			return;
+		}
+	}
 
 	auto same = next.size() == this->shapes.size()
 	         && std::equal(next.begin(), next.end(), this->shapes.begin(), [](const auto& a, const auto& b) {
@@ -1130,7 +1145,7 @@ void PanelBlur::updateShapes() {
 
 	if (!same) {
 		if (!this->backdrop->setShapes(next)) {
-			// Composition is broken for this backdrop; the next state change retries.
+			// Composition is broken for this backdrop; the next rule or system change retries.
 			this->active = false;
 			this->disconnectFrames();
 			this->destroyBackdrop();
@@ -1151,17 +1166,16 @@ void PanelBlur::updateShapes() {
 }
 
 void PanelBlur::syncPlacement() {
-	if (this->backdrop == nullptr) return;
-
 	auto shown = this->panelShown();
 
 	if (shown && !this->panelWasShown) {
-		// The shapes are from before the panel was hidden: recompute them before showing.
+		// Shapes are from before the panel was hidden: recompute them before showing.
 		this->stale = true;
-		this->scheduleShapes();
+		if (this->active) this->scheduleShapes();
 	}
 
 	this->panelWasShown = shown;
+	if (this->backdrop == nullptr) return;
 
 	if (!shown || !this->active || this->stale || this->shapes.isEmpty()) this->backdrop->hide();
 	else this->backdrop->show();
