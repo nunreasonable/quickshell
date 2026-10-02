@@ -112,6 +112,7 @@ public:
 private:
 	static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 	static bool registerClass();
+	void updateRegion(const QList<BlurShape>& shapes);
 
 	struct Slot {
 		// clipped to the shape's clip rect (an ancestor item's clip, or the window)
@@ -123,10 +124,13 @@ private:
 
 	HWND mHwnd = nullptr;
 	HWND mPanel = nullptr;
+	bool layered = false;
 	// set while this process moves the window, which WM_WINDOWPOSCHANGING lets through
 	bool syncing = false;
 	bool shown = false;
 	RECT lastRect {};
+	QRegion region;
+	bool hasRegion = false;
 
 	wuc::Compositor compositor {nullptr};
 	wucd::DesktopWindowTarget target {nullptr};
@@ -193,6 +197,7 @@ std::unique_ptr<BackdropWindow> BackdropWindow::create(
 
 	auto backdrop = std::make_unique<BackdropWindow>();
 	backdrop->mHwnd = hwnd;
+	backdrop->layered = layered;
 	SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(backdrop.get()));
 
 	// a layered window stays invisible until it has attributes
@@ -330,7 +335,35 @@ bool BackdropWindow::setShapes(const QList<BlurShape>& shapes) {
 		return false;
 	}
 
+	if (!this->layered) this->updateRegion(shapes);
 	return true;
+}
+
+void BackdropWindow::updateRegion(const QList<BlurShape>& shapes) {
+	// The window covers the whole panel, whose margins are click-through. WS_EX_TRANSPARENT should
+	// already keep this window out of hit testing; in case it doesn't without WS_EX_LAYERED, a
+	// window region limited to the blurred rectangles (inside the panel's input mask, where the
+	// panel takes the clicks itself) keeps it out of the way. Rounded outwards, so it never clips
+	// the anti-aliased edges of the shapes.
+	QRegion next;
+	for (const auto& shape: shapes) next += shape.rect.intersected(shape.clip).toAlignedRect();
+
+	if (this->hasRegion && next == this->region) return;
+
+	auto* hrgn = CreateRectRgn(0, 0, 0, 0);
+	for (const auto& rect: next) {
+		auto* part = CreateRectRgn(rect.x(), rect.y(), rect.x() + rect.width(), rect.y() + rect.height());
+		CombineRgn(hrgn, hrgn, part, RGN_OR);
+		DeleteObject(part);
+	}
+
+	this->syncing = true;
+	// the system owns the region from here on
+	if (SetWindowRgn(this->mHwnd, hrgn, FALSE) == 0) DeleteObject(hrgn);
+	this->syncing = false;
+
+	this->region = next;
+	this->hasRegion = true;
 }
 
 void BackdropWindow::show() {

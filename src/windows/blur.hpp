@@ -85,9 +85,10 @@ public:
 	[[nodiscard]] QVariantList rulesInfo() const;
 
 	// Backdrops are not layered by default: DWM backdrop materials are reported not to render on
-	// layered windows, and WS_EX_TRANSPARENT alone already makes a window without a redirection
-	// surface click-through. QS_WINDOWS_BLUR_LAYERED=1 or `"layered": true` in the rules file
-	// adds WS_EX_LAYERED, in case clicks on blurred areas outside a panel's input mask get stuck.
+	// layered windows, while WS_EX_TRANSPARENT is reported to make a window without a redirection
+	// surface click-through on its own (and a window region limited to the blurred rectangles
+	// backs that up). QS_WINDOWS_BLUR_LAYERED=1 or `"layered": true` in the rules file adds
+	// WS_EX_LAYERED (and drops the region) in case clicks still get stuck on a backdrop.
 	[[nodiscard]] bool layeredBackdrops() const;
 	// QS_WINDOWS_BLUR_DEBUG=1: tints every blurred shape red, to tell shape placement apart from
 	// the backdrop brush rendering.
