@@ -263,7 +263,10 @@ void Clipboard::writeImageToClipboard(const QImage& imageIn) {
 	if (mem == nullptr) return;
 
 	auto* dst = static_cast<unsigned char*>(GlobalLock(mem));
-	if (dst == nullptr) return;
+	if (dst == nullptr) {
+		GlobalFree(mem);
+		return;
+	}
 
 	memcpy(dst, &bih, sizeof(bih)); // NOLINT
 	// CF_DIB rows are bottom-up; QImage rows are top-down.
@@ -275,7 +278,8 @@ void Clipboard::writeImageToClipboard(const QImage& imageIn) {
 		);
 	}
 	GlobalUnlock(mem);
-	SetClipboardData(CF_DIB, mem);
+	// The clipboard owns the memory only once SetClipboardData succeeds.
+	if (SetClipboardData(CF_DIB, mem) == nullptr) GlobalFree(mem);
 }
 
 void Clipboard::writeTextToClipboard(const QString& text) {
@@ -284,11 +288,14 @@ void Clipboard::writeTextToClipboard(const QString& text) {
 	if (mem == nullptr) return;
 
 	auto* dst = GlobalLock(mem);
-	if (dst == nullptr) return;
+	if (dst == nullptr) {
+		GlobalFree(mem);
+		return;
+	}
 
 	memcpy(dst, text.utf16(), bytes); // NOLINT
 	GlobalUnlock(mem);
-	SetClipboardData(CF_UNICODETEXT, mem);
+	if (SetClipboardData(CF_UNICODETEXT, mem) == nullptr) GlobalFree(mem);
 }
 
 void Clipboard::copy(qint64 id) {

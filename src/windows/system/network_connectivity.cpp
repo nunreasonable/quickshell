@@ -202,7 +202,8 @@ void NetworkConnectivityBackend::refreshEthernet() {
 	auto* addresses = reinterpret_cast<PIP_ADAPTER_ADDRESSES>(buffer.data()); // NOLINT
 
 	constexpr ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST
-	                     | GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_FRIENDLY_NAME;
+	                     | GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_FRIENDLY_NAME
+	                     | GAA_FLAG_INCLUDE_GATEWAYS;
 
 	auto result = GetAdaptersAddresses(AF_UNSPEC, flags, nullptr, addresses, &size);
 	if (result == ERROR_BUFFER_OVERFLOW) {
@@ -214,7 +215,11 @@ void NetworkConnectivityBackend::refreshEthernet() {
 	auto ethernetUp = false;
 	if (result == ERROR_SUCCESS) {
 		for (auto* curr = addresses; curr != nullptr; curr = curr->Next) {
-			if (curr->IfType == IF_TYPE_ETHERNET_CSMACD && curr->OperStatus == IfOperStatusUp) {
+			// Hyper-V/WSL vEthernet, VirtualBox/VMware host-only and TAP adapters are Ethernet
+			// too, but only a real link to a network has a default gateway.
+			if (curr->IfType == IF_TYPE_ETHERNET_CSMACD && curr->OperStatus == IfOperStatusUp
+			    && curr->FirstGatewayAddress != nullptr)
+			{
 				ethernetUp = true;
 				break;
 			}

@@ -2,6 +2,7 @@
 
 #include <qcolor.h>
 #include <qcoreapplication.h>
+#include <qdir.h>
 #include <qfileinfo.h>
 #include <qloggingcategory.h>
 #include <qstring.h>
@@ -131,7 +132,8 @@ bool Wallpaper::setWallpaper(const QString& path) {
 	// no letterboxing).
 	wallpaper->SetPosition(DWPOS_FILL);
 
-	auto wpath = path.toStdWString();
+	// IDesktopWallpaper stores the path as given, and Windows' own UI expects backslashes.
+	auto wpath = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath()).toStdWString();
 	bool anyOk = false;
 
 	UINT count = 0;

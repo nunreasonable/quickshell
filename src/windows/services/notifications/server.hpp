@@ -7,6 +7,7 @@
 #include <qcontainerfwd.h>
 #include <qhash.h>
 #include <qobject.h>
+#include <qtimer.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
 
@@ -103,6 +104,8 @@ private:
 	quint32 forwardToOwner(const QString& summary, const QString& body, const QStringList& args);
 	static LRESULT CALLBACK busWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 	bool mOwner = false;
+	bool mMirrorWanted = false;
+	QTimer claimRetry;
 	void* ownerMutex = nullptr;
 	HWND busWindow = nullptr;
 

@@ -1,5 +1,7 @@
 #include "ocr_worker.hpp"
 
+#include <qdir.h>
+#include <qfileinfo.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
 #include <qmetaobject.h>
@@ -92,7 +94,8 @@ void OcrWorker::cmdRecognize(int requestId, const QString& path) {
 			    "add a language, then install its handwriting/OCR optional feature)"
 			);
 		} else {
-			auto wpath = path.toStdWString();
+			// StorageFile wants an absolute path with backslashes; ii's paths use slashes.
+			auto wpath = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath()).toStdWString();
 			auto file = StorageFile::GetFileFromPathAsync(winrt::hstring(wpath)).get();
 			auto stream = file.OpenAsync(FileAccessMode::Read).get();
 			auto decoder = BitmapDecoder::CreateAsync(stream).get();

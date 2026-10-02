@@ -2,12 +2,15 @@
 
 #include <algorithm>
 
+#include <qcoreapplication.h>
 #include <qdir.h>
 #include <qfile.h>
 #include <qfileinfo.h>
 #include <qimage.h>
 #include <qimagereader.h>
 #include <qloggingcategory.h>
+#include <qmetaobject.h>
+#include <qpointer.h>
 #include <qrunnable.h>
 #include <qsize.h>
 #include <qthreadpool.h>
@@ -80,15 +83,19 @@ public:
 
 	void run() override {
 		auto ok = writeThumbnail(this->source, this->output, this->maxSize);
-		// `owner` is a QML_SINGLETON with process lifetime, so it's always safe to emit on
-		// here even though this runs on a QThreadPool worker: Qt auto-queues the delivery to
-		// whichever thread owns `owner` (the GUI thread) based on the connection, not the
-		// emitting thread.
-		emit owner->finished(this->source, this->output, ok);
+		// The singleton belongs to its QML engine and goes away on reload while tasks may still
+		// be queued, so the result is handed to the GUI thread, which checks it still exists.
+		QMetaObject::invokeMethod(
+		    QCoreApplication::instance(),
+		    [owner = this->owner, source = this->source, output = this->output, ok] {
+			    if (owner) emit owner->finished(source, output, ok);
+		    },
+		    Qt::QueuedConnection
+		);
 	}
 
 private:
-	Thumbnailer* owner;
+	QPointer<Thumbnailer> owner;
 	QString source;
 	QString output;
 	int maxSize;

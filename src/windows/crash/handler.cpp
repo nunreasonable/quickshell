@@ -23,6 +23,7 @@
 #include <csignal>
 #include <cwchar>
 #include <exception>
+#include <iterator>
 
 #include <qt_windows.h>
 
@@ -32,6 +33,7 @@
 #include <qdatetime.h>
 #include <qdir.h>
 #include <qfile.h>
+#include <qlogging.h>
 #include <qstring.h>
 #include <qtenvironmentvariables.h>
 #include <qtextstream.h>
@@ -56,7 +58,9 @@ wchar_t gExePath[PATH_CHARS] = L"";
 wchar_t gConfigPath[PATH_CHARS] = L"";
 wchar_t gCrashDir[PATH_CHARS] = L"";
 wchar_t gDumpPath[PATH_CHARS] = L"";
+wchar_t gLaunchTimeStr[32] = L"0";
 qint64 gLaunchTimeMs = 0;
+QtMessageHandler gPreviousMessageHandler = nullptr;
 
 // Re-entrancy guard: if a second thread faults (or the same one re-faults) while we're already
 // writing a dump and relaunching, don't let it race us into launching two copies of the shell.
@@ -119,10 +123,16 @@ void writeSupportingFiles(const wchar_t* reason, DWORD exceptionCode) {
 	}
 }
 
-void relaunch() {
+void relaunch(const wchar_t* reason) {
 	// Don't let a debug test crash (see maybeTriggerDebugCrash below) loop forever: strip it from
 	// the environment block CreateProcess is about to inherit.
 	SetEnvironmentVariableW(L"QS_DEBUG_CRASH_TEST", nullptr);
+
+	// What the new instance logs about this crash (checkCrashRelaunch in launch/main.cpp).
+	SetEnvironmentVariableW(L"__QUICKSHELL_CRASH_RELAUNCH", L"1");
+	SetEnvironmentVariableW(L"__QUICKSHELL_CRASH_LAUNCH_TIME", gLaunchTimeStr);
+	SetEnvironmentVariableW(L"__QUICKSHELL_CRASH_REASON", reason);
+	SetEnvironmentVariableW(L"__QUICKSHELL_CRASH_DUMP_PATH", gDumpPath);
 
 	STARTUPINFOW si {};
 	si.cb = sizeof(si);
@@ -130,7 +140,8 @@ void relaunch() {
 
 	// <=2 MAX_PATH-ish strings plus quotes/flag/space fits comfortably in 4x the path buffer.
 	auto cmdLine = std::array<wchar_t, PATH_CHARS * 4>();
-	swprintf(cmdLine.data(), cmdLine.size(), L"\"%ls\" -c \"%ls\"", gExePath, gConfigPath); // NOLINT
+	// The config path is a file (shell.qml or another entry), which is what -p takes.
+	swprintf(cmdLine.data(), cmdLine.size(), L"\"%ls\" -p \"%ls\"", gExePath, gConfigPath); // NOLINT
 
 	if (CreateProcessW(
 	        gExePath,
@@ -203,18 +214,20 @@ void handleCrash(const wchar_t* reason, EXCEPTION_POINTERS* ep) {
 			CloseHandle(dumpFile);
 		}
 
+		// Relaunch before anything that needs the heap or locks the faulting thread may hold:
+		// if writing the supporting files hangs, the shell is already back.
+		auto elapsed = currentEpochMs() - gLaunchTimeMs;
+		if (gLaunchTimeMs == 0 || elapsed >= 10000) {
+			relaunch(reason);
+		}
+		// else: crashed within 10s of launch - matches the Linux handler's crash-loop guard,
+		// don't relaunch.
+
 		// Keep the stack-overflow path to just the dump above: dbghelp already needed the
 		// SetThreadStackGuarantee reserve, no sense spending more of it on QFile/QDir.
 		if (!isStackOverflow) {
 			writeSupportingFiles(reason, static_cast<DWORD>(exceptionCode));
 		}
-
-		auto elapsed = currentEpochMs() - gLaunchTimeMs;
-		if (gLaunchTimeMs == 0 || elapsed >= 10000) {
-			relaunch();
-		}
-		// else: crashed within 10s of launch - matches the Linux handler's crash-loop guard,
-		// don't relaunch.
 	}
 
 	TerminateProcess(GetCurrentProcess(), 1);
@@ -310,10 +323,18 @@ void maybeTriggerDebugCrash() {
 void CrashHandler::init() {
 	qCDebug(logCrashHandler) << "Starting crash handler...";
 
-	// Suppress the OS "<app> has stopped working" dialog - we already report and relaunch
-	// ourselves, and that dialog would otherwise sit on the crashed instance until a user on the
-	// VM's shared desktop dismisses it.
-	SetErrorMode(SEM_NOGPFAULTERRORBOX);
+	// No SetErrorMode(SEM_NOGPFAULTERRORBOX): the filter below already ends the process before
+	// Windows Error Reporting would ask, and the error mode is inherited by every app the shell
+	// starts, which would then crash without a word.
+
+	// qFatal ends in qAbort, which fails fast on Windows and skips the exception filter
+	// (D3D device loss and scene graph init failures go through it).
+	gPreviousMessageHandler = qInstallMessageHandler(
+	    [](QtMsgType type, const QMessageLogContext& context, const QString& message) {
+		    if (gPreviousMessageHandler != nullptr) gPreviousMessageHandler(type, context, message);
+		    if (type == QtFatalMsg) handleCrash(L"qFatal", nullptr);
+	    }
+	);
 
 	// Reserve a little stack so the filter has somewhere to run after a stack overflow trips the
 	// guard page. Only covers the thread it's called on (the Qt GUI thread, where init() runs);
@@ -347,6 +368,7 @@ void CrashHandler::setRelaunchInfo(const RelaunchInfo& info) {
 	copyToBuffer(info.instance.configPath, gConfigPath, PATH_CHARS);
 
 	gLaunchTimeMs = info.instance.launchTime.toMSecsSinceEpoch();
+	swprintf(gLaunchTimeStr, std::size(gLaunchTimeStr), L"%lld", static_cast<long long>(gLaunchTimeMs)); // NOLINT
 
 	auto dir = QsPaths::crashDir(info.instance.instanceId);
 	if (dir.mkpath(".")) {

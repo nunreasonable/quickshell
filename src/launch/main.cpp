@@ -38,7 +38,7 @@ namespace {
 void checkCrashRelaunch(char** argv, QCoreApplication* coreApplication) {
 #if CRASH_HANDLER && defined(_WIN32)
 	// src/windows/crash/handler.cpp already wrote the dump and started this process with
-	// "-c <configPath>" on the command line before the crashed instance terminated, so there's
+	// "-p <configPath>" on the command line before the crashed instance terminated, so there's
 	// nothing left to relaunch here - just the same crash-loop guard as the POSIX path (crashed
 	// within 10s of its own launch), based on env vars the handler set on the old process before
 	// spawning this one (inherited since CreateProcess was given no explicit environment block).

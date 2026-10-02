@@ -10,6 +10,7 @@
 #include <qloggingcategory.h>
 #include <qmetaobject.h>
 #include <qqmlengine.h>
+#include <qtimer.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
 
@@ -45,6 +46,8 @@ NotificationServer* NotificationServer::instance() {
 }
 
 void NotificationServer::claimSession() {
+	if (this->mOwner) return;
+
 	// Only a config's main entry point serves; a settings window opened from it never does,
 	// even when it happens to start first.
 	auto entry = QFileInfo(InstanceInfo::CURRENT.configPath).fileName();
@@ -55,13 +58,24 @@ void NotificationServer::claimSession() {
 
 	if (GetLastError() == ERROR_ALREADY_EXISTS) {
 		CloseHandle(mutex);
-		qCInfo(logNotifications) << "Another shell owns the notification server; forwarding to it.";
+
+		if (!this->claimRetry.isActive()) {
+			qCInfo(logNotifications) << "Another shell owns the notification server; forwarding to it.";
+			// Take over once it exits (a shell restarted while the old one was still closing).
+			this->claimRetry.setInterval(5000);
+			QObject::connect(&this->claimRetry, &QTimer::timeout, this, &NotificationServer::claimSession);
+			this->claimRetry.start();
+		}
+
 		return;
 	}
+
+	this->claimRetry.stop();
 
 	// The handle stays open for the life of the process; the name goes away with it.
 	this->ownerMutex = mutex;
 	this->mOwner = true;
+	if (this->mMirrorWanted) this->mirror()->setEnabled(true);
 
 	WNDCLASSW wndClass {};
 	wndClass.lpfnWndProc = &NotificationServer::busWindowProc;
@@ -383,6 +397,7 @@ ToastMirror* NotificationServer::mirror() {
 }
 
 void NotificationServer::setMirrorEnabled(bool enabled) {
+	this->mMirrorWanted = enabled;
 	// The owner already shows every Windows toast; a second mirror would show them twice.
 	if (!this->mOwner) enabled = false;
 	if (!enabled && !this->mMirror) return;
