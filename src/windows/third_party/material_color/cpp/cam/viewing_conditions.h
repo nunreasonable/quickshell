@@ -12,6 +12,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified for ii-windows (see README.md next to cpp/): default viewing conditions at
+ * full double precision; CreateViewingConditions (viewing_conditions.cc) not vendored.
  */
 
 #ifndef CPP_CAM_VIEWING_CONDITIONS_H_
@@ -38,30 +41,27 @@ struct ViewingConditions {
   double rgb_d[3] = {0.0, 0.0, 0.0};
 };
 
-ViewingConditions CreateViewingConditions(const double white_point[3],
-                                          const double adapting_luminance,
-                                          const double background_lstar,
-                                          const double surround,
-                                          const bool discounting_illuminant);
-
-ViewingConditions DefaultWithBackgroundLstar(const double background_lstar);
-
-static const ViewingConditions kDefaultViewingConditions = (ViewingConditions){
-    11.725676537,
-    50.000000000,
-    2.000000000,
-    false,
-    0.184186503,
-    29.981000900,
-    1.016919255,
-    1.016919255,
-    0.689999998,
-    1.000000000,
-    0.388481468,
-    0.789482653,
-    1.909169555,
+// ii-windows: upstream rounds these to 9 decimals (and derives aw with a differently
+// grouped but equivalent formula). These are the exact doubles materialyoucolor-python's
+// ViewingConditions.make() computes (sRGB, D65, L* 50 background, average surround), so
+// HCT here is bit-identical to the Python ii runs on Linux; with the rounded set, chroma
+// was off by up to 1e-3.
+static const ViewingConditions kDefaultViewingConditions = ViewingConditions{
+    11.725677948856951,  // adapting_luminance
+    50.0,  // background_lstar
+    2.0,  // surround
+    false,  // discounting_illuminant
+    0.18418651851244416,  // background_y_to_white_point_y (n)
+    29.980997194447333,  // aw
+    1.0169191804458755,  // nbb
+    1.0169191804458755,  // ncb
+    0.69,  // c
+    1.0,  // n_c
+    0.3884814537800353,  // fl
+    0.7894826179304937,  // fl_root
+    1.909169568483652,  // z
     {95.047, 100.0, 108.883},
-    {1.021177769, 0.986307740, 0.933960497},
+    {1.02117770275752, 0.9863077294280124, 0.9339605082802299},
 };
 
 }  // namespace material_color_utilities

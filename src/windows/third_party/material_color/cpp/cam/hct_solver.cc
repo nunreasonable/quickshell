@@ -12,6 +12,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified for ii-windows (see README.md next to cpp/): standard C++ initializers instead
+ * of compound literals, fabs instead of abs for doubles.
  */
 
 #include "cpp/cam/hct_solver.h"
@@ -176,7 +179,7 @@ double TrueDelinearized(double rgb_component) {
 }
 
 double ChromaticAdaptation(double component) {
-  double af = pow(abs(component), 0.42);
+  double af = pow(fabs(component), 0.42);
   return Signum(component) * 400.0 * af / (af + 27.13);
 }
 
@@ -217,7 +220,7 @@ double Intercept(double source, double mid, double target) {
 }
 
 Vec3 LerpPoint(Vec3 source, double t, Vec3 target) {
-  return (Vec3){
+  return Vec3{
       source.a + (target.a - source.a) * t,
       source.b + (target.b - source.b) * t,
       source.c + (target.c - source.c) * t,
@@ -276,27 +279,27 @@ Vec3 NthVertex(double y, int n) {
     double b = coord_b;
     double r = (y - g * k_g - b * k_b) / k_r;
     if (IsBounded(r)) {
-      return (Vec3){r, g, b};
+      return Vec3{r, g, b};
     } else {
-      return (Vec3){-1.0, -1.0, -1.0};
+      return Vec3{-1.0, -1.0, -1.0};
     }
   } else if (n < 8) {
     double b = coord_a;
     double r = coord_b;
     double g = (y - r * k_r - b * k_b) / k_g;
     if (IsBounded(g)) {
-      return (Vec3){r, g, b};
+      return Vec3{r, g, b};
     } else {
-      return (Vec3){-1.0, -1.0, -1.0};
+      return Vec3{-1.0, -1.0, -1.0};
     }
   } else {
     double r = coord_a;
     double g = coord_b;
     double b = (y - r * k_r - g * k_g) / k_b;
     if (IsBounded(b)) {
-      return (Vec3){r, g, b};
+      return Vec3{r, g, b};
     } else {
-      return (Vec3){-1.0, -1.0, -1.0};
+      return Vec3{-1.0, -1.0, -1.0};
     }
   }
 }
@@ -310,7 +313,7 @@ Vec3 NthVertex(double y, int n) {
  * an endpoint of the segment containing the desired color.
  */
 void BisectToSegment(double y, double target_hue, Vec3 out[2]) {
-  Vec3 left = (Vec3){-1.0, -1.0, -1.0};
+  Vec3 left = Vec3{-1.0, -1.0, -1.0};
   Vec3 right = left;
   double left_hue = 0.0;
   double right_hue = 0.0;
@@ -346,7 +349,7 @@ void BisectToSegment(double y, double target_hue, Vec3 out[2]) {
 }
 
 Vec3 Midpoint(Vec3 a, Vec3 b) {
-  return (Vec3){
+  return Vec3{
       (a.a + b.a) / 2,
       (a.b + b.b) / 2,
       (a.c + b.c) / 2,
@@ -405,7 +408,7 @@ Vec3 BisectToLimit(double y, double target_hue) {
 }
 
 double InverseChromaticAdaptation(double adapted) {
-  double adapted_abs = abs(adapted);
+  double adapted_abs = fabs(adapted);
   double base = fmax(0, 27.13 * adapted_abs / (400.0 - adapted_abs));
   return Signum(adapted) * pow(base, 1.0 / 0.42);
 }
@@ -456,7 +459,7 @@ Argb FindResultByJ(double hue_radians, double chroma, double y) {
     double r_c_scaled = InverseChromaticAdaptation(r_a);
     double g_c_scaled = InverseChromaticAdaptation(g_a);
     double b_c_scaled = InverseChromaticAdaptation(b_a);
-    Vec3 scaled = (Vec3){r_c_scaled, g_c_scaled, b_c_scaled};
+    Vec3 scaled = Vec3{r_c_scaled, g_c_scaled, b_c_scaled};
     Vec3 linrgb = MatrixMultiply(scaled, kLinrgbFromScaledDiscount);
     // ===========================================================
     // Operations inlined from Cam16 to avoid repeated calculation
@@ -471,7 +474,7 @@ Argb FindResultByJ(double hue_radians, double chroma, double y) {
     if (fnj <= 0) {
       return 0;
     }
-    if (iteration_round == 4 || abs(fnj - y) < 0.002) {
+    if (iteration_round == 4 || fabs(fnj - y) < 0.002) {
       if (linrgb.a > 100.01 || linrgb.b > 100.01 || linrgb.c > 100.01) {
         return 0;
       }

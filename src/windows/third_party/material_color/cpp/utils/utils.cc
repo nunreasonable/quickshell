@@ -12,6 +12,10 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified for ii-windows (see README.md next to cpp/): no abseil (HexFromArgb dropped),
+ * standard C++ initializers instead of compound literals, fabs for doubles, and
+ * Delinearized/YFromLstar/LstarFromY rounded like materialyoucolor-python.
  */
 
 #include "cpp/utils/utils.h"
@@ -22,9 +26,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <string>
-
-#include "absl/strings/str_cat.h"
 
 namespace material_color_utilities {
 
@@ -56,7 +57,14 @@ int Delinearized(const double rgb_component) {
   } else {
     delinearized = 1.055 * std::pow(normalized, 1.0 / 2.4) - 0.055;
   }
-  return std::clamp((int)round(delinearized * 255.0), 0, 255);
+  // ii-windows: Python's round() (half to even, like CPython's float.__round__) rather
+  // than round() (half away from zero), to match materialyoucolor-python on exact ties.
+  double scaled = delinearized * 255.0;
+  double rounded = round(scaled);
+  if (fabs(scaled - rounded) == 0.5) {
+    rounded = 2.0 * round(scaled / 2.0);
+  }
+  return std::clamp((int)rounded, 0, 255);
 }
 
 double Linearized(const int rgb_component) {
@@ -84,22 +92,27 @@ double LstarFromArgb(Argb argb) {
   return LstarFromY(y);
 }
 
+// ii-windows: YFromLstar and LstarFromY go through the L*a*b* f / f^-1 the same way
+// materialyoucolor-python (and the Java/TypeScript ports) do. Same math as upstream's
+// shortcut for the linear segment (L* <= 8), but rounded differently in the last bit.
 double YFromLstar(double lstar) {
-  static const double ke = 8.0;
-  if (lstar > ke) {
-    double cube_root = (lstar + 16.0) / 116.0;
-    double cube = cube_root * cube_root * cube_root;
-    return cube * 100.0;
+  static const double e = 216.0 / 24389.0;
+  static const double kappa = 24389.0 / 27.0;
+  double ft = (lstar + 16.0) / 116.0;
+  double ft3 = ft * ft * ft;
+  if (ft3 > e) {
+    return 100.0 * ft3;
   } else {
-    return lstar / (24389.0 / 27.0) * 100.0;
+    return 100.0 * ((116 * ft - 16) / kappa);
   }
 }
 
 double LstarFromY(double y) {
   static const double e = 216.0 / 24389.0;
+  static const double kappa = 24389.0 / 27.0;
   double yNormalized = y / 100.0;
   if (yNormalized <= e) {
-    return (24389.0 / 27.0) * yNormalized;
+    return 116.0 * ((kappa * yNormalized + 16) / 116) - 16.0;
   } else {
     return 116.0 * std::pow(yNormalized, 1.0 / 3.0) - 16.0;
   }
@@ -129,18 +142,13 @@ double SanitizeDegreesDouble(const double degrees) {
 }
 
 double DiffDegrees(const double a, const double b) {
-  return 180.0 - abs(abs(a - b) - 180.0);
+  return 180.0 - fabs(fabs(a - b) - 180.0);
 }
 
 double RotationDirection(const double from, const double to) {
   double increasing_difference = SanitizeDegreesDouble(to - from);
   return increasing_difference <= 180.0 ? 1.0 : -1.0;
 }
-
-// Converts a color in ARGB format to a hexadecimal string in lowercase.
-//
-// For instance: hex_from_argb(0xff012345) == "ff012345"
-std::string HexFromArgb(Argb argb) { return absl::StrCat(absl::Hex(argb)); }
 
 Argb IntFromLstar(const double lstar) {
   double y = YFromLstar(lstar);
@@ -172,6 +180,6 @@ Vec3 MatrixMultiply(Vec3 input, const double matrix[3][3]) {
       input.a * matrix[1][0] + input.b * matrix[1][1] + input.c * matrix[1][2];
   double c =
       input.a * matrix[2][0] + input.b * matrix[2][1] + input.c * matrix[2][2];
-  return (Vec3){a, b, c};
+  return Vec3{a, b, c};
 }
 }  // namespace material_color_utilities

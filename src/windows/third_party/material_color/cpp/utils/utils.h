@@ -12,13 +12,14 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * Modified for ii-windows (see README.md next to cpp/): HexFromArgb dropped (it needs abseil).
  */
 
 #ifndef CPP_UTILS_UTILS_H_
 #define CPP_UTILS_UTILS_H_
 
 #include <cstdint>
-#include <string>
 
 namespace material_color_utilities {
 
@@ -123,11 +124,6 @@ double RotationDirection(const double from, const double to);
  * @return L*, from L*a*b*, coordinate of the color
  */
 double LstarFromArgb(const Argb argb);
-
-/**
- * Returns the hexadecimal representation of a color.
- */
-std::string HexFromArgb(Argb argb);
 
 /**
  * Linearizes an RGB component.
