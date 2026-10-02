@@ -55,7 +55,8 @@ public:
 
 	// What `notify-send summary body args...` does on Linux. The id is handed out right away but
 	// the notification arrives on the next event loop turn, as it would after the D-Bus round
-	// trip, so callers never re-enter their own notification handlers.
+	// trip, so callers never re-enter their own notification handlers. Sends made before any
+	// NotificationServer is live (during config load) wait for the next switchGeneration.
 	quint32 notifySend(const QString& summary, const QString& body, const QStringList& args);
 
 	void invokeAction(Notification* notification, const QString& identifier);
@@ -90,6 +91,8 @@ private:
 	    const QString& aumid = QString()
 	);
 
+	[[nodiscard]] bool hasReceiver() const;
+
 	ToastMirror* mirror();
 	void onToastAdded(const ToastSnapshot& toast);
 	void onToastRemoved(quint32 toastId);
@@ -100,6 +103,7 @@ private:
 	QHash<quint32, Notification*> toastMap; // listener toast id -> its mirror
 	ObjectModel<Notification> mNotifications {this};
 	ToastMirror* mMirror = nullptr;
+	QList<std::function<void()>> pendingSends; // notifySend calls made with no receiver yet
 };
 
 } // namespace qs::windows::services::notifications

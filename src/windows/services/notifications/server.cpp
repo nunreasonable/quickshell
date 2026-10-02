@@ -1,5 +1,6 @@
 #include "server.hpp"
 #include <functional>
+#include <utility>
 
 #include <qcontainerfwd.h>
 #include <qlogging.h>
@@ -35,6 +36,16 @@ void NotificationServer::switchGeneration(bool reEmit, const std::function<void(
 	this->toastMap.clear();
 
 	clearHook();
+
+	if (!this->pendingSends.isEmpty()) {
+		QMetaObject::invokeMethod(
+		    this,
+		    [sends = std::exchange(this->pendingSends, {})] {
+			    for (const auto& send: sends) send();
+		    },
+		    Qt::QueuedConnection
+		);
+	}
 
 	if (reEmit) {
 		for (auto* notification: notifications) {
@@ -110,25 +121,37 @@ quint32 NotificationServer::notifySend(
 	auto replacing = request.replacesId != 0 && this->idMap.contains(request.replacesId);
 	auto reservedId = replacing ? 0 : this->nextId++;
 
+	auto send = [this, reservedId, request, summary, body] {
+		this->deliver(
+		    reservedId,
+		    request.replacesId,
+		    request.appName,
+		    request.appIcon,
+		    summary,
+		    body,
+		    request.actions,
+		    request.hints,
+		    request.expireTimeout
+		);
+	};
+
 	QMetaObject::invokeMethod(
 	    this,
-	    [this, reservedId, request, summary, body] {
-		    this->deliver(
-		        reservedId,
-		        request.replacesId,
-		        request.appName,
-		        request.appIcon,
-		        summary,
-		        body,
-		        request.actions,
-		        request.hints,
-		        request.expireTimeout
-		    );
+	    [this, send] {
+		    // With nobody listening the notification would be dropped as untracked; a server
+		    // that is still loading picks it up once it goes live.
+		    if (this->hasReceiver()) send();
+		    else this->pendingSends.append(send);
 	    },
 	    Qt::QueuedConnection
 	);
 
 	return replacing ? request.replacesId : reservedId;
+}
+
+bool NotificationServer::hasReceiver() const {
+	static const auto signal = QMetaMethod::fromSignal(&NotificationServer::notification);
+	return this->isSignalConnected(signal);
 }
 
 quint32 NotificationServer::deliver(
