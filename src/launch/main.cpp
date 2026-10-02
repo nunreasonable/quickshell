@@ -24,7 +24,10 @@
 #include "build.hpp"
 #include "launch_p.hpp"
 
-#if CRASH_HANDLER
+// On Windows there is no re-exec'd crash-reporter step to check for (see
+// src/windows/crash/handler.cpp): the dump is written and the shell relaunched directly from
+// the crash handler itself, so main.hpp/qsCheckCrash is POSIX-only.
+#if CRASH_HANDLER && !defined(_WIN32)
 #include "../crash/main.hpp"
 #endif
 
@@ -33,7 +36,32 @@ namespace qs::launch {
 namespace {
 
 void checkCrashRelaunch(char** argv, QCoreApplication* coreApplication) {
-#if CRASH_HANDLER
+#if CRASH_HANDLER && defined(_WIN32)
+	// src/windows/crash/handler.cpp already wrote the dump and started this process with
+	// "-c <configPath>" on the command line before the crashed instance terminated, so there's
+	// nothing left to relaunch here - just the same crash-loop guard as the POSIX path (crashed
+	// within 10s of its own launch), based on env vars the handler set on the old process before
+	// spawning this one (inherited since CreateProcess was given no explicit environment block).
+	Q_UNUSED(argv);
+	Q_UNUSED(coreApplication);
+
+	if (qEnvironmentVariableIsSet("__QUICKSHELL_CRASH_RELAUNCH")) {
+		auto launchTimeMs = qEnvironmentVariable("__QUICKSHELL_CRASH_LAUNCH_TIME").toLongLong();
+		auto nowMs = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch();
+
+		qCritical().nospace() << "Quickshell has crashed ("
+		                      << qEnvironmentVariable("__QUICKSHELL_CRASH_REASON") << "). Dump saved to "
+		                      << qEnvironmentVariable("__QUICKSHELL_CRASH_DUMP_PATH");
+
+		if (launchTimeMs != 0 && nowMs - launchTimeMs < 10000) {
+			qCritical() << "Quickshell crashed within 10 seconds of launching. Not restarting to avoid "
+			               "a crash loop.";
+			exit(-1); // NOLINT
+		} else {
+			qCritical() << "Quickshell has been restarted.";
+		}
+	}
+#elif CRASH_HANDLER
 	auto lastInfoFdStr = qEnvironmentVariable("__QUICKSHELL_CRASH_INFO_FD");
 
 	if (!lastInfoFdStr.isEmpty()) {
@@ -126,7 +154,7 @@ int main(int argc, char** argv) {
 
 	QCoreApplication::setApplicationName("quickshell");
 
-#if CRASH_HANDLER
+#if CRASH_HANDLER && !defined(_WIN32)
 	qsCheckCrash(argc, argv);
 #endif
 

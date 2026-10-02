@@ -56,6 +56,10 @@ add_subdirectory(services)
 add_subdirectory(hyprland)
 add_subdirectory(bluetooth)
 
+if (CRASH_HANDLER)
+	add_subdirectory(crash)
+endif()
+
 add_library(quickshell-windows-init OBJECT init.cpp)
 
 target_link_libraries(quickshell-windows PRIVATE
