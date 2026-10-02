@@ -296,6 +296,7 @@ ToastSnapshot ToastMirrorWorker::snapshotOf(const UserNotification& toast) {
 	}
 
 	if (snapshot.appName.isEmpty()) snapshot.appName = snapshot.aumid;
+	if (snapshot.appName.isEmpty()) snapshot.appName = QStringLiteral("Windows");
 
 	try {
 		auto notification = toast.Notification();

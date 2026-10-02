@@ -1,6 +1,8 @@
 #include "toast_mirror.hpp"
 
 #include <qcoreapplication.h>
+#include <qdeadlinetimer.h>
+#include <qlogging.h>
 #include <qmetaobject.h>
 #include <qobject.h>
 #include <qthread.h>
@@ -31,9 +33,12 @@ ToastMirror::ToastMirror(QObject* parent): QObject(parent) {
 
 	// The server (and so this) is a process lifetime singleton that is never deleted; stop the
 	// thread while Qt is still fully alive instead of letting process exit kill it mid-call.
+	// Bounded, since a RequestAccessAsync waiting on a consent prompt can't be interrupted.
 	QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
 		this->mThread.quit();
-		this->mThread.wait();
+		if (!this->mThread.wait(QDeadlineTimer(2000))) {
+			qWarning() << "Notification listener thread still busy at exit, leaving it behind";
+		}
 	});
 
 	this->mThread.setObjectName(QStringLiteral("ToastMirror"));
