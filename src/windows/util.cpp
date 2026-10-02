@@ -132,6 +132,16 @@ void applyPanelDwmAttributes(HWND hwnd) {
 
 	auto policy = static_cast<DWMNCRENDERINGPOLICY>(DWMNCRP_DISABLED);
 	DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, &policy, sizeof(policy));
+
+	markNonRude(hwnd);
+}
+
+void markNonRude(HWND hwnd) {
+	// Explorer takes a visible window covering a monitor for a fullscreen ("rude") app: it lowers
+	// the taskbar under it and reports ABN_FULLSCREENAPP to every AppBar. A full screen panel
+	// (a wallpaper, an overview) alone on a desktop would hide the taskbar and our own bars.
+	// Shell surfaces opt out with this property.
+	SetPropW(hwnd, L"NonRudeHWND", reinterpret_cast<HANDLE>(TRUE)); // NOLINT
 }
 
 void setExStyleBits(HWND hwnd, LONG_PTR bits, bool enabled) {

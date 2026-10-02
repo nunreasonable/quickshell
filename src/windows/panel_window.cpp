@@ -579,9 +579,14 @@ bool WinPanelWindow::handleNativeMessage(MSG* msg, qintptr* result) {
 	if (msg->message == WinAppBar::callbackMessage()) {
 		switch (msg->wParam) {
 		case ABN_POSCHANGED: this->scheduleUpdateDimensions(); break;
-		case ABN_FULLSCREENAPP:
-			WinPanelStack::instance()->setFullscreenAppActive(msg->lParam != 0);
+		case ABN_FULLSCREENAPP: {
+			// One of our own surfaces is never the fullscreen app, even where NonRudeHWND
+			// didn't stick (it is only read when explorer first sees the window).
+			auto active = msg->lParam != 0;
+			if (active && isOwnProcessWindow(GetForegroundWindow())) active = false;
+			WinPanelStack::instance()->setFullscreenAppActive(active);
 			break;
+		}
 		default: break;
 		}
 

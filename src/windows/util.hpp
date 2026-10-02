@@ -54,6 +54,9 @@ bool forceForegroundWindow(HWND hwnd);
 // True if the window belongs to this process (used to avoid fighting our own popups for focus).
 [[nodiscard]] bool isOwnProcessWindow(HWND hwnd);
 
+// Keeps explorer from treating the window as a fullscreen app (see util.cpp).
+void markNonRude(HWND hwnd);
+
 // Square corners, no DWM border/shadow, no animations and no Aero Peek hiding: makes the
 // window look like a shell surface instead of an application window.
 void applyPanelDwmAttributes(HWND hwnd);

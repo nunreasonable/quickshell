@@ -32,6 +32,7 @@
 #include "../core/generation.hpp"
 #include "blur_shapes.hpp"
 #include "panel_window.hpp"
+#include "util.hpp"
 
 // Windows Runtime and DWM headers last: they pull in the rpc headers, which define macros like
 // `small`. unknwn.h before winrt/base.h enables C++/WinRT's classic COM interop (`as<>` on the
@@ -189,6 +190,8 @@ std::unique_ptr<BackdropWindow> BackdropWindow::create(
 	    GetModuleHandleW(nullptr),
 	    nullptr
 	);
+
+	if (hwnd != nullptr) markNonRude(hwnd);
 
 	if (hwnd == nullptr) {
 		error = QString("CreateWindowEx failed (%1)").arg(GetLastError());
