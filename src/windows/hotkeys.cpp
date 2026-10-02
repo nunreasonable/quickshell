@@ -45,6 +45,26 @@ constexpr auto DEFAULT_FILE = "defaults/windows/keybinds.json";
 // The poll that turns RegisterHotKey presses into releases (WM_HOTKEY has no release).
 constexpr int RELEASE_POLL_MS = 15;
 
+// The keyboard layout of the window being typed in: the language Windows switches per window.
+HKL activeKeyboardLayout() {
+	auto* foreground = GetForegroundWindow();
+	auto thread = foreground == nullptr ? 0 : GetWindowThreadProcessId(foreground, nullptr);
+	return GetKeyboardLayout(thread);
+}
+
+// Punctuation binds name the character, like Hyprland's keysyms, so they follow the layout:
+// on ABNT2 "/" is its own key (VK_ABNT_C1), not the US layout's VK_OEM_2.
+QChar punctuationChar(const QString& name) {
+	static const QHash<QString, QChar> chars = {
+	    {"slash", '/'},       {"period", '.'},         {"comma", ','},
+	    {"minus", '-'},       {"equal", '='},          {"plus", '+'},
+	    {"bracketleft", '['}, {"bracketright", ']'},   {"semicolon", ';'},
+	    {"apostrophe", '\''}, {"grave", '`'},          {"backslash", '\\'},
+	};
+
+	return chars.value(name.toLower());
+}
+
 uint8_t modifierFromName(const QString& name) {
 	static const QHash<QString, uint8_t> modifiers = {
 	    {"ctrl", ModCtrl},      {"control", ModCtrl},   {"ctl", ModCtrl},      {"alt", ModAlt},
@@ -245,6 +265,22 @@ bool parseKeys(const QString& text, KeyCombo& combo, QString& error) {
 		}
 
 		auto vk = keyNameToVk(token);
+
+		if (auto ch = punctuationChar(token); !ch.isNull()) {
+			auto scan = VkKeyScanExW(ch.unicode(), activeKeyboardLayout());
+			auto shiftState = HIBYTE(scan);
+
+			// A character behind AltGr can't share a combo with Super; keep the US key then.
+			if (scan != -1 && LOBYTE(scan) != 0 && (shiftState & 6) == 0) {
+				vk = LOBYTE(scan);
+
+				if ((shiftState & 1) != 0 && (mods & ModShift) == 0) {
+					mods |= ModShift;
+					modCount++;
+				}
+			}
+		}
+
 		if (vk == 0) {
 			error = QString("unknown key \"%1\"").arg(token);
 			return false;
@@ -322,6 +358,18 @@ HotkeyManager::HotkeyManager(QObject* parent): QObject(parent) {
 	this->reloadTimer.setSingleShot(true);
 	this->reloadTimer.setInterval(200);
 	QObject::connect(&this->reloadTimer, &QTimer::timeout, this, &HotkeyManager::loadFile);
+
+	// Punctuation keys move with the layout (see punctuationChar); WM_INPUTLANGCHANGE only goes
+	// to the window being typed in, so the active layout is checked now and then.
+	this->lastLayout = activeKeyboardLayout();
+	this->layoutTimer.setInterval(2000);
+	QObject::connect(&this->layoutTimer, &QTimer::timeout, this, [this] {
+		auto* layout = activeKeyboardLayout();
+		if (layout == this->lastLayout) return;
+		this->lastLayout = layout;
+		if (this->loaded) this->reload();
+	});
+	this->layoutTimer.start();
 
 	this->releaseTimer.setInterval(RELEASE_POLL_MS);
 	QObject::connect(&this->releaseTimer, &QTimer::timeout, this, &HotkeyManager::pollReleases);

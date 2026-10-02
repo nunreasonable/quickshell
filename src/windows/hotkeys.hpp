@@ -162,6 +162,8 @@ private:
 	QFileSystemWatcher watcher;
 	QTimer reloadTimer;
 	QTimer releaseTimer;
+	QTimer layoutTimer;
+	HKL lastLayout = nullptr;
 };
 
 ///! Global shortcuts from keybinds.json.
