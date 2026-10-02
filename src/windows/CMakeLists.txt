@@ -5,7 +5,8 @@
 # Quickshell.Wayland and Quickshell.Hyprland modules built on it, small native singletons
 # (system/) ii's services call into instead of spawning Linux CLIs, and native service modules
 # (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower, Mpris on GSMTC,
-# plus Quickshell.Bluetooth on WinRT (bluetooth/).
+# Notifications (the shell's own plus a mirror of the Windows notification center), plus
+# Quickshell.Bluetooth on WinRT (bluetooth/).
 
 qt_add_library(quickshell-windows STATIC
 	util.cpp
@@ -29,6 +30,7 @@ qt_add_library(quickshell-windows STATIC
 	system/input.cpp
 	system/night_light.cpp
 	system/screenshot.cpp
+	system/notification_settings.cpp
 )
 
 qt_add_qml_module(quickshell-windows

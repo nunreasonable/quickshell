@@ -64,6 +64,17 @@ QString WindowsDesktopEntryBackend::parsingNameForId(const QString& id) {
 	return WindowsDesktopEntryBackend::sRegistry.value(id);
 }
 
+QString WindowsDesktopEntryBackend::idForParsingName(const QString& token) {
+	QMutexLocker locker(&WindowsDesktopEntryBackend::sRegistryMutex);
+	const auto& registry = WindowsDesktopEntryBackend::sRegistry;
+
+	for (auto it = registry.constBegin(); it != registry.constEnd(); ++it) {
+		if (it.value().compare(token, Qt::CaseInsensitive) == 0) return it.key();
+	}
+
+	return QString();
+}
+
 void WindowsDesktopEntryBackend::install() {
 	static WindowsDesktopEntryBackend backend; // NOLINT
 	DesktopEntryManager::installBackend(&backend);
@@ -262,7 +273,13 @@ void WindowsDesktopEntryBackend::execute(
 		return;
 	}
 
-	auto* task = new LaunchTask(command.first(), workingDirectory);
+	WindowsDesktopEntryBackend::launch(command.first(), workingDirectory);
+}
+
+void WindowsDesktopEntryBackend::launch(const QString& token, const QString& workingDirectory) {
+	if (token.isEmpty()) return;
+
+	auto* task = new LaunchTask(token, workingDirectory);
 	task->setAutoDelete(true);
 	QThreadPool::globalInstance()->start(task);
 }

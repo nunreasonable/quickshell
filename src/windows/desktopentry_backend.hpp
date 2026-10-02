@@ -30,6 +30,13 @@ public:
 	// `id` is unknown. Used by the icon provider to resolve `appicon:<id>` keys back to a
 	// shell item without sharing COM pointers across threads.
 	static QString parsingNameForId(const QString& id);
+	// Reverse of parsingNameForId: the DesktopEntry id whose parsing name token is `token`,
+	// compared case-insensitively (toast and window AUMIDs don't always match the Apps folder's
+	// casing). Empty if there is none. Lets notifications map a sender's AUMID to its entry.
+	static QString idForParsingName(const QString& token);
+	// Launches an Apps folder item by its parsing name token (an AUMID for packaged apps and
+	// Win32 apps that registered one) on a worker thread, same as execute() does for entries.
+	static void launch(const QString& token, const QString& workingDirectory = QString());
 
 private:
 	static QMutex sRegistryMutex;
