@@ -3,7 +3,8 @@
 # keyboard hook) and focus grabs, the window / virtual desktop tracker, stand-in
 # Quickshell.Wayland and Quickshell.Hyprland modules built on it, small native singletons
 # (system/) ii's services call into instead of spawning Linux CLIs, and native service modules
-# (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower, Mpris on GSMTC.
+# (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower, Mpris on GSMTC,
+# plus Quickshell.Bluetooth on WinRT (bluetooth/).
 
 qt_add_library(quickshell-windows STATIC
 	util.cpp
@@ -44,6 +45,7 @@ target_include_directories(quickshell-windows PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 add_subdirectory(wayland)
 add_subdirectory(services)
 add_subdirectory(hyprland)
+add_subdirectory(bluetooth)
 
 add_library(quickshell-windows-init OBJECT init.cpp)
 
