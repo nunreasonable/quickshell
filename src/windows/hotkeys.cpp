@@ -26,6 +26,7 @@
 #include <qvariant.h>
 
 #include "../core/generation.hpp"
+#include "../core/instanceinfo.hpp"
 #include "../core/rootwrapper.hpp"
 #include "../io/ipchandler.hpp"
 #include "keyboard_hook.hpp"
@@ -941,6 +942,15 @@ Hotkeys::Hotkeys(QObject* parent): QObject(parent) {
 
 Hotkeys* Hotkeys::create(QQmlEngine* engine, QJSEngine* /*jsEngine*/) {
 	auto* hotkeys = new Hotkeys(nullptr);
+
+	// Binds belong to the shell itself, like a compositor's. Windows a config opens as separate
+	// instances from other entry files (`qs -p <config>/settings.qml`) share its QML and would
+	// otherwise register every bind a second time, firing each action twice while they run.
+	auto entry = QFileInfo(InstanceInfo::CURRENT.configPath).fileName();
+	if (!entry.isEmpty() && entry.compare("shell.qml", Qt::CaseInsensitive) != 0) {
+		qCInfo(logHotkeys) << "Not loading binds in" << entry << "(only a config's shell.qml does)";
+		return hotkeys;
+	}
 
 	if (auto* generation = EngineGeneration::findEngineGeneration(engine)) {
 		HotkeyManager::instance()->setShellDir(generation->rootPath.path());
