@@ -1,5 +1,6 @@
 #include "blur.hpp"
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -70,6 +71,8 @@ constexpr auto USER_FILE = "illogical-impulse/layerrules.json";
 constexpr auto DEFAULT_FILE = "defaults/windows/layerrules.json";
 constexpr auto PERSONALIZE_KEY = L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
 constexpr auto BACKDROP_CLASS = L"QuickshellBlurBackdrop";
+// The first build where the host backdrop brush renders for desktop windows.
+constexpr DWORD WINDOWS_11_BUILD = 22000;
 
 bool gManagerDestroyed = false; // NOLINT
 
@@ -79,12 +82,73 @@ QString hresultString(const winrt::hresult_error& error) {
 	    .arg(QString::fromWCharArray(error.message().c_str()));
 }
 
+// SetWindowCompositionAttribute is undocumented (no header or import library declares it), but the
+// accent policy below is what the Windows 10 taskbar's own blur uses and it has kept this shape
+// across Windows 10 releases.
+constexpr DWORD WCA_ACCENT_POLICY = 19;
+// Plain blur. Acrylic (4) is known to lag behind windows while they move or resize on Windows 10.
+constexpr DWORD ACCENT_ENABLE_BLURBEHIND = 3;
+// Draws GradientColor (0xAABBGGRR) over the blur.
+constexpr DWORD ACCENT_FLAG_GRADIENT_COLOR = 2;
+
+struct AccentPolicy {
+	DWORD accentState;
+	DWORD accentFlags;
+	DWORD gradientColor;
+	DWORD animationId;
+};
+
+struct WindowCompositionAttribData {
+	DWORD attribute;
+	PVOID data;
+	SIZE_T dataSize;
+};
+
+using SetWindowCompositionAttributeFn = BOOL(WINAPI*)(HWND, WindowCompositionAttribData*);
+
+SetWindowCompositionAttributeFn setWindowCompositionAttribute() {
+	static const auto function = []() -> SetWindowCompositionAttributeFn {
+		auto* user32 = GetModuleHandleW(L"user32.dll");
+		if (user32 == nullptr) return nullptr;
+
+		return reinterpret_cast<SetWindowCompositionAttributeFn>( // NOLINT
+		    GetProcAddress(user32, "SetWindowCompositionAttribute")
+		);
+	}();
+
+	return function;
+}
+
+// Rounded to the nearest pixel on each edge: the rectangle is the visible edge of an accent
+// window's blur, which collectBlurShapes already keeps a pixel inside the item's own edge.
+QRect nearestRect(const QRectF& rect) {
+	auto left = static_cast<int>(std::lround(rect.left()));
+	auto top = static_cast<int>(std::lround(rect.top()));
+	auto right = static_cast<int>(std::lround(rect.right()));
+	auto bottom = static_cast<int>(std::lround(rect.bottom()));
+	return QRect(left, top, right - left, bottom - top);
+}
+
+void hideWindow(HWND hwnd) {
+	if (!IsWindowVisible(hwnd)) return;
+
+	SetWindowPos(
+	    hwnd,
+	    nullptr,
+	    0,
+	    0,
+	    0,
+	    0,
+	    SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER
+	);
+}
+
 } // namespace
 
 // BackdropWindow
 
 // The native half of a panel's blur: a window holding a composition visual tree with one host
-// backdrop sprite per shape.
+// backdrop sprite per shape, or on Windows 10 one accent blurred window per shape.
 class BackdropWindow {
 public:
 	BackdropWindow() = default;
@@ -100,10 +164,14 @@ public:
 	    bool& unsupported
 	);
 
+	// The Windows 10 variant (BlurManager::Backend::Accent), which needs no compositor.
+	static std::unique_ptr<BackdropWindow>
+	createAccent(bool layered, bool tint, QString& error, bool& unsupported);
+
 	[[nodiscard]] HWND hwnd() const { return this->mHwnd; }
 	void setPanel(HWND panel) { this->mPanel = panel; }
 
-	// False when composition failed, after which the backdrop is useless.
+	// False when composition (or an accent window) failed, after which the backdrop is useless.
 	bool setShapes(const QList<BlurShape>& shapes);
 
 	// Directly below the panel in the z-order (and in the same topmost band), at its rect.
@@ -113,7 +181,15 @@ public:
 private:
 	static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 	static bool registerClass();
+	static HWND createWindow(bool layered, BackdropWindow* owner, QString& error);
 	void updateRegion(const QList<BlurShape>& shapes);
+
+	// Accent backdrops (Windows 10)
+	HWND createPiece(QString& error, bool& unsupported);
+	bool setPieces(const QList<BlurShape>& shapes);
+	void showPieces();
+	void hidePieces();
+	[[nodiscard]] bool piecesInPlace(bool panelTopmost) const;
 
 	struct Slot {
 		// clipped to the shape's clip rect (an ancestor item's clip, or the window)
@@ -121,6 +197,17 @@ private:
 		// the backdrop, clipped to the rounded rectangle
 		wuc::SpriteVisual sprite {nullptr};
 		wuc::CompositionRoundedRectangleGeometry geometry {nullptr};
+	};
+
+	// An accent window, blurred over its whole rectangle.
+	struct Piece {
+		HWND hwnd = nullptr;
+		// the shape's rect cut to its clip, relative to the panel
+		QRect rect;
+		// the rounded rectangle relative to the piece and its corner diameter, for the region
+		QRect shape;
+		int diameter = 0;
+		bool hasRegion = false;
 	};
 
 	HWND mHwnd = nullptr;
@@ -132,6 +219,15 @@ private:
 	RECT lastRect {};
 	QRegion region;
 	bool hasRegion = false;
+
+	// Accent backdrops have no window of their own (mHwnd stays null), only pieces.
+	bool accent = false;
+	bool accentTint = false;
+	std::vector<Piece> pieces;
+	// pieces in use, from the front; the rest are hidden and wait for later shapes
+	size_t pieceCount = 0;
+	// a piece in use changed its rect since the last show()
+	bool piecesMoved = false;
 
 	wuc::Compositor compositor {nullptr};
 	wucd::DesktopWindowTarget target {nullptr};
@@ -155,24 +251,16 @@ bool BackdropWindow::registerClass() {
 	return registered;
 }
 
-std::unique_ptr<BackdropWindow> BackdropWindow::create(
-    const wuc::Compositor& compositor,
-    bool layered,
-    bool tint,
-    QString& error,
-    bool& unsupported
-) {
-	unsupported = false;
-
+HWND BackdropWindow::createWindow(bool layered, BackdropWindow* owner, QString& error) {
 	if (!registerClass()) {
 		error = QString("RegisterClassEx failed (%1)").arg(GetLastError());
 		return nullptr;
 	}
 
-	// No redirection surface: the composition target is the window's only content, everything
-	// outside the shapes is see-through. WS_EX_TRANSPARENT keeps it out of hit testing (a window
-	// without a redirection surface needs no WS_EX_LAYERED for that), WS_EX_NOACTIVATE and
-	// WS_EX_TOOLWINDOW keep it out of activation, the taskbar and Alt+Tab.
+	// No redirection surface: the composition target (or the accent blur) is the window's only
+	// content, everything outside the shapes is see-through. WS_EX_TRANSPARENT keeps it out of hit
+	// testing (a window without a redirection surface needs no WS_EX_LAYERED for that),
+	// WS_EX_NOACTIVATE and WS_EX_TOOLWINDOW keep it out of activation, the taskbar and Alt+Tab.
 	DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_NOREDIRECTIONBITMAP;
 	if (layered) exStyle |= WS_EX_LAYERED;
 
@@ -198,13 +286,28 @@ std::unique_ptr<BackdropWindow> BackdropWindow::create(
 		return nullptr;
 	}
 
-	auto backdrop = std::make_unique<BackdropWindow>();
-	backdrop->mHwnd = hwnd;
-	backdrop->layered = layered;
-	SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(backdrop.get()));
+	SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(owner));
 
 	// a layered window stays invisible until it has attributes
 	if (layered) SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+
+	return hwnd;
+}
+
+std::unique_ptr<BackdropWindow> BackdropWindow::create(
+    const wuc::Compositor& compositor,
+    bool layered,
+    bool tint,
+    QString& error,
+    bool& unsupported
+) {
+	unsupported = false;
+
+	auto backdrop = std::make_unique<BackdropWindow>();
+	backdrop->layered = layered;
+	backdrop->mHwnd = createWindow(layered, backdrop.get(), error);
+	if (backdrop->mHwnd == nullptr) return nullptr;
+	auto* hwnd = backdrop->mHwnd;
 
 	BOOL enable = TRUE;
 	auto hr = DwmSetWindowAttribute(hwnd, DWMWA_USE_HOSTBACKDROPBRUSH, &enable, sizeof(enable));
@@ -254,6 +357,68 @@ std::unique_ptr<BackdropWindow> BackdropWindow::create(
 	return backdrop;
 }
 
+std::unique_ptr<BackdropWindow>
+BackdropWindow::createAccent(bool layered, bool tint, QString& error, bool& unsupported) {
+	auto backdrop = std::make_unique<BackdropWindow>();
+	backdrop->layered = layered;
+	backdrop->accent = true;
+	backdrop->accentTint = tint;
+
+	// The first piece up front: a refused accent policy means no blur at all on this system, which
+	// only shows here. setPieces reuses it for the first shape.
+	auto* hwnd = backdrop->createPiece(error, unsupported);
+	if (hwnd == nullptr) return nullptr;
+
+	backdrop->pieces.emplace_back().hwnd = hwnd;
+	return backdrop;
+}
+
+HWND BackdropWindow::createPiece(QString& error, bool& unsupported) {
+	unsupported = false;
+
+	auto* setAttribute = setWindowCompositionAttribute();
+	if (setAttribute == nullptr) {
+		error = "SetWindowCompositionAttribute is missing from user32";
+		unsupported = true;
+		return nullptr;
+	}
+
+	auto* hwnd = createWindow(this->layered, this, error);
+	if (hwnd == nullptr) return nullptr;
+
+	// DWM blurs behind the whole window. No gradient color (fully transparent, and not drawn
+	// without the flag): the tint comes from the panel above, like on Windows 11.
+	auto policy = AccentPolicy {
+	    .accentState = ACCENT_ENABLE_BLURBEHIND,
+	    .accentFlags = this->accentTint ? ACCENT_FLAG_GRADIENT_COLOR : 0,
+	    .gradientColor = this->accentTint ? 0x602020ffu : 0u,
+	    .animationId = 0,
+	};
+
+	auto data = WindowCompositionAttribData {
+	    .attribute = WCA_ACCENT_POLICY,
+	    .data = &policy,
+	    .dataSize = sizeof(policy),
+	};
+
+	if (!setAttribute(hwnd, &data)) {
+		error = QString("SetWindowCompositionAttribute refused the accent policy (%1)")
+		            .arg(GetLastError());
+		unsupported = true;
+		SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+		DestroyWindow(hwnd);
+		return nullptr;
+	}
+
+	// No show/hide animation, not hidden by Aero Peek. Corner and border attributes are Windows 11
+	// only, and a WS_POPUP window has neither on Windows 10.
+	BOOL enable = TRUE;
+	DwmSetWindowAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, &enable, sizeof(enable));
+	DwmSetWindowAttribute(hwnd, DWMWA_EXCLUDED_FROM_PEEK, &enable, sizeof(enable));
+
+	return hwnd;
+}
+
 BackdropWindow::~BackdropWindow() {
 	try {
 		this->visuals.clear();
@@ -279,9 +444,18 @@ BackdropWindow::~BackdropWindow() {
 		DestroyWindow(this->mHwnd);
 		this->mHwnd = nullptr;
 	}
+
+	for (auto& piece: this->pieces) {
+		SetWindowLongPtrW(piece.hwnd, GWLP_USERDATA, 0);
+		DestroyWindow(piece.hwnd);
+	}
+
+	this->pieces.clear();
 }
 
 bool BackdropWindow::setShapes(const QList<BlurShape>& shapes) {
+	if (this->accent) return this->setPieces(shapes);
+
 	try {
 		auto children = this->root.Children();
 		auto count = static_cast<size_t>(shapes.size());
@@ -369,7 +543,205 @@ void BackdropWindow::updateRegion(const QList<BlurShape>& shapes) {
 	this->hasRegion = true;
 }
 
+bool BackdropWindow::setPieces(const QList<BlurShape>& shapes) {
+	// Windows 10's DWM fills an accent window's whole rectangle with blur and ignores its window
+	// region, so each shape gets a window of its own at its rect, cut to its clip. Rounded corners
+	// then show small square patches of blur outside the panel's corners: the price of this path.
+	// A shape inside another one would only blur the same spot again and is skipped; shapes that
+	// only overlap blur the overlap twice.
+	struct Part {
+		QRect rect;
+		// unset when the corners are square, which needs no region
+		QRect shape;
+		int diameter = 0;
+	};
+
+	std::vector<Part> parts;
+	parts.reserve(static_cast<size_t>(shapes.size()));
+
+	for (const auto& shape: shapes) {
+		auto rect = nearestRect(shape.rect);
+		auto visible = rect.intersected(nearestRect(shape.clip));
+		if (visible.isEmpty()) continue;
+
+		auto diameter = static_cast<int>(std::lround(shape.radius * 2));
+		Part part;
+		part.rect = visible;
+
+		if (diameter >= 2) {
+			part.shape = rect.translated(-visible.topLeft());
+			part.diameter = diameter;
+		}
+
+		parts.push_back(part);
+	}
+
+	std::vector<Part> kept;
+
+	for (size_t i = 0; i < parts.size(); i++) {
+		const auto& rect = parts.at(i).rect;
+		auto inside = false;
+
+		for (size_t j = 0; j < parts.size() && !inside; j++) {
+			// of identical rects, the first one stays
+			const auto& other = parts.at(j).rect;
+			inside = j != i && other.contains(rect) && (other != rect || j < i);
+		}
+
+		if (!inside) kept.push_back(parts.at(i));
+	}
+
+	while (this->pieces.size() < kept.size()) {
+		QString error;
+		auto unsupported = false;
+		auto* hwnd = this->createPiece(error, unsupported);
+
+		if (hwnd == nullptr) {
+			qCWarning(logBlur).noquote() << "Adding an accent blur window failed:" << error;
+			return false;
+		}
+
+		this->pieces.emplace_back().hwnd = hwnd;
+	}
+
+	this->syncing = true;
+
+	for (size_t i = 0; i < kept.size(); i++) {
+		auto& piece = this->pieces.at(i);
+		const auto& part = kept.at(i);
+
+		if (piece.rect != part.rect) {
+			piece.rect = part.rect;
+			this->piecesMoved = true;
+		}
+
+		if (piece.hasRegion && piece.shape == part.shape && piece.diameter == part.diameter) continue;
+
+		// The rounded rectangle as the window region anyway: ignored by the blur on Windows 10
+		// 22H2, but harmless, it may be honored on other builds, and it keeps the corners out of
+		// hit testing. CreateRoundRectRgn leaves out the right and bottom edges, a pixel more than
+		// CreateRectRgn does.
+		HRGN hrgn = nullptr;
+		if (part.diameter >= 2) {
+			hrgn = CreateRoundRectRgn(
+			    part.shape.left(),
+			    part.shape.top(),
+			    part.shape.left() + part.shape.width() + 1,
+			    part.shape.top() + part.shape.height() + 1,
+			    part.diameter,
+			    part.diameter
+			);
+		}
+
+		// the system owns the region from here on
+		if (SetWindowRgn(piece.hwnd, hrgn, FALSE) == 0 && hrgn != nullptr) DeleteObject(hrgn);
+
+		piece.shape = part.shape;
+		piece.diameter = part.diameter;
+		piece.hasRegion = true;
+	}
+
+	// Pieces left over are hidden rather than destroyed: shapes come and go while panels animate.
+	for (auto i = kept.size(); i < this->pieces.size(); i++) hideWindow(this->pieces.at(i).hwnd);
+
+	this->syncing = false;
+
+	if (kept.size() != this->pieceCount) this->piecesMoved = true;
+	this->pieceCount = kept.size();
+	return true;
+}
+
+void BackdropWindow::showPieces() {
+	if (this->mPanel == nullptr) return;
+
+	RECT panel {};
+	if (!GetWindowRect(this->mPanel, &panel)) {
+		this->hide();
+		return;
+	}
+
+	auto panelTopmost = (GetWindowLongPtrW(this->mPanel, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+
+	// Called for every frame and every move of the panel; most of the time nothing changed.
+	if (this->shown && !this->piecesMoved && EqualRect(&panel, &this->lastRect)
+	    && this->piecesInPlace(panelTopmost))
+	{
+		return;
+	}
+
+	this->syncing = true;
+	constexpr UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+
+	// Chained below the panel: the first piece directly under it, each next one under the last.
+	HWND above = this->mPanel;
+
+	for (size_t i = 0; i < this->pieceCount; i++) {
+		const auto& piece = this->pieces.at(i);
+		auto ownTopmost = (GetWindowLongPtrW(piece.hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+
+		// A window placed after a topmost one stays in its own band, so switch bands first.
+		if (panelTopmost != ownTopmost) {
+			SetWindowPos(
+			    piece.hwnd,
+			    panelTopmost ? HWND_TOPMOST : HWND_NOTOPMOST,
+			    0,
+			    0,
+			    0,
+			    0,
+			    flags | SWP_NOMOVE | SWP_NOSIZE
+			);
+		}
+
+		SetWindowPos(
+		    piece.hwnd,
+		    above,
+		    panel.left + piece.rect.x(),
+		    panel.top + piece.rect.y(),
+		    piece.rect.width(),
+		    piece.rect.height(),
+		    flags | SWP_SHOWWINDOW
+		);
+
+		above = piece.hwnd;
+	}
+
+	this->syncing = false;
+	this->lastRect = panel;
+	this->piecesMoved = false;
+	this->shown = true;
+}
+
+bool BackdropWindow::piecesInPlace(bool panelTopmost) const {
+	HWND above = this->mPanel;
+
+	for (size_t i = 0; i < this->pieceCount; i++) {
+		auto* hwnd = this->pieces.at(i).hwnd;
+		auto topmost = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+
+		if (!IsWindowVisible(hwnd) || topmost != panelTopmost
+		    || GetWindow(above, GW_HWNDNEXT) != hwnd)
+		{
+			return false;
+		}
+
+		above = hwnd;
+	}
+
+	return true;
+}
+
+void BackdropWindow::hidePieces() {
+	this->syncing = true;
+	for (const auto& piece: this->pieces) hideWindow(piece.hwnd);
+	this->syncing = false;
+}
+
 void BackdropWindow::show() {
+	if (this->accent) {
+		this->showPieces();
+		return;
+	}
+
 	if (this->mHwnd == nullptr || this->mPanel == nullptr) return;
 
 	RECT rect {};
@@ -421,6 +793,12 @@ void BackdropWindow::show() {
 
 void BackdropWindow::hide() {
 	this->shown = false;
+
+	if (this->accent) {
+		this->hidePieces();
+		return;
+	}
+
 	if (this->mHwnd == nullptr || !IsWindowVisible(this->mHwnd)) return;
 
 	this->syncing = true;
@@ -489,6 +867,7 @@ BlurManager::BlurManager(QObject* parent): QObject(parent) {
 	this->mDebugTint = qEnvironmentVariableIntValue("QS_WINDOWS_BLUR_DEBUG") != 0;
 
 	if (!this->envEnabled) qCInfo(logBlur) << "Blur behind panels is turned off by QS_WINDOWS_BLUR.";
+	else this->detectBackend();
 
 	this->reloadTimer.setSingleShot(true);
 	this->reloadTimer.setInterval(200);
@@ -521,6 +900,32 @@ BlurManager::~BlurManager() {
 	this->registryNotifier = nullptr;
 	if (this->registryEvent != nullptr) CloseHandle(this->registryEvent);
 	if (this->personalizeKey != nullptr) RegCloseKey(this->personalizeKey);
+}
+
+void BlurManager::detectBackend() {
+	auto build = windowsBuild();
+
+	// The build decides rather than DWM's answer: DWMWA_USE_HOSTBACKDROPBRUSH is only documented
+	// from Windows 11 on, and nothing promises an older DWM refuses it instead of ignoring it. An
+	// unknown build tries the host backdrop, whose refusal still ends in markUnsupported.
+	if (build == 0 || build >= WINDOWS_11_BUILD) {
+		this->mBackend = Backend::HostBackdrop;
+		qCInfo(logBlur).nospace() << "Blur behind panels uses the host backdrop brush (Windows build "
+		                          << build << ").";
+		return;
+	}
+
+	this->mBackend = Backend::Accent;
+
+	if (setWindowCompositionAttribute() == nullptr) {
+		this->markUnsupported(
+		    QString("SetWindowCompositionAttribute is missing (Windows build %1)").arg(build)
+		);
+		return;
+	}
+
+	qCInfo(logBlur).nospace() << "Blur behind panels uses SetWindowCompositionAttribute blur behind "
+	                          << "(Windows build " << build << ").";
 }
 
 void BlurManager::shutdown() {
@@ -1048,19 +1453,34 @@ bool PanelBlur::ensureBackdrop() {
 	if (this->backdrop != nullptr) return true;
 
 	auto* manager = BlurManager::instance();
-	auto* composition = manager != nullptr ? manager->ensureComposition() : nullptr;
-	if (composition == nullptr) return false;
+	if (manager == nullptr) return false;
 
 	QString error;
 	auto unsupported = false;
 
-	this->backdrop = BackdropWindow::create(
-	    composition->compositor,
-	    manager->layeredBackdrops(),
-	    manager->debugTint(),
-	    error,
-	    unsupported
-	);
+	if (manager->backend() == BlurManager::Backend::Accent) {
+		// DWM blurs the window itself, no compositor involved. available() covers what
+		// ensureComposition checks (unsupported, shut down).
+		if (!manager->available()) return false;
+
+		this->backdrop = BackdropWindow::createAccent(
+		    manager->layeredBackdrops(),
+		    manager->debugTint(),
+		    error,
+		    unsupported
+		);
+	} else {
+		auto* composition = manager->ensureComposition();
+		if (composition == nullptr) return false;
+
+		this->backdrop = BackdropWindow::create(
+		    composition->compositor,
+		    manager->layeredBackdrops(),
+		    manager->debugTint(),
+		    error,
+		    unsupported
+		);
+	}
 
 	if (this->backdrop == nullptr) {
 		if (unsupported) manager->markUnsupported(error);

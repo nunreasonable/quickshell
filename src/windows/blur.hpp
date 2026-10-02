@@ -42,6 +42,11 @@ class WinPanelWindow;
 // Windows 11 22000), which DWM fills with the blurred desktop behind the window, clipped to
 // anti-aliased rounded rectangles.
 //
+// Windows 10 has no host backdrop for desktop windows. There the same kind of window is blurred
+// by the undocumented but long-standing SetWindowCompositionAttribute accent policy, which blurs
+// behind the whole window rectangle and ignores the window region: each shape gets a window of
+// its own at its rectangle, so rounded corners leave small square patches of blur outside them.
+//
 // The rectangles come from the panel's item tree instead of its pixels (blur_shapes.hpp): the
 // Rectangle items more opaque than the rule's ignoreAlpha, but not fully opaque, so panels
 // without transparency cost nothing. Shapes are recomputed on each frame the panel renders: an
@@ -84,11 +89,22 @@ public:
 	[[nodiscard]] QString configPath() const { return this->mConfigPath; }
 	[[nodiscard]] QVariantList rulesInfo() const;
 
+	// How backdrop windows get their blur, decided once from the Windows build.
+	enum class Backend : quint8 {
+		// Windows 11: a composition tree of host backdrop sprites.
+		HostBackdrop,
+		// Windows 10: SetWindowCompositionAttribute blur behind, one window per shape.
+		Accent,
+	};
+
+	[[nodiscard]] Backend backend() const { return this->mBackend; }
+
 	// Backdrops are not layered by default: DWM backdrop materials are reported not to render on
 	// layered windows, while WS_EX_TRANSPARENT is reported to make a window without a redirection
 	// surface click-through on its own (and a window region limited to the blurred rectangles
 	// backs that up). QS_WINDOWS_BLUR_LAYERED=1 or `"layered": true` in the rules file adds
-	// WS_EX_LAYERED (and drops the region) in case clicks still get stuck on a backdrop.
+	// WS_EX_LAYERED (and drops the region) in case clicks still get stuck on a backdrop. Accent
+	// backdrops are a window per shape, each keeping its rounded region either way.
 	[[nodiscard]] bool layeredBackdrops() const;
 	// QS_WINDOWS_BLUR_DEBUG=1: tints every blurred shape red, to tell shape placement apart from
 	// the backdrop brush rendering.
@@ -125,6 +141,7 @@ private:
 		std::optional<std::optional<qreal>> ignoreAlpha;
 	};
 
+	void detectBackend();
 	void loadFile();
 	void parse(const QByteArray& data, const QString& path);
 	void updateWatches();
@@ -152,6 +169,7 @@ private:
 	bool envLayered = false;
 	bool mDebugTint = false;
 	bool mEnabled = true;
+	Backend mBackend = Backend::HostBackdrop;
 
 	bool transparencyEffects = true;
 	bool highContrast = false;
