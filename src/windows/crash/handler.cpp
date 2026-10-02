@@ -258,11 +258,23 @@ __declspec(noinline) int debugForceStackOverflow(int depth) {
 
 // QS_DEBUG_CRASH_TEST=access-violation|stack-overflow|abort|terminate|invalid-parameter: an
 // undocumented hook for provoking each handler on purpose, meant for VM testing since this
-// couldn't be exercised in BUILD-ONLY MODE. Fires once, synchronously, at the end of init() -
+// couldn't be exercised in BUILD-ONLY MODE. Fires once, at the end of setRelaunchInfo() -
 // relaunch() above strips the variable so the restarted shell doesn't loop.
+//
+// This runs within moments of startup, which on its own would only ever exercise the "crashed
+// within 10s of launch, don't relaunch" branch of handleCrash(). QS_DEBUG_CRASH_DELAY_MS (an
+// integer) sleeps that many milliseconds first - set it above 10000 to exercise the relaunch
+// path instead, or leave it unset (or below 10000) to test the crash-loop guard itself.
 void maybeTriggerDebugCrash() {
 	auto mode = qEnvironmentVariable("QS_DEBUG_CRASH_TEST");
 	if (mode.isEmpty()) return;
+
+	auto delayMs = qEnvironmentVariable("QS_DEBUG_CRASH_DELAY_MS").toInt();
+	if (delayMs > 0) {
+		qCWarning(logCrashHandler) << "QS_DEBUG_CRASH_TEST set, waiting" << delayMs
+		                           << "ms before crashing via:" << mode;
+		Sleep(static_cast<DWORD>(delayMs));
+	}
 
 	qCWarning(logCrashHandler) << "QS_DEBUG_CRASH_TEST set, deliberately crashing via:" << mode;
 
