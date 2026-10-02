@@ -849,17 +849,22 @@ void BtWorker::onWatcherStopped(Source source, quint64 generation) {
 	} catch (const winrt::hresult_error&) {
 	}
 
-	qCWarning(logWorker) << "The" << sourceName(source) << "device watcher stopped on its own (status"
-	                     << static_cast<int>(status) << "), restarting it";
 	this->stopWatcher(source);
 
-	QTimer::singleShot(WATCHER_RETRY_MS, this, [this, source] {
-		if (!this->mAdapter) return;
-		if (isPairedSource(source)) this->startWatcher(source);
-		else this->updateDiscoveryWatchers();
-	});
-
-	if (!isPairedSource(source)) this->updateDiscoveryWatchers();
+	if (isPairedSource(source)) {
+		qCWarning(logWorker) << "The" << sourceName(source) << "device watcher stopped on its own (status"
+		                     << static_cast<int>(status) << "), restarting it in" << WATCHER_RETRY_MS << "ms";
+		QTimer::singleShot(WATCHER_RETRY_MS, this, [this, source] {
+			if (this->mAdapter) this->startWatcher(source);
+		});
+	} else {
+		// Like a BlueZ discovery that fails: it ends (discovering goes false) and can be started
+		// again; no automatic retry, so a watcher that keeps aborting can't spin.
+		qCWarning(logWorker) << "The" << sourceName(source) << "device watcher stopped on its own (status"
+		                     << static_cast<int>(status) << "), ending discovery";
+		this->mDiscoveryWanted = false;
+		this->updateDiscoveryWatchers();
+	}
 }
 
 void BtWorker::onAdded(Source source, const DeviceInformation& info) {

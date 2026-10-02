@@ -16,6 +16,13 @@ namespace qs::bluetooth {
 namespace {
 Q_LOGGING_CATEGORY(logAdapter, "quickshell.windows.bluetooth.adapter", QtWarningMsg);
 
+// Power requests are numbered process-wide, not per adapter object: the worker's "done" counter
+// outlives an adapter that is removed and re-added, and a fresh object must not start below it.
+quint64 nextPowerSeq() {
+	static quint64 seq = 0;
+	return ++seq;
+}
+
 BluetoothAdapterState::Enum stateForPower(RadioPower power) {
 	switch (power) {
 	case RadioPower::On: return BluetoothAdapterState::Enabled;
@@ -77,7 +84,7 @@ void BluetoothAdapter::setEnabled(bool enabled) {
 	this->bState = enabled ? BluetoothAdapterState::Enabling : BluetoothAdapterState::Disabling;
 	Qt::endPropertyUpdateGroup();
 
-	this->mPowerSeq++;
+	this->mPowerSeq = nextPowerSeq();
 	WinBluetooth::instance()->backend()->setPowered(enabled, this->mPowerSeq);
 }
 

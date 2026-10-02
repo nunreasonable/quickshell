@@ -27,7 +27,4 @@ struct OneShotResult {
 /// filter behind the audio endpoints of the device container `containerId`.
 OneShotResult sendOneShot(const GUID& containerId, bool reconnect);
 
-/// Number of Core Audio endpoints (any state) that belong to `containerId`.
-int countAudioEndpoints(const GUID& containerId);
-
 } // namespace qs::bluetooth::ks

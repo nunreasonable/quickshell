@@ -159,14 +159,4 @@ OneShotResult sendOneShot(const GUID& containerId, bool reconnect) {
 	return result;
 }
 
-int countAudioEndpoints(const GUID& containerId) {
-	auto hr = S_OK;
-	auto enumerator = createEnumerator(&hr);
-	if (!enumerator) return 0;
-
-	auto count = 0;
-	forEachEndpoint(enumerator.get(), containerId, [&](IMMDevice*) { count++; });
-	return count;
-}
-
 } // namespace qs::bluetooth::ks
