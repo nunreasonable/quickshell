@@ -36,6 +36,8 @@ class Clipboard: public QObject {
 
 public:
 	explicit Clipboard(QObject* parent = nullptr);
+	~Clipboard() override;
+	Q_DISABLE_COPY_MOVE(Clipboard);
 
 	[[nodiscard]] QBindable<QStringList> bindableEntries() const { return &this->bEntries; }
 
@@ -74,6 +76,7 @@ private:
 	void writeTextToClipboard(const QString& text);
 
 	std::vector<ClipboardEntry> storage; // index 0 = most recent
+	QString mCacheDir;
 	qint64 nextId = 1;
 	qint64 suppressNextCaptureFor = -1;
 

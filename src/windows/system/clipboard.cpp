@@ -8,9 +8,11 @@
 
 #include <qdir.h>
 #include <qfile.h>
+#include <qfileinfo.h>
 #include <qimage.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
+#include <qpointer.h>
 #include <qstandardpaths.h>
 #include <qstring.h>
 
@@ -24,6 +26,35 @@ QS_LOGGING_CATEGORY(logClipboard, "quickshell.windows.clipboard", QtWarningMsg);
 
 constexpr qsizetype MAX_ENTRIES = 200;
 
+// Copied images, a "<pid>-<n>" folder per Clipboard: the history lives in memory, so whatever a
+// process leaves behind (it crashed) is of no use to the next one.
+QString cacheRoot() {
+	return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation)
+	     + QStringLiteral("/quickshell/clipboard");
+}
+
+bool processAlive(DWORD pid) {
+	auto* process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+	if (process == nullptr) return false;
+	auto alive = WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+	CloseHandle(process);
+	return alive;
+}
+
+void pruneStaleCaches() {
+	auto root = QDir(cacheRoot());
+	if (!root.exists()) return;
+
+	for (const auto& entry: root.entryInfoList(QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot)) {
+		auto ok = false;
+		auto pid = entry.fileName().section('-', 0, 0).toULong(&ok);
+		if (entry.isDir() && ok && processAlive(static_cast<DWORD>(pid))) continue;
+
+		if (entry.isDir()) QDir(entry.absoluteFilePath()).removeRecursively();
+		else QFile::remove(entry.absoluteFilePath());
+	}
+}
+
 QString flattenForPreview(QString text) {
 	text.replace(QStringLiteral("\r\n"), QStringLiteral(" ⏎ "));
 	text.replace(QLatin1Char('\n'), QStringLiteral(" ⏎ "));
@@ -33,22 +64,30 @@ QString flattenForPreview(QString text) {
 } // namespace
 
 Clipboard::Clipboard(QObject* parent): QObject(parent) {
+	static int instances = 0; // NOLINT
+	if (instances == 0) pruneStaleCaches();
+	this->mCacheDir = cacheRoot() + QStringLiteral("/%1-%2").arg(GetCurrentProcessId()).arg(instances++);
+
 	auto* window = qs::windows::services::ServiceMessageWindow::instance();
 
-	if (!AddClipboardFormatListener(window->hwnd())) {
-		qCWarning(logClipboard) << "AddClipboardFormatListener failed:" << GetLastError();
+	// A config reload creates the new singleton before the old one goes away, and the window
+	// keeps both handlers; the listener stays registered for the window's lifetime.
+	static auto listening = false; // NOLINT
+	if (!listening) {
+		listening = AddClipboardFormatListener(window->hwnd()) != FALSE;
+		if (!listening) qCWarning(logClipboard) << "AddClipboardFormatListener failed:" << GetLastError();
 	}
 
-	window->addHandler(WM_CLIPBOARDUPDATE, [this](WPARAM /*w*/, LPARAM /*l*/) {
-		this->onClipboardUpdate();
+	window->addHandler(WM_CLIPBOARDUPDATE, [self = QPointer(this)](WPARAM /*w*/, LPARAM /*l*/) {
+		if (self) self->onClipboardUpdate();
 	});
 }
 
+Clipboard::~Clipboard() { QDir(this->mCacheDir).removeRecursively(); }
+
 QString Clipboard::cacheDir() {
-	auto dir = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation)
-	         + QStringLiteral("/quickshell/clipboard");
-	QDir().mkpath(dir);
-	return dir;
+	QDir().mkpath(this->mCacheDir);
+	return this->mCacheDir;
 }
 
 void Clipboard::onClipboardUpdate() {
