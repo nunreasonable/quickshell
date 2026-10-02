@@ -1,5 +1,10 @@
 #include "window_tracker.hpp"
+#include <atomic>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 
 #include <qfileinfo.h>
 #include <qguiapplication.h>
@@ -39,6 +44,92 @@ namespace qs::windows {
 
 namespace {
 Q_LOGGING_CATEGORY(logTracker, "quickshell.windows.tracker", QtWarningMsg);
+
+// WinEvents arrive on a thread of their own, never on the gui thread. The ranges below include
+// EVENT_OBJECT_LOCATIONCHANGE, which Windows also raises for the mouse cursor on every move and
+// for the text caret on every keystroke, system wide. Out of context hooks hand each event to
+// the hooking thread's message queue, and with that thread busy rendering the whole desktop's
+// mouse and keyboard input lagged. This thread drops everything but whole window events on the
+// spot and passes the rest to the gui thread in batches.
+constexpr auto EVENT_WINDOW_CLASS = L"QuickshellWindowTrackerEvents";
+constexpr UINT WM_QS_WINEVENTS = WM_APP + 1;
+
+std::mutex gEventMutex;                       // NOLINT
+std::vector<std::pair<DWORD, HWND>> gEvents;  // NOLINT
+std::atomic<bool> gEventWakePending = false;  // NOLINT
+std::atomic<HWND> gEventTarget = nullptr;     // NOLINT
+std::atomic<int> gEventHookCount = 0;         // NOLINT
+
+void CALLBACK queueEvent(
+    HWINEVENTHOOK /*hook*/,
+    DWORD event,
+    HWND hwnd,
+    LONG idObject,
+    LONG idChild,
+    DWORD /*eventThread*/,
+    DWORD /*eventTime*/
+) {
+	if (hwnd == nullptr || idObject != OBJID_WINDOW || idChild != CHILDID_SELF) return;
+
+	{
+		auto lock = std::lock_guard(gEventMutex);
+		gEvents.emplace_back(event, hwnd);
+	}
+
+	if (!gEventWakePending.exchange(true)) {
+		auto* target = gEventTarget.load();
+		if (target != nullptr) PostMessageW(target, WM_QS_WINEVENTS, 0, 0);
+	}
+}
+
+void eventThreadMain(HANDLE readyEvent) {
+	MSG msg {};
+	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+
+	std::vector<HWINEVENTHOOK> hooks;
+	auto hook = [&hooks](DWORD min, DWORD max) {
+		auto* handle = SetWinEventHook(
+		    min,
+		    max,
+		    nullptr,
+		    &queueEvent,
+		    0,
+		    0,
+		    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+		);
+
+		if (handle != nullptr) hooks.push_back(handle);
+	};
+
+	// The ranges stay tight. EVENT_OBJECT_CREATE is left out on purpose: nothing is known about
+	// a window before it is shown, and creations are by far the most frequent events.
+	hook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND);
+	hook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND);
+	hook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE);
+	hook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_NAMECHANGE);
+	hook(EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED);
+
+	gEventHookCount.store(static_cast<int>(hooks.size()));
+	SetEvent(readyEvent);
+
+	// Process lifetime: the tracker is never destroyed.
+	while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+		TranslateMessage(&msg);
+		DispatchMessageW(&msg);
+	}
+
+	for (auto* handle: hooks) UnhookWinEvent(handle);
+}
+
+LRESULT CALLBACK eventWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+	if (msg == WM_QS_WINEVENTS) {
+		WindowTracker::instance()->drainEvents();
+		return 0;
+	}
+
+	return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
 
 constexpr const wchar_t* UWP_FRAME_CLASS = L"ApplicationFrameWindow";
 constexpr const wchar_t* UWP_CORE_CLASS = L"Windows.UI.Core.CoreWindow";
@@ -397,51 +488,66 @@ WindowTracker::WindowTracker() {
 		this->schedule();
 	});
 
-	auto hook = [this](DWORD min, DWORD max) {
-		auto* handle = SetWinEventHook(
-		    min,
-		    max,
-		    nullptr,
-		    &WindowTracker::eventProc,
-		    0,
-		    0,
-		    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
-		);
-
-		if (handle == nullptr) {
-			qCWarning(logTracker) << "SetWinEventHook failed for" << Qt::hex << min << max;
-		} else {
-			this->hooks.append(handle);
-		}
-	};
-
-	// Out of context hooks deliver every event in the range through our message queue, so the
-	// ranges stay tight. EVENT_OBJECT_CREATE is left out on purpose: nothing is known about a
-	// window before it is shown, and creations are by far the most frequent events.
-	hook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND);
-	hook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND);
-	hook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE);
-	hook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_NAMECHANGE);
-	hook(EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED);
+	this->startEventThread();
 
 	this->rescan();
 }
 
-WindowTracker::~WindowTracker() {
-	for (auto* hook: this->hooks) UnhookWinEvent(hook);
+WindowTracker::~WindowTracker() = default;
+
+void WindowTracker::startEventThread() {
+	WNDCLASSW wndClass {};
+	wndClass.lpfnWndProc = &eventWindowProc;
+	wndClass.hInstance = GetModuleHandleW(nullptr);
+	wndClass.lpszClassName = EVENT_WINDOW_CLASS;
+	RegisterClassW(&wndClass);
+
+	auto* window = CreateWindowExW(
+	    0,
+	    EVENT_WINDOW_CLASS,
+	    L"",
+	    0,
+	    0,
+	    0,
+	    0,
+	    0,
+	    HWND_MESSAGE,
+	    nullptr,
+	    wndClass.hInstance,
+	    nullptr
+	);
+
+	if (window == nullptr) {
+		qCWarning(logTracker) << "Failed to create the event window, windows won't be tracked live.";
+		return;
+	}
+
+	gEventTarget.store(window);
+
+	auto* ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+	if (ready == nullptr) return;
+
+	// Never joined: like the tracker, it lives as long as the process.
+	std::thread(&eventThreadMain, ready).detach();
+	WaitForSingleObject(ready, INFINITE);
+	CloseHandle(ready);
+
+	if (gEventHookCount.load() < 5) {
+		qCWarning(logTracker) << "Only" << gEventHookCount.load() << "of 5 window event hooks installed.";
+	}
 }
 
-void CALLBACK WindowTracker::eventProc(
-    HWINEVENTHOOK /*hook*/,
-    DWORD event,
-    HWND hwnd,
-    LONG idObject,
-    LONG idChild,
-    DWORD /*eventThread*/,
-    DWORD /*eventTime*/
-) {
-	if (hwnd == nullptr || idObject != OBJID_WINDOW || idChild != CHILDID_SELF) return;
-	WindowTracker::instance()->onEvent(event, hwnd);
+void WindowTracker::drainEvents() {
+	// Cleared before taking the batch, so an event queued meanwhile posts another wakeup.
+	gEventWakePending.store(false);
+
+	std::vector<std::pair<DWORD, HWND>> events;
+	{
+		auto lock = std::lock_guard(gEventMutex);
+		events.swap(gEvents);
+	}
+
+	for (const auto& [event, hwnd]: events) this->onEvent(event, hwnd);
 }
 
 void WindowTracker::onEvent(DWORD event, HWND hwnd) {

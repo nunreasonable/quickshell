@@ -135,6 +135,9 @@ class WindowTracker: public QObject {
 public:
 	static WindowTracker* instance();
 
+	// Gui thread, from the event thread's wakeup: handles the window events queued since the last.
+	void drainEvents();
+
 	[[nodiscard]] const QList<TrackedWindow*>& windows() const { return this->mWindows; }
 	[[nodiscard]] TrackedWindow* activeWindow() const { return this->mActive; }
 	[[nodiscard]] TrackedWindow* windowFor(HWND hwnd) const { return this->byHwnd.value(hwnd); }
@@ -166,16 +169,7 @@ private:
 		bool desktop = false;
 	};
 
-	static void CALLBACK eventProc(
-	    HWINEVENTHOOK hook,
-	    DWORD event,
-	    HWND hwnd,
-	    LONG idObject,
-	    LONG idChild,
-	    DWORD eventThread,
-	    DWORD eventTime
-	);
-
+	void startEventThread();
 	void onEvent(DWORD event, HWND hwnd);
 	void schedule();
 	void flush();
@@ -190,7 +184,6 @@ private:
 	void onScreensChanged();
 	void onDesktopsChanged();
 
-	QList<HWINEVENTHOOK> hooks;
 	QList<TrackedWindow*> mWindows;
 	QHash<HWND, TrackedWindow*> byHwnd;
 	TrackedWindow* mActive = nullptr;
