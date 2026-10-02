@@ -440,7 +440,7 @@ void BtWorker::refreshAdapter() {
 	try {
 		adapter = WinRtAdapter::GetDefaultAsync().get();
 	} catch (const winrt::hresult_error& e) {
-		qCWarning(logWorker) << "WinRtAdapter::GetDefaultAsync failed:" << hresultText(e.code());
+		qCWarning(logWorker) << "BluetoothAdapter::GetDefaultAsync failed:" << hresultText(e.code());
 	}
 
 	if (!adapter) {
@@ -482,7 +482,7 @@ void BtWorker::setUpAdapter(const WinRtAdapter& adapter) {
 	try {
 		this->mRadio = adapter.GetRadioAsync().get();
 	} catch (const winrt::hresult_error& e) {
-		qCWarning(logWorker) << "WinRtAdapter::GetRadioAsync failed:" << hresultText(e.code());
+		qCWarning(logWorker) << "BluetoothAdapter::GetRadioAsync failed:" << hresultText(e.code());
 	}
 
 	if (this->mRadio) {
@@ -1052,7 +1052,7 @@ void BtWorker::onLeDeviceReady(const QString& key, const QString& id, const WinR
 			} catch (const winrt::hresult_error&) {
 			}
 		} else if (transport && transport->id == id) {
-			qCDebug(logWorker) << "No WinRtLeDevice for" << id;
+			qCDebug(logWorker) << "No BluetoothLEDevice for" << id;
 			transport->objectRequested = false;
 		}
 		return;
