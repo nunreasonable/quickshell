@@ -104,6 +104,26 @@ QString Wallpaper::currentWallpaper() {
 			CoTaskMemFree(path);
 			if (!result.isEmpty()) return result;
 		}
+
+		// With a different picture per monitor the shared query comes back empty; take the
+		// first monitor's own. The SPI fallback below would only give TranscodedWallpaper,
+		// Windows' cached copy, which can be an older picture.
+		UINT count = 0;
+		if (SUCCEEDED(wallpaper->GetMonitorDevicePathCount(&count))) {
+			for (UINT i = 0; i < count; i++) {
+				LPWSTR monitorId = nullptr;
+				if (FAILED(wallpaper->GetMonitorDevicePathAt(i, &monitorId)) || monitorId == nullptr) continue;
+
+				LPWSTR monitorPath = nullptr;
+				auto ok = SUCCEEDED(wallpaper->GetWallpaper(monitorId, &monitorPath)) && monitorPath != nullptr;
+				CoTaskMemFree(monitorId);
+				if (!ok) continue;
+
+				auto result = QString::fromWCharArray(monitorPath);
+				CoTaskMemFree(monitorPath);
+				if (!result.isEmpty() && QFileInfo::exists(result)) return result;
+			}
+		}
 	} else {
 		qCDebug(logWallpaper) << "IDesktopWallpaper unavailable for read:" << Qt::hex << hr;
 	}
