@@ -25,7 +25,9 @@ add_subdirectory(widgets)
 add_subdirectory(ui)
 add_subdirectory(windowmanager)
 
-if (CRASH_HANDLER)
+if (CRASH_HANDLER AND NOT WIN32)
+	# The Windows crash handler (Win32 minidumps, no cpptrace/libunwind) lives under
+	# src/windows/crash instead, added from src/windows/CMakeLists.txt.
 	add_subdirectory(crash)
 endif()
 

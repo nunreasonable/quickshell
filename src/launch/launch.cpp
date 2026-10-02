@@ -28,7 +28,11 @@
 #include "launch_p.hpp"
 
 #if CRASH_HANDLER
+#ifdef _WIN32
+#include "../windows/crash/handler.hpp"
+#else
 #include "../crash/handler.hpp"
+#endif
 #endif
 
 namespace qs::launch {
