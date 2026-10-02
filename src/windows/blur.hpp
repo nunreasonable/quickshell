@@ -26,7 +26,6 @@
 
 #include "blur_shapes.hpp"
 
-class QQuickItem;
 class QWinEventNotifier;
 
 namespace qs::windows {
@@ -172,8 +171,6 @@ private:
 	std::unique_ptr<Composition> composition;
 
 	QList<PanelBlur*> panels;
-
-	friend class PanelBlur;
 };
 
 // Blur state of one panel, owned by its WinPanelWindow. Survives reloads through adopt(), like
@@ -243,8 +240,8 @@ private:
 /// blur behind the whole surface). Later matching rules override earlier ones.
 ///
 /// Blur shows behind the Rectangle items of a panel whose fill (opacity included) is more opaque
-/// than `ignoreAlpha` and not fully opaque, and is off while the system's Transparency effects
-/// setting, a high contrast theme or energy saver is on.
+/// than `ignoreAlpha` and not fully opaque. It is off while the system's Transparency effects
+/// setting is off, or a high contrast theme or energy saver is on.
 class BackdropBlur: public QObject {
 	Q_OBJECT;
 	/// Turns blur behind panels on or off for this session. Defaults to true.
