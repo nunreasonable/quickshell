@@ -1,5 +1,7 @@
 #pragma once
 
+#include <windows.h>
+
 #include <functional>
 
 #include <qcontainerfwd.h>
@@ -27,9 +29,10 @@ struct NotificationServerSupport {
 	QVector<QString> extraHints;
 };
 
-// Process wide notification store, the Windows counterpart of the Linux D-Bus server. There is
-// no protocol for other apps to send to it; notifications come from the shell itself
-// (notifySend) and from the Windows notification center (ToastMirror).
+// Process wide notification store, the Windows counterpart of the Linux D-Bus server.
+// Notifications come from the shell itself (notifySend), from other qs processes of the same
+// config through the session bus window (forwardToOwner) and from the Windows notification
+// center (ToastMirror).
 class NotificationServer: public QObject {
 	Q_OBJECT;
 
@@ -92,6 +95,16 @@ private:
 	);
 
 	[[nodiscard]] bool hasReceiver() const;
+
+	// Like the org.freedesktop.Notifications bus name, one process per session owns the
+	// notifications: the first shell.qml instance. Others (settings, welcome, dialogs started
+	// from the same config) forward notifySend to it and don't mirror Windows toasts.
+	void claimSession();
+	quint32 forwardToOwner(const QString& summary, const QString& body, const QStringList& args);
+	static LRESULT CALLBACK busWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+	bool mOwner = false;
+	void* ownerMutex = nullptr;
+	HWND busWindow = nullptr;
 
 	ToastMirror* mirror();
 	void onToastAdded(const ToastSnapshot& toast);

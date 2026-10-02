@@ -3,6 +3,9 @@
 #include <utility>
 
 #include <qcontainerfwd.h>
+#include <qfileinfo.h>
+#include <qjsonarray.h>
+#include <qjsondocument.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
 #include <qmetaobject.h>
@@ -11,6 +14,7 @@
 #include <qtypes.h>
 
 #include "../../../core/desktopentry.hpp"
+#include "../../../core/instanceinfo.hpp"
 #include "../../../core/logcat.hpp"
 #include "../../../core/model.hpp"
 #include "../../desktopentry_backend.hpp"
@@ -24,9 +28,126 @@ namespace qs::windows::services::notifications {
 // NOLINTNEXTLINE(misc-use-internal-linkage)
 QS_LOGGING_CATEGORY(logNotifications, "quickshell.windows.notifications", QtWarningMsg);
 
+namespace {
+constexpr auto BUS_CLASS = L"QuickshellNotificationBus";
+constexpr auto BUS_MUTEX = L"Local\\quickshell-notification-bus";
+constexpr ULONG_PTR NOTIFY_SEND_MAGIC = 0x514e5331; // "QNS1"
+} // namespace
+
 NotificationServer* NotificationServer::instance() {
-	static auto* instance = new NotificationServer(); // NOLINT
+	static auto* instance = [] {
+		auto* server = new NotificationServer(); // NOLINT
+		server->claimSession();
+		return server;
+	}();
+
 	return instance;
+}
+
+void NotificationServer::claimSession() {
+	// Only a config's main entry point serves; a settings window opened from it never does,
+	// even when it happens to start first.
+	auto entry = QFileInfo(InstanceInfo::CURRENT.configPath).fileName();
+	if (!entry.isEmpty() && entry.compare("shell.qml", Qt::CaseInsensitive) != 0) return;
+
+	auto* mutex = CreateMutexW(nullptr, FALSE, BUS_MUTEX);
+	if (mutex == nullptr) return;
+
+	if (GetLastError() == ERROR_ALREADY_EXISTS) {
+		CloseHandle(mutex);
+		qCInfo(logNotifications) << "Another shell owns the notification server; forwarding to it.";
+		return;
+	}
+
+	// The handle stays open for the life of the process; the name goes away with it.
+	this->ownerMutex = mutex;
+	this->mOwner = true;
+
+	WNDCLASSW wndClass {};
+	wndClass.lpfnWndProc = &NotificationServer::busWindowProc;
+	wndClass.hInstance = GetModuleHandleW(nullptr);
+	wndClass.lpszClassName = BUS_CLASS;
+	RegisterClassW(&wndClass);
+
+	this->busWindow = CreateWindowExW(
+	    0,
+	    BUS_CLASS,
+	    L"",
+	    0,
+	    0,
+	    0,
+	    0,
+	    0,
+	    HWND_MESSAGE,
+	    nullptr,
+	    wndClass.hInstance,
+	    nullptr
+	);
+
+	if (this->busWindow == nullptr) {
+		qCWarning(logNotifications) << "Could not create the notification bus window; other qs "
+		                               "processes will show their notifications themselves.";
+	}
+}
+
+LRESULT CALLBACK
+NotificationServer::busWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+	if (msg == WM_COPYDATA) {
+		const auto* data = reinterpret_cast<const COPYDATASTRUCT*>(lParam); // NOLINT
+		if (data == nullptr || data->dwData != NOTIFY_SEND_MAGIC) return 0;
+
+		auto json = QJsonDocument::fromJson(
+		    QByteArray(static_cast<const char*>(data->lpData), static_cast<qsizetype>(data->cbData))
+		);
+
+		auto list = json.array().toVariantList();
+		if (list.length() < 2) return 0;
+
+		auto summary = list.takeFirst().toString();
+		auto body = list.takeFirst().toString();
+		QStringList args;
+		for (const auto& arg: list) args.append(arg.toString());
+
+		return NotificationServer::instance()->notifySend(summary, body, args);
+	}
+
+	return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+quint32 NotificationServer::forwardToOwner(
+    const QString& summary,
+    const QString& body,
+    const QStringList& args
+) {
+	auto* owner = FindWindowExW(HWND_MESSAGE, nullptr, BUS_CLASS, nullptr);
+	if (owner == nullptr) return 0;
+
+	QJsonArray array {summary, body};
+	for (const auto& arg: args) array.append(arg);
+	auto payload = QJsonDocument(array).toJson(QJsonDocument::Compact);
+
+	COPYDATASTRUCT data {};
+	data.dwData = NOTIFY_SEND_MAGIC;
+	data.cbData = static_cast<DWORD>(payload.size());
+	data.lpData = payload.data();
+
+	DWORD_PTR result = 0;
+	auto ok = SendMessageTimeoutW(
+	    owner,
+	    WM_COPYDATA,
+	    0,
+	    reinterpret_cast<LPARAM>(&data),
+	    SMTO_ABORTIFHUNG | SMTO_BLOCK,
+	    2000,
+	    &result
+	);
+
+	if (ok == 0 || result == 0) {
+		qCInfo(logNotifications) << "Forwarding a notification to the shell failed; showing it here.";
+		return 0;
+	}
+
+	return static_cast<quint32>(result);
 }
 
 void NotificationServer::switchGeneration(bool reEmit, const std::function<void()>& clearHook) {
@@ -116,6 +237,10 @@ quint32 NotificationServer::notifySend(
     const QString& body,
     const QStringList& args
 ) {
+	if (!this->mOwner) {
+		if (auto id = this->forwardToOwner(summary, body, args)) return id;
+	}
+
 	auto request = parseNotifySendArgs(args);
 
 	auto replacing = request.replacesId != 0 && this->idMap.contains(request.replacesId);
@@ -258,6 +383,8 @@ ToastMirror* NotificationServer::mirror() {
 }
 
 void NotificationServer::setMirrorEnabled(bool enabled) {
+	// The owner already shows every Windows toast; a second mirror would show them twice.
+	if (!this->mOwner) enabled = false;
 	if (!enabled && !this->mMirror) return;
 	this->mirror()->setEnabled(enabled);
 }
