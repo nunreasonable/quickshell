@@ -1,6 +1,7 @@
 # Windows backend: PanelWindow on top of Win32 (AppBars for exclusive zones, DWM attributes,
 # a low level mouse hook for input masks), global shortcuts (RegisterHotKey + a low level
-# keyboard hook) and focus grabs, the window / virtual desktop tracker, stand-in
+# keyboard hook) and focus grabs, the window / virtual desktop tracker, the
+# Windows.Graphics.Capture engine (capture.cpp) behind ScreencopyView and Screenshot, stand-in
 # Quickshell.Wayland and Quickshell.Hyprland modules built on it, small native singletons
 # (system/) ii's services call into instead of spawning Linux CLIs, and native service modules
 # (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower, Mpris on GSMTC.
@@ -15,6 +16,7 @@ qt_add_library(quickshell-windows STATIC
 	focus_grab.cpp
 	virtual_desktops.cpp
 	window_tracker.cpp
+	capture.cpp
 	desktopentry_backend.cpp
 	appicon.cpp
 	system/session.cpp
@@ -25,6 +27,7 @@ qt_add_library(quickshell-windows STATIC
 	system/credentials.cpp
 	system/input.cpp
 	system/night_light.cpp
+	system/screenshot.cpp
 )
 
 qt_add_qml_module(quickshell-windows
@@ -62,6 +65,11 @@ target_link_libraries(quickshell-windows PRIVATE
 	ole32
 	oleaut32
 	uuid
+	# capture.cpp: WinRT activation for Windows.Graphics.Capture and the D3D11 device it runs on.
+	windowsapp
+	runtimeobject
+	d3d11
+	dxgi
 )
 target_link_libraries(quickshell-windows-init PRIVATE Qt::Quick Qt::Qml)
 
