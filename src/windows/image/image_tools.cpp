@@ -146,6 +146,8 @@ QVariantMap ImageTools::leastBusyRegion(
     int verticalPadding,
     bool busiest
 ) {
+	if (imagePath.isEmpty()) return QVariantMap {{"error", QStringLiteral("No image")}};
+
 	QImage original(imagePath);
 	if (original.isNull()) {
 		qCWarning(logImageTools) << "leastBusyRegion: could not load" << imagePath;
