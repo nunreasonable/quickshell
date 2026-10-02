@@ -9,6 +9,7 @@
 #include <qtmetamacros.h>
 #include <qtypes.h>
 
+#include "../../../core/desktopentry.hpp"
 #include "../../../core/logcat.hpp"
 #include "../../../core/model.hpp"
 #include "../../desktopentry_backend.hpp"
@@ -206,6 +207,10 @@ void NotificationServer::activateApp(const QString& aumid, const QString& deskto
 
 ToastMirror* NotificationServer::mirror() {
 	if (this->mMirror) return this->mMirror;
+
+	// Mirrored toasts are matched to their Start menu entries by AUMID; make sure the (async)
+	// Apps folder scan has started before the first one can arrive.
+	DesktopEntryManager::instance();
 
 	this->mMirror = new ToastMirror(this);
 
