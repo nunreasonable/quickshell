@@ -5,6 +5,7 @@
 
 #include <qcoreapplication.h>
 #include <qdir.h>
+#include <qendian.h>
 #include <qfile.h>
 #include <qfileinfo.h>
 #include <qhash.h>
@@ -153,6 +154,69 @@ bool invokeWithString(QObject* object, const char* name, const QString& argument
 		}
 	}
 
+	return false;
+}
+
+// Tries to start one already-expanded exec command; false if the program couldn't be
+// found/started.
+// Whether `program` (a path, or a name looked up on PATH) is a console subsystem executable.
+bool isConsoleProgram(const QString& program) {
+	auto path = QFileInfo(program).isFile() ? program : QStandardPaths::findExecutable(program);
+	if (path.isEmpty()) return false;
+
+	QFile file(path);
+	if (!file.open(QIODevice::ReadOnly)) return false;
+
+	auto dos = file.read(0x40);
+	if (dos.length() < 0x40 || !dos.startsWith("MZ")) return false;
+	auto peOffset = qFromLittleEndian<quint32>(dos.constData() + 0x3c);
+
+	// PE signature (4), COFF header (20), then Subsystem at offset 68 of the optional header.
+	if (!file.seek(peOffset)) return false;
+	auto header = file.read(4 + 20 + 70);
+	if (header.length() < 4 + 20 + 70 || !header.startsWith(QByteArray("PE\0\0", 4))) return false;
+
+	auto subsystem = qFromLittleEndian<quint16>(header.constData() + 4 + 20 + 68);
+	return subsystem == IMAGE_SUBSYSTEM_WINDOWS_CUI;
+}
+
+bool tryStartDetached(const QString& command) {
+	auto parts = QProcess::splitCommand(command);
+	if (parts.isEmpty()) return false;
+
+	// Bare names next to our own executable (qs.exe, qsw.exe) run from there, everything else
+	// is looked up on PATH.
+	auto program = parts.takeFirst();
+	if (!program.contains('/') && !program.contains('\\')) {
+		auto local = QDir(QCoreApplication::applicationDirPath()).filePath(program);
+		if (QFileInfo(local).isFile()) program = local;
+	}
+
+	auto process = QProcess();
+	process.setProgram(program);
+	process.setArguments(parts);
+	process.setWorkingDirectory(QDir::homePath());
+
+	// Console programs (powershell.exe, the fallback when Windows Terminal is missing) get a
+	// console window of their own, like when started from Explorer. Qt would start them without
+	// one, since the shell has no console: invisible. They also mustn't get the shell's own
+	// standard handles, which are no console at all: PowerShell reads end of input there and
+	// quits. `conhost.exe --headless <command>` runs a console program hidden on purpose.
+	if (isConsoleProgram(program)) {
+		process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
+			args->flags &= ~static_cast<DWORD>(CREATE_NO_WINDOW);
+			args->flags |= CREATE_NEW_CONSOLE;
+			args->inheritHandles = false;
+			args->startupInfo->dwFlags &= ~static_cast<DWORD>(STARTF_USESTDHANDLES);
+			args->startupInfo->hStdInput = nullptr;
+			args->startupInfo->hStdOutput = nullptr;
+			args->startupInfo->hStdError = nullptr;
+		});
+	}
+
+	if (process.startDetached()) return true;
+
+	qCDebug(logHotkeys) << "Could not start" << command << ":" << process.errorString();
 	return false;
 }
 
@@ -920,37 +984,28 @@ void HotkeyManager::runDispatch(const Bind& bind) {
 }
 
 void HotkeyManager::runExec(const Bind& bind) const {
-	auto command = bind.argument;
-	command.replace("%SHELL%", this->shellDir, Qt::CaseInsensitive);
+	// A command containing " || " is a list of alternatives, tried in order until one starts
+	// (like Linux's launch_first_available.sh), for programs not on every Windows version -
+	// e.g. "wt.exe || powershell.exe" since Windows Terminal isn't preinstalled on Windows 10.
+	auto alternatives = bind.argument.split(QStringLiteral(" || "));
 
-	// remaining %VAR%s from the environment
-	auto source = command.toStdWString();
-	auto size = ExpandEnvironmentStringsW(source.c_str(), nullptr, 0);
-	if (size > 0) {
-		auto buffer = std::wstring(size, L'\0');
-		ExpandEnvironmentStringsW(source.c_str(), buffer.data(), size);
-		command = QString::fromWCharArray(buffer.c_str());
+	for (const auto& alternative: alternatives) {
+		auto command = alternative;
+		command.replace("%SHELL%", this->shellDir, Qt::CaseInsensitive);
+
+		// remaining %VAR%s from the environment
+		auto source = command.toStdWString();
+		auto size = ExpandEnvironmentStringsW(source.c_str(), nullptr, 0);
+		if (size > 0) {
+			auto buffer = std::wstring(size, L'\0');
+			ExpandEnvironmentStringsW(source.c_str(), buffer.data(), size);
+			command = QString::fromWCharArray(buffer.c_str());
+		}
+
+		if (tryStartDetached(command)) return;
 	}
 
-	auto parts = QProcess::splitCommand(command);
-	if (parts.isEmpty()) return;
-
-	// Bare names next to our own executable (qs.exe, qsw.exe) run from there, everything else
-	// is looked up on PATH. Console programs get no console window since the shell has none.
-	auto program = parts.takeFirst();
-	if (!program.contains('/') && !program.contains('\\')) {
-		auto local = QDir(QCoreApplication::applicationDirPath()).filePath(program);
-		if (QFileInfo(local).isFile()) program = local;
-	}
-
-	auto process = QProcess();
-	process.setProgram(program);
-	process.setArguments(parts);
-	process.setWorkingDirectory(QDir::homePath());
-
-	if (!process.startDetached()) {
-		qCWarning(logHotkeys) << "Failed to start" << command << ":" << process.errorString();
-	}
+	qCWarning(logHotkeys) << "Failed to start any alternative of" << bind.argument;
 }
 
 void HotkeyManager::runIpc(const Bind& bind) {
