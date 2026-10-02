@@ -25,6 +25,9 @@ qt_add_library(quickshell-windows STATIC
 	system/credentials.cpp
 	system/input.cpp
 	system/night_light.cpp
+	system/wallpaper.cpp
+	image/image_tools.cpp
+	image/thumbnailer.cpp
 )
 
 qt_add_qml_module(quickshell-windows
@@ -38,8 +41,12 @@ qs_add_module_deps_light(quickshell-windows Quickshell)
 install_qml_module(quickshell-windows)
 
 # qmltyperegistrar emits "#if __has_include(<foo.hpp>)" using just the header's basename, so
-# system/ (where the new native singletons' headers live) needs its own spot on the include path.
-target_include_directories(quickshell-windows PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/system)
+# system/ and image/ (where the native singletons' headers live) need their own spot on the
+# include path.
+target_include_directories(quickshell-windows PRIVATE
+	${CMAKE_CURRENT_SOURCE_DIR}/system
+	${CMAKE_CURRENT_SOURCE_DIR}/image
+)
 
 add_subdirectory(wayland)
 add_subdirectory(services)
