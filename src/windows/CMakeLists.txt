@@ -26,6 +26,7 @@ qt_add_library(quickshell-windows STATIC
 	system/input.cpp
 	system/night_light.cpp
 	system/wallpaper.cpp
+	system/fs_utils.cpp
 	image/image_tools.cpp
 	image/thumbnailer.cpp
 )
