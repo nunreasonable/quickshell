@@ -25,6 +25,7 @@
 #include "../window/panelinterface.hpp"
 #include "../window/proxywindow.hpp"
 #include "appbar.hpp"
+#include "blur.hpp"
 #include "input_mask.hpp"
 #include "util.hpp"
 
@@ -119,7 +120,9 @@ bool WinProxiedWindow::nativeEvent(const QByteArray& eventType, void* message, q
 
 // WinPanelWindow
 
-WinPanelWindow::WinPanelWindow(QObject* parent): ProxyWindowBase(parent) {
+WinPanelWindow::WinPanelWindow(QObject* parent)
+    : ProxyWindowBase(parent)
+    , blur(new PanelBlur(this)) {
 	this->bcExclusiveZone.setBinding([this]() -> qint32 {
 		switch (this->bExclusionMode.value()) {
 		case ExclusionMode::Ignore: return 0;
@@ -156,6 +159,8 @@ ProxiedWindow* WinPanelWindow::retrieveWindow(QObject* oldInstance) {
 	// Take over the AppBar registration instead of removing and re-adding it, which would
 	// make every maximized window re-layout on each reload.
 	this->appBar.adopt(old->appBar);
+	// Same for the blur backdrop, which would otherwise flicker.
+	this->blur->adopt(old->blur);
 
 	return old->disownWindow();
 }
@@ -217,6 +222,7 @@ void WinPanelWindow::releaseNativeState() {
 	}
 
 	this->appBar.remove();
+	this->blur->release();
 	WinPanelStack::instance()->removePanel(this);
 }
 
@@ -270,6 +276,7 @@ void WinPanelWindow::nativeInit() {
 	this->updateDimensions();
 	this->updateLayer();
 	this->updateFocus();
+	this->blur->attach();
 }
 
 void WinPanelWindow::applyNativeStyles() {
@@ -290,6 +297,7 @@ void WinPanelWindow::onWindowVisibleChanged() {
 		WinPanelStack::instance()->removePanel(this);
 	}
 
+	this->blur->syncPlacement();
 	InputMaskTracker::instance()->refresh();
 }
 
@@ -512,6 +520,8 @@ void WinPanelWindow::applyInputMask(const QRegion& region, bool hasMask) {
 
 	if (hasMask) InputMaskTracker::instance()->setMask(this->window, region);
 	else InputMaskTracker::instance()->remove(this->window);
+
+	this->blur->setInputMask(region, hasMask);
 }
 
 bool WinPanelWindow::handleNativeMessage(MSG* msg, qintptr* result) {
@@ -534,6 +544,7 @@ bool WinPanelWindow::handleNativeMessage(MSG* msg, qintptr* result) {
 		// Explorer restarted: all AppBar registrations and the work area are gone.
 		this->appBar.invalidate();
 		this->scheduleUpdateDimensions();
+		this->blur->syncPlacement();
 		return false;
 	}
 
@@ -550,6 +561,24 @@ bool WinPanelWindow::handleNativeMessage(MSG* msg, qintptr* result) {
 	case WM_WINDOWPOSCHANGED:
 		this->appBar.notifyWindowPosChanged();
 		InputMaskTracker::instance()->refresh();
+		// moved, resized, restacked, shown or hidden: the blur backdrop follows
+		this->blur->syncPlacement();
+		break;
+	// Transparency effects, high contrast and energy saver turn blur off. Every top level window
+	// gets these broadcasts; the manager coalesces them.
+	case WM_SETTINGCHANGE:
+	case WM_THEMECHANGED:
+	case WM_SYSCOLORCHANGE:
+		if (auto* manager = BlurManager::instance()) manager->scheduleSystemCheck();
+		break;
+	case WM_POWERBROADCAST:
+		if (msg->wParam == PBT_APMPOWERSTATUSCHANGE) {
+			if (auto* manager = BlurManager::instance()) manager->scheduleSystemCheck();
+		}
+		break;
+	// DWM restarted: composition targets may be gone.
+	case WM_DWMCOMPOSITIONCHANGED:
+		if (auto* manager = BlurManager::instance()) manager->scheduleSystemCheck(true);
 		break;
 	case WM_WINDOWPOSCHANGING:
 		if (this->bLayer == PanelLayer::Background || this->bLayer == PanelLayer::Bottom) {

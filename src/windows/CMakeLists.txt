@@ -1,5 +1,6 @@
 # Windows backend: PanelWindow on top of Win32 (AppBars for exclusive zones, DWM attributes,
-# a low level mouse hook for input masks), global shortcuts (RegisterHotKey + a low level
+# a low level mouse hook for input masks, blur behind panels from layer rules through a
+# Windows.UI.Composition host backdrop), global shortcuts (RegisterHotKey + a low level
 # keyboard hook) and focus grabs, the window / virtual desktop tracker, the
 # Windows.Graphics.Capture engine (capture.cpp) behind ScreencopyView and Screenshot, stand-in
 # Quickshell.Wayland and Quickshell.Hyprland modules built on it, small native singletons
@@ -13,6 +14,8 @@ qt_add_library(quickshell-windows STATIC
 	appbar.cpp
 	input_mask.cpp
 	panel_window.cpp
+	blur.cpp
+	blur_shapes.cpp
 	keyboard_hook.cpp
 	hotkeys.cpp
 	focus_grab.cpp
@@ -75,6 +78,8 @@ add_library(quickshell-windows-init OBJECT init.cpp)
 
 target_link_libraries(quickshell-windows PRIVATE
 	Qt::Quick
+	# blur.cpp reads Rectangle fills (QQuickRectangle)
+	Qt::QuickPrivate
 	quickshell-windows-services
 	user32
 	shell32
@@ -96,6 +101,8 @@ target_link_libraries(quickshell-windows PRIVATE
 	# network*.cpp
 	wlanapi
 	iphlpapi
+	# blur.cpp: CreateDispatcherQueueController for Windows.UI.Composition
+	CoreMessaging
 )
 target_link_libraries(quickshell-windows-init PRIVATE Qt::Quick Qt::Qml)
 

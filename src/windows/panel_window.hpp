@@ -46,6 +46,7 @@ enum class PanelKeyboardFocus : quint8 {
 
 class WinPanelWindow;
 class WinPanelStack;
+class PanelBlur;
 
 // Backing window of a WinPanelWindow. Forwards native messages and the creation of the HWND
 // to whichever panel currently owns it (the owner changes across reloads).
@@ -172,6 +173,7 @@ private:
 
 	QPointer<QScreen> mTrackedScreen;
 	WinAppBar appBar;
+	PanelBlur* blur = nullptr;
 	QObject* mLayershellAttached = nullptr;
 	bool dimensionsUpdatePending = false;
 	bool focusGrabPending = false;
@@ -196,6 +198,7 @@ private:
 	// clang-format on
 
 	friend class WinPanelStack;
+	friend class PanelBlur;
 };
 
 class WinPanelInterface: public PanelWindowInterface {
