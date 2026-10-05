@@ -48,6 +48,12 @@ public:
 	[[nodiscard]] QBindable<QString> bindableSecurity() const { return &this->bSecurity; }
 	[[nodiscard]] QBindable<bool> bindableHasProfile() const { return &this->bHasProfile; }
 
+	// Not exposed to QML: internal plumbing for Network::connectToNetwork/forgetNetwork, which
+	// need the real saved profile name (it can differ from the SSID) while the UI only ever
+	// deals in SSIDs. Plain (non bindable) since nothing binds to it.
+	[[nodiscard]] const QString& profileName() const { return this->mProfileName; }
+	void setProfileName(const QString& v) { this->mProfileName = v; }
+
 	// Mutated only by Network/NetworkWifiBackend (GUI thread) while rebuilding the list.
 	void setSsid(const QString& v) { this->bSsid = v; }
 	void setBssid(const QString& v) { this->bBssid = v; }
@@ -76,6 +82,8 @@ private:
 	Q_OBJECT_BINDABLE_PROPERTY(NetworkWifiNetwork, QString, bSecurity, &NetworkWifiNetwork::securityChanged);
 	Q_OBJECT_BINDABLE_PROPERTY(NetworkWifiNetwork, bool, bHasProfile, &NetworkWifiNetwork::hasProfileChanged);
 	// clang-format on
+
+	QString mProfileName;
 };
 
 } // namespace qs::windows::sys

@@ -65,7 +65,9 @@ QString xmlEscape(const QString& s) {
 }
 
 // Minimal WLAN profile XML: open, or WPA2/WPA3-Personal with a passphrase. `name` and the SSID
-// are always the same string (matches how Network::connectToNetwork/findNetwork key profiles).
+// are always the same string here: this only ever builds a *new* profile (connectToNetwork's
+// !hasProfile branch), so there is nothing else to name it after. An existing profile keeps
+// whatever name it already has -- see RawWifiNetwork::profileName.
 QString buildProfileXml(const QString& ssid, const QString& password, bool secure, bool wpa3) {
 	auto escapedSsid = xmlEscape(ssid);
 	auto hexSsid = QString::fromLatin1(ssid.toUtf8().toHex()).toUpper();
@@ -263,6 +265,8 @@ void NetworkWifiBackend::refreshAvailableNetworks() {
 		raw.active = (net.dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED) != 0;
 		raw.hasProfile = (net.dwFlags & WLAN_AVAILABLE_NETWORK_HAS_PROFILE) != 0;
 		raw.security = net.bSecurityEnabled ? securityLabel(net.dot11DefaultAuthAlgorithm) : QString();
+		// Empty when !hasProfile (MSDN: "If no profile is associated ... an empty string").
+		if (raw.hasProfile) raw.profileName = QString::fromWCharArray(net.strProfileName);
 
 		auto existing = byName.constFind(ssid);
 		if (existing == byName.constEnd()) {
@@ -360,6 +364,7 @@ void NetworkWifiBackend::refreshCurrentConnection() {
 
 void NetworkWifiBackend::connectToNetwork(
     const QString& ssid,
+    const QString& profileName,
     const QString& password,
     bool hasProfile,
     bool secure,
@@ -369,6 +374,11 @@ void NetworkWifiBackend::connectToNetwork(
 		this->mOwner->backendWifiConnectResult(ssid, false, QStringLiteral("other"));
 		return;
 	}
+
+	// The profile to connect with: the existing one (keyed by its own name, which doesn't have
+	// to match the SSID) or, when there isn't one yet, the one just created below (named after
+	// the SSID, same as buildProfileXml's <name>).
+	auto targetProfile = ssid;
 
 	if (!hasProfile) {
 		auto xml = buildProfileXml(ssid, password, secure, wpa3);
@@ -390,12 +400,14 @@ void NetworkWifiBackend::connectToNetwork(
 			this->mOwner->backendWifiConnectResult(ssid, false, QStringLiteral("other"));
 			return;
 		}
+	} else if (!profileName.isEmpty()) {
+		targetProfile = profileName;
 	}
 
-	auto profileName = ssid.toStdWString();
+	auto profile = targetProfile.toStdWString();
 	WLAN_CONNECTION_PARAMETERS params {};
 	params.wlanConnectionMode = wlan_connection_mode_profile;
-	params.strProfile = profileName.c_str();
+	params.strProfile = profile.c_str();
 	params.pDot11Ssid = nullptr;
 	params.pDesiredBssidList = nullptr;
 	params.dot11BssType = dot11_BSS_type_infrastructure;
@@ -403,7 +415,8 @@ void NetworkWifiBackend::connectToNetwork(
 
 	auto result = WlanConnect(this->mHandle, &this->mInterfaceGuid, &params, nullptr);
 	if (result != ERROR_SUCCESS) {
-		qCWarning(logWifi) << "WlanConnect failed for" << ssid << ":" << result;
+		qCWarning(logWifi) << "WlanConnect failed for" << ssid << "(profile" << targetProfile
+		                   << "):" << result;
 		this->mOwner->backendWifiConnectResult(ssid, false, QStringLiteral("other"));
 		return;
 	}
@@ -417,9 +430,9 @@ void NetworkWifiBackend::disconnectActive() {
 	WlanDisconnect(this->mHandle, &this->mInterfaceGuid, nullptr);
 }
 
-void NetworkWifiBackend::forgetNetwork(const QString& ssid) {
+void NetworkWifiBackend::forgetNetwork(const QString& ssid, const QString& profileName) {
 	if (!this->mHasAdapter) return;
-	auto name = ssid.toStdWString();
+	auto name = (profileName.isEmpty() ? ssid : profileName).toStdWString();
 	WlanDeleteProfile(this->mHandle, &this->mInterfaceGuid, name.c_str(), nullptr);
 }
 

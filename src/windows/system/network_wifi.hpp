@@ -27,6 +27,11 @@ struct RawWifiNetwork {
 	bool active = false;
 	QString security; // "" for open
 	bool hasProfile = false;
+	// The saved profile's own name when hasProfile is true ("" otherwise): WLAN_AVAILABLE_NETWORK
+	// keys a profile by this, and it doesn't have to match the SSID (profiles can be renamed, or
+	// created by other tools/imported with a different name). WlanConnect/WlanDeleteProfile need
+	// this, not the SSID.
+	QString profileName;
 };
 
 ///! Everything here runs on the Qt GUI thread except WlanAPI's own notification callback:
@@ -57,12 +62,22 @@ public:
 	void scan();
 	void refreshAvailableNetworks();
 	void refreshCurrentConnection();
-	// Connects with the existing saved profile when `hasProfile`, otherwise builds a new
-	// open/WPA2-personal/WPA3-personal profile first (`password` is ignored when `secure` is
-	// false). Result arrives asynchronously via Network::backendWifiConnectResult.
-	void connectToNetwork(const QString& ssid, const QString& password, bool hasProfile, bool secure, bool wpa3);
+	// Connects with the existing saved profile when `hasProfile` (by `profileName`, which can
+	// differ from `ssid`; ignored otherwise), building a new open/WPA2-personal/WPA3-personal
+	// profile named after `ssid` first when there isn't one (`password` is ignored when `secure`
+	// is false). Result arrives asynchronously via Network::backendWifiConnectResult.
+	void connectToNetwork(
+	    const QString& ssid,
+	    const QString& profileName,
+	    const QString& password,
+	    bool hasProfile,
+	    bool secure,
+	    bool wpa3
+	);
 	void disconnectActive();
-	void forgetNetwork(const QString& ssid);
+	// `profileName` is the saved profile to delete; falls back to `ssid` when empty (no known
+	// profile name, e.g. a network that was never actually connected through here).
+	void forgetNetwork(const QString& ssid, const QString& profileName);
 
 private:
 	void closeHandle();

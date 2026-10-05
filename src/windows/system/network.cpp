@@ -41,6 +41,7 @@ NetworkWifiNetwork* Network::findNetwork(const QString& ssid) const {
 void Network::connectToNetwork(const QString& ssid, const QString& password) {
 	auto* net = this->findNetwork(ssid);
 	auto hasProfile = net != nullptr && net->bindableHasProfile().value();
+	auto profileName = net != nullptr ? net->profileName() : QString();
 	auto security = net != nullptr ? net->bindableSecurity().value() : QString();
 	auto secure = net != nullptr ? !security.isEmpty() : !password.isEmpty();
 	auto wpa3 = security.contains(QStringLiteral("WPA3"));
@@ -49,12 +50,17 @@ void Network::connectToNetwork(const QString& ssid, const QString& password) {
 	this->bWifiConnecting = true;
 	this->updateWifiStatus();
 
-	this->mWifi->connectToNetwork(ssid, password, hasProfile, secure, wpa3);
+	this->mWifi->connectToNetwork(ssid, profileName, password, hasProfile, secure, wpa3);
 }
 
 void Network::disconnectActive() { this->mWifi->disconnectActive(); }
 
-void Network::forgetNetwork(const QString& ssid) { this->mWifi->forgetNetwork(ssid); }
+void Network::forgetNetwork(const QString& ssid) {
+	// findNetwork/profileName: see connectToNetwork -- a saved profile's name can differ from
+	// its SSID, and WlanDeleteProfile needs the former.
+	auto* net = this->findNetwork(ssid);
+	this->mWifi->forgetNetwork(ssid, net != nullptr ? net->profileName() : QString());
+}
 
 void Network::openWifiSettings() {
 	ShellExecuteW(nullptr, L"open", L"ms-settings:network-wifi", nullptr, nullptr, SW_SHOWNORMAL);
@@ -164,6 +170,7 @@ void Network::backendUpdateAvailableNetworks(const std::vector<RawWifiNetwork>& 
 		item->setActive(r.active);
 		item->setSecurity(r.security);
 		item->setHasProfile(r.hasProfile);
+		item->setProfileName(r.profileName);
 	}
 }
 
