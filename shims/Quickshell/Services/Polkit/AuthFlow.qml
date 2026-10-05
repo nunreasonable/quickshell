@@ -1,11 +1,3 @@
-// Windows shim for Quickshell.Services.Polkit's AuthFlow.
-// Real backend: whatever elevation flow eventually replaces this on Windows
-// (UAC consent/credential prompts work very differently from polkit).
-//
-// Upstream is QML_UNCREATABLE and only ever handed out via
-// PolkitAgent.flow, which is always null in this phase (no authentication
-// requests are ever generated), so no instance of this type exists at
-// runtime today, but it's registered for API completeness.
 import QtQml
 
 QtObject {

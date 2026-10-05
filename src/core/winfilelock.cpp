@@ -8,12 +8,10 @@ namespace qs::core::winlock {
 
 namespace {
 
-// Byte 0x7FFFFFFFFFFFFFF0: far beyond any file we write, so data reads never hit the lock.
 constexpr DWORD LOCK_OFFSET_LOW = 0xFFFFFFF0;
 constexpr DWORD LOCK_OFFSET_HIGH = 0x7FFFFFFF;
 
 HANDLE fileHandle(QFile& file) {
-	// QFile::handle() returns a CRT descriptor wrapping the native handle on Windows.
 	auto fd = file.handle();
 	if (fd == -1) return INVALID_HANDLE_VALUE;
 
@@ -64,7 +62,6 @@ bool waitUnlocked(QFile& file) {
 	auto handle = fileHandle(file);
 	if (handle == INVALID_HANDLE_VALUE) return false;
 
-	// A blocking shared lock only succeeds once the exclusive lock is gone.
 	if (!lock(handle, 0)) return false;
 	unlock(handle);
 	return true;

@@ -1,8 +1,4 @@
 pragma Singleton
-// Windows shim for Quickshell.Services.Pam's PamResult.
-// Real backend: whatever Windows credential API eventually backs
-// authentication here (e.g. CredUI / LogonUser), reporting through the
-// same Success/Failed/Error/MaxTries shape.
 import QtQml
 
 QtObject {

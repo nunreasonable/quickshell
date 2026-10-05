@@ -34,8 +34,6 @@ IpcServer::IpcServer(const QString& path) {
 }
 
 void IpcServer::start() {
-	// The socket lives in the instance run dir on POSIX. On Windows it is a named pipe instead,
-	// but the run dir is still required for the instance lock and logs.
 	if (QsPaths::instance()->instanceRunDir()) {
 		auto path = QsPaths::ipcPath(InstanceInfo::CURRENT.instanceId);
 		new IpcServer(path);
@@ -76,9 +74,6 @@ void IpcServerConnection::onReadyRead() {
 	IpcCommand command;
 	this->stream >> command;
 	if (!this->stream.commitTransaction()) {
-		// Incomplete command: the inner commit only fails, so roll the outer transaction back too.
-		// Otherwise it stays open in ReadPastEnd and every later read fails. Unix sockets usually
-		// deliver a command in one piece; named pipes on Windows split it.
 		this->stream.rollbackTransaction();
 		return;
 	}
@@ -99,9 +94,6 @@ void IpcServerConnection::onReadyRead() {
 
 	// async connections reparent
 	if (dynamic_cast<IpcServer*>(this->parent()) != nullptr) {
-		// Disconnect instead of deleting right away: the socket's destructor aborts writes still
-		// in flight, which drops the response on Windows where pipe writes are asynchronous.
-		// onDisconnected() deletes the connection once everything has been sent.
 		this->socket->disconnectFromServer();
 	}
 }

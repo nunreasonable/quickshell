@@ -48,8 +48,6 @@ boption(BUILD_TESTING "Build tests (dev)" OFF)
 boption(ASAN "ASAN (dev)" OFF) # note: better output with gcc than clang
 boption(FRAME_POINTERS "Keep Frame Pointers (dev)" ${ASAN})
 
-# Features that only exist on POSIX systems default to OFF when targeting Windows, where the
-# Windows backend defaults to ON instead. Enabling a POSIX feature on Windows is an error.
 if (WIN32)
 	set(QS_POSIX_DEFAULT OFF)
 	set(QS_WINDOWS_DEFAULT ON)
@@ -63,7 +61,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
 else()
 	boption(USE_JEMALLOC "Use jemalloc" ${QS_POSIX_DEFAULT})
 endif()
-boption(CRASH_HANDLER "Crash Handling" ON) # supported on both POSIX (src/crash) and Windows (src/windows/crash)
+boption(CRASH_HANDLER "Crash Handling" ON)
 boption(SOCKETS "Unix Sockets" ON)
 boption(WAYLAND "Wayland" ${QS_POSIX_DEFAULT})
 boption(WAYLAND_WLR_LAYERSHELL "  Wlroots Layer-Shell" ON REQUIRES WAYLAND)
@@ -119,11 +117,7 @@ include(cmake/install-qml-module.cmake)
 include(cmake/util.cmake)
 
 if (MSVC)
-	# clang-cl treats -Wall as -Weverything; /W4 is its spelling of -Wall -Wextra.
-	# -Wclang-cl-pch: pchset libraries see fewer QT_*_LIB defines than their consumers, which
-	# clang-cl tolerates (like MSVC) but reports for every file.
 	add_compile_options(/W4 -Wno-vla-cxx-extension -Wno-clang-cl-pch)
-	# Keep windows.h from defining min/max and pulling in rarely used APIs.
 	add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 else()
 	add_compile_options(-Wall -Wextra -Wno-vla-cxx-extension)
@@ -202,7 +196,6 @@ if (USE_JEMALLOC)
 	target_link_libraries(quickshell PRIVATE ${JEMALLOC_LIBRARIES})
 endif()
 
-# On Windows the executable is already named qs.exe and there are no desktop entries.
 if (NOT WIN32)
 	install(CODE "
 		execute_process(

@@ -1,8 +1,6 @@
 qt_add_executable(quickshell main.cpp)
 
 if (WIN32)
-	# qs.exe: console subsystem, for CLI usage (qs ipc call, qs list, ...).
-	# qsw.exe: windows subsystem, same code, for launching the shell without a console window.
 	set_target_properties(quickshell PROPERTIES OUTPUT_NAME qs)
 
 	qt_add_executable(quickshell-gui main.cpp)
@@ -26,8 +24,6 @@ add_subdirectory(ui)
 add_subdirectory(windowmanager)
 
 if (CRASH_HANDLER AND NOT WIN32)
-	# The Windows crash handler (Win32 minidumps, no cpptrace/libunwind) lives under
-	# src/windows/crash instead, added from src/windows/CMakeLists.txt.
 	add_subdirectory(crash)
 endif()
 
@@ -62,7 +58,6 @@ if (NETWORK)
 endif()
 
 if (WIN32)
-	# Subdirectories attach their modules to `quickshell`; qsw.exe links exactly the same set.
 	get_target_property(QS_EXE_LIBRARIES quickshell LINK_LIBRARIES)
 	target_link_libraries(quickshell-gui PRIVATE ${QS_EXE_LIBRARIES})
 endif()

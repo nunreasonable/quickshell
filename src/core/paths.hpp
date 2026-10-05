@@ -30,8 +30,6 @@ public:
 	static QDir crashDir(const QString& id);
 	static QString basePath(const QString& id);
 	static QString ipcPath(const QString& id);
-	// Resolves a link created in the run dir (by-pid, by-path, by-shell entries).
-	// Identity on POSIX, where those are symlinks; reads pointer files on Windows.
 	static QString resolveRunLink(const QString& path);
 	static bool
 	checkLock(const QString& path, InstanceLockInfo* info = nullptr, bool allowDead = false);

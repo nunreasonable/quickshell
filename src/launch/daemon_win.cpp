@@ -1,9 +1,3 @@
-// Windows implementation of --daemonize.
-//
-// There is no fork(), so the executable is relaunched detached from the console with the same
-// arguments, and the launching process waits for the daemon to report its startup result through
-// an inherited pipe. This mirrors the fork() + pipe() implementation in command.cpp / main.cpp.
-
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -23,7 +17,6 @@ namespace {
 
 constexpr auto DAEMON_PIPE_ENV = "__QUICKSHELL_DAEMON_PIPE";
 
-// Quotes an argument following the rules used by CommandLineToArgvW and the MSVC CRT.
 QString quoteArgument(const QString& arg) {
 	if (!arg.isEmpty() && !arg.contains(u' ') && !arg.contains(u'\t') && !arg.contains(u'"')) {
 		return arg;
@@ -55,7 +48,6 @@ QString quoteArgument(const QString& arg) {
 
 bool spawnDaemon(int argc, char** argv, int* exitCode) {
 	if (qEnvironmentVariableIsSet(DAEMON_PIPE_ENV)) {
-		// This process is the detached daemon. Pick up the pipe the launcher is waiting on.
 		auto ok = false;
 		auto handle = qEnvironmentVariable(DAEMON_PIPE_ENV).toULongLong(&ok);
 		qunsetenv(DAEMON_PIPE_ENV);
@@ -81,11 +73,8 @@ bool spawnDaemon(int argc, char** argv, int* exitCode) {
 		return true;
 	}
 
-	// Only the write end is inherited by the daemon.
 	SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
 
-	// No QCoreApplication exists yet at this point (runCommand creates it after daemonizing),
-	// so applicationFilePath() can't be used. Long paths need more than MAX_PATH.
 	auto exeBuf = std::vector<wchar_t>(MAX_PATH);
 	for (;;) {
 		auto len = GetModuleFileNameW(nullptr, exeBuf.data(), static_cast<DWORD>(exeBuf.size()));
@@ -112,7 +101,6 @@ bool spawnDaemon(int argc, char** argv, int* exitCode) {
 
 	for (auto i = 1; i < argc; ++i) {
 		auto arg = QString::fromLocal8Bit(argv[i]); // NOLINT
-		// The daemon must not daemonize again. DAEMON_PIPE_ENV covers combined short flags.
 		if (arg == "-d" || arg == "--daemonize") continue;
 		commandLine += u' ' + quoteArgument(arg);
 	}
@@ -120,7 +108,6 @@ bool spawnDaemon(int argc, char** argv, int* exitCode) {
 	auto pipeValue = QString::number(reinterpret_cast<uintptr_t>(writeEnd)); // NOLINT
 	SetEnvironmentVariableW(L"__QUICKSHELL_DAEMON_PIPE", pipeValue.toStdWString().c_str());
 
-	// CreateProcessW may modify the command line buffer.
 	auto commandLineW = commandLine.toStdWString();
 	auto commandLineBuf = std::vector<wchar_t>(commandLineW.begin(), commandLineW.end());
 	commandLineBuf.push_back(L'\0');
@@ -182,7 +169,6 @@ void exitDaemon(int code) {
 	CloseHandle(DAEMON_PIPE);
 	DAEMON_PIPE = nullptr;
 
-	// The daemon has no console. Point stdio at NUL so nothing writes to inherited handles.
 	FILE* stream = nullptr;
 	freopen_s(&stream, "NUL", "r", stdin);
 	freopen_s(&stream, "NUL", "w", stdout);
