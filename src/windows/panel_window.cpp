@@ -410,7 +410,7 @@ void WinPanelWindow::onWindowVisibleChanged() {
 		this->updateLayer();
 		this->stickToAllDesktops();
 
-		if (this->bKeyboardFocus == PanelKeyboardFocus::Exclusive) this->grabKeyboardFocus();
+		if (this->bKeyboardFocus != PanelKeyboardFocus::None) this->grabKeyboardFocus();
 	} else {
 		// Hidden AppBars still reserve space, so drop the reservation with the window.
 		this->appBar.remove();

@@ -95,6 +95,10 @@ private:
 	bool waitForCount(qsizetype count);
 	void sendShortcut(WORD key, int times) const;
 
+	template <typename R, typename... P, typename... A>
+	R call(R fallback, R (*fn)(P...), A... args) const;
+	void accessorFailed() const;
+
 	static LRESULT CALLBACK listenerProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
 	QList<Desktop> mDesktops;
@@ -106,7 +110,9 @@ private:
 	RegistryWatcher* watcher = nullptr;
 	HWND listener = nullptr;
 
-	struct Accessor {
+	mutable ULONGLONG accessorRestartedAt = 0;
+
+	mutable struct Accessor {
 		HMODULE module = nullptr;
 		bool loaded = false;
 		int (*getCurrentDesktopNumber)() = nullptr;
@@ -123,6 +129,7 @@ private:
 		int (*isPinnedWindow)(HWND) = nullptr;
 		int (*pinWindow)(HWND) = nullptr;
 		int (*unPinWindow)(HWND) = nullptr;
+		void (*restart)() = nullptr;
 	} accessor;
 };
 
