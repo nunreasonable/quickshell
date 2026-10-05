@@ -1,4 +1,5 @@
 #include "taskbar.hpp"
+#include <algorithm>
 #include <atomic>
 #include <cwchar>
 
@@ -10,6 +11,7 @@
 #include <qfileinfo.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
+#include <qmetaobject.h>
 #include <qpointer.h>
 #include <qstring.h>
 
@@ -34,6 +36,8 @@ constexpr qint64 HIDE_DELAY_MS = 700;
 constexpr int CHECK_REVEALED_MS = 250;
 // While concealed, only to catch explorer showing its windows again (restart, display change).
 constexpr int CHECK_CONCEALED_MS = 2000;
+constexpr qint64 BURST_MS = 1000;
+constexpr int BURST_MAX_HIDES = 10;
 
 bool isTaskbarWindow(HWND hwnd) {
 	// The system tray hook has the class but no taskbar: showing it would put an empty
@@ -147,8 +151,11 @@ void TaskbarManager::setHoverOnly(bool hoverOnly) {
 	if (hoverOnly == this->mHoverOnly) return;
 	this->mHoverOnly = hoverOnly;
 
-	if (hoverOnly) this->enable();
-	else this->disable();
+	if (hoverOnly) {
+		this->enable();
+	} else {
+		this->disable();
+	}
 
 	emit this->hoverOnlyChanged();
 }
@@ -194,6 +201,7 @@ void TaskbarManager::disable() {
 	auto* tracker = InputMaskTracker::instance();
 	QObject::disconnect(tracker, &InputMaskTracker::cursorMoved, this, nullptr);
 	tracker->releaseCursorEvents();
+	this->unwatchExplorer();
 
 	showAllTaskbars();
 	gConcealing.store(false);
@@ -243,6 +251,8 @@ void TaskbarManager::findBars() {
 	);
 
 	qCDebug(logTaskbar) << "Found" << this->bars.length() << "taskbar windows";
+
+	if (this->enabled) this->watchExplorer();
 }
 
 bool TaskbarManager::atTrigger(QPoint position) const {
@@ -347,6 +357,69 @@ bool TaskbarManager::taskbarPopupActive() {
 	}
 
 	return false;
+}
+
+void TaskbarManager::watchExplorer() {
+	DWORD pid = 0;
+	if (!this->bars.isEmpty()) GetWindowThreadProcessId(this->bars.first().hwnd, &pid);
+	if (pid == this->watchedPid && (this->showHook != nullptr || pid == 0)) return;
+
+	this->unwatchExplorer();
+	if (pid == 0) return;
+
+	this->showHook = SetWinEventHook(
+	    EVENT_OBJECT_SHOW,
+	    EVENT_OBJECT_SHOW,
+	    nullptr,
+	    &TaskbarManager::onWinEvent,
+	    pid,
+	    0,
+	    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+	);
+	this->watchedPid = pid;
+}
+
+void TaskbarManager::unwatchExplorer() {
+	if (this->showHook != nullptr) UnhookWinEvent(this->showHook);
+	this->showHook = nullptr;
+	this->watchedPid = 0;
+}
+
+void CALLBACK TaskbarManager::onWinEvent(
+    HWINEVENTHOOK /*hook*/,
+    DWORD /*event*/,
+    HWND hwnd,
+    LONG idObject,
+    LONG idChild,
+    DWORD /*thread*/,
+    DWORD /*time*/
+) {
+	if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF || hwnd == nullptr) return;
+
+	auto* self = TaskbarManager::instance();
+	QMetaObject::invokeMethod(self, [self, hwnd]() { self->onBarShown(hwnd); }, Qt::QueuedConnection);
+}
+
+void TaskbarManager::onBarShown(HWND hwnd) {
+	if (!this->enabled || this->revealed) return;
+	if (!std::ranges::any_of(this->bars, [hwnd](const Bar& bar) { return bar.hwnd == hwnd; })) return;
+
+	POINT cursor {};
+	GetCursorPos(&cursor);
+	auto position = QPoint(cursor.x, cursor.y);
+	if (this->atTrigger(position)) {
+		this->reveal();
+		return;
+	}
+
+	auto now = QDateTime::currentMSecsSinceEpoch();
+	if (now - this->burstStart > BURST_MS) {
+		this->burstStart = now;
+		this->burstHides = 0;
+	}
+	if (++this->burstHides > BURST_MAX_HIDES) return;
+
+	if (IsWindowVisible(hwnd)) ShowWindow(hwnd, SW_HIDE);
 }
 
 void TaskbarManager::reveal() {

@@ -62,6 +62,18 @@ private:
 	[[nodiscard]] bool atTrigger(QPoint position) const;
 	[[nodiscard]] bool overBar(QPoint position) const;
 	[[nodiscard]] static bool taskbarPopupActive();
+	void watchExplorer();
+	void unwatchExplorer();
+	void onBarShown(HWND hwnd);
+	static void CALLBACK onWinEvent(
+	    HWINEVENTHOOK hook,
+	    DWORD event,
+	    HWND hwnd,
+	    LONG idObject,
+	    LONG idChild,
+	    DWORD thread,
+	    DWORD time
+	);
 
 	bool mHoverOnly = false;
 	bool enabled = false;
@@ -69,6 +81,10 @@ private:
 	qint64 leftAt = 0;
 	QList<Bar> bars;
 	QTimer checkTimer;
+	HWINEVENTHOOK showHook = nullptr;
+	DWORD watchedPid = 0;
+	qint64 burstStart = 0;
+	int burstHides = 0;
 };
 
 ///! The Windows taskbar.
