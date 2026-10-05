@@ -255,7 +255,7 @@ void SystemTrayItem::sendDisplay() {
 void SystemTrayItem::hold(Pending action) {
 	this->pending = action;
 	this->pendingAt = GetTickCount64();
-	emit this->callbackNeeded();
+	if (this->onCallbackNeeded) this->onCallbackNeeded();
 
 	QTimer::singleShot(static_cast<int>(PENDING_MAX_MS), this, [this, at = this->pendingAt]() {
 		if (this->pending == Pending::None || this->pendingAt != at || this->hasCallback()) return;

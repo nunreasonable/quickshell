@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <qt_windows.h>
 
 #include <qimage.h>
@@ -132,6 +134,10 @@ public:
 	[[nodiscard]] bool onlyMenu() const { return false; }
 	// NOLINTEND(readability-convert-member-functions-to-static)
 
+	// Called when a click came while the callback message is unknown; the click is held until
+	// it is known. A plain callback rather than a signal: not part of the QML API.
+	std::function<void()> onCallbackNeeded;
+
 	// TrayHost's bookkeeping (GetTickCount64 times).
 	struct Tracking {
 		ULONGLONG hookUpdatedAt = 0;
@@ -153,8 +159,6 @@ public:
 
 signals:
 	void ready();
-	// A click came while the callback message is unknown; it's held until it is.
-	void callbackNeeded();
 
 	void idChanged();
 	void titleChanged();

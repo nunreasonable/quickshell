@@ -55,7 +55,8 @@ std::vector<HWND> trayToolbars() {
 		EnumChildWindows(
 		    root,
 		    [](HWND child, LPARAM param) -> BOOL {
-			    auto* list = reinterpret_cast<std::vector<HWND>*>(param); // NOLINT(performance-no-int-to-ptr)
+			    // NOLINTNEXTLINE(performance-no-int-to-ptr)
+			    auto* list = reinterpret_cast<std::vector<HWND>*>(param);
 			    if (!hasClass(child, TOOLBARCLASSNAMEW)) return TRUE;
 
 			    auto* parent = GetParent(child);
@@ -74,7 +75,9 @@ std::vector<HWND> trayToolbars() {
 	collect(explorerTaskbarWindow());
 
 	HWND overflow = nullptr;
-	while ((overflow = FindWindowExW(nullptr, overflow, L"NotifyIconOverflowWindow", nullptr)) != nullptr) {
+	while ((overflow = FindWindowExW(nullptr, overflow, L"NotifyIconOverflowWindow", nullptr))
+	       != nullptr)
+	{
 		collect(overflow);
 	}
 
@@ -102,7 +105,8 @@ std::vector<ExplorerIconData> readExplorerToolbars() {
 		return {};
 	}
 
-	auto* remote = VirtualAllocEx(process, nullptr, sizeof(TBBUTTON), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	auto* remote =
+	    VirtualAllocEx(process, nullptr, sizeof(TBBUTTON), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 	if (remote == nullptr) {
 		CloseHandle(process);
 		return {};

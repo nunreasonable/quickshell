@@ -240,7 +240,9 @@ void TrayHost::apply(const TrayIconMessage& message) {
 			item->tracking.missedSnapshots = 0;
 
 			// Whatever the hook saw since this read began is newer than explorer's list.
-			if (item->tracking.hookUpdatedAt < this->snapshotStartedAt) item->refreshFromExplorer(message);
+			if (item->tracking.hookUpdatedAt < this->snapshotStartedAt) {
+				item->refreshFromExplorer(message);
+			}
 		}
 		break;
 	case NIM_SETVERSION:
@@ -285,11 +287,11 @@ void TrayHost::add(const TrayIconMessage& message) {
 		item->tracking.hookUpdatedAt = GetTickCount64();
 	}
 
-	QObject::connect(item, &SystemTrayItem::callbackNeeded, this, [this, item]() {
+	item->onCallbackNeeded = [this, item]() {
 		auto now = GetTickCount64();
 		if (now - item->tracking.announcedAt >= CLICK_ANNOUNCE_GAP_MS) item->tracking.announcedAt = 0;
 		this->recoverCallbacks();
-	});
+	};
 
 	qCDebug(logTrayHost) << "Added tray icon" << item->bindableId().value()
 	                     << (message.seeded ? "from explorer's list" : "")
@@ -444,7 +446,8 @@ void TrayHost::onToolbarData(const std::vector<ExplorerIconData>& icons) {
 	}
 
 	if (!owners.empty()) {
-		qCDebug(logTrayHost) << "Asking" << owners.size() << "tray icon owners to add their icons again";
+		qCDebug(logTrayHost) << "Asking" << owners.size()
+		                     << "tray icon owners to add their icons again";
 		TrayHook::announceTo(std::move(owners));
 	}
 
