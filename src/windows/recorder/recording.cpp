@@ -94,11 +94,14 @@ QString checkAvailability() {
 	if (windowsBuild() < 19041) return "screen recording needs Windows 10 version 2004 or newer";
 
 	// Media Foundation is delay loaded: Windows N editions without the Media Feature Pack don't
-	// have it, and the shell must still start there.
+	// have it, and the shell must still start there. Loaded just to probe for presence, then
+	// released; the delay loader reloads whichever of these is actually needed later.
 	for (const auto* dll: {L"mfplat.dll", L"mfreadwrite.dll"}) {
-		if (LoadLibraryExW(dll, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32) == nullptr) {
+		auto* module = LoadLibraryExW(dll, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+		if (module == nullptr) {
 			return "Media Foundation is missing (on Windows N editions, install the Media Feature Pack)";
 		}
+		FreeLibrary(module);
 	}
 
 	auto hr = MFStartup(MF_VERSION, MFSTARTUP_LITE);
@@ -279,10 +282,24 @@ bool RecordingJob::record(QString* error) {
 	if (timer == nullptr) timer = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
 
 	auto failed = false;
+	auto audioLostNotified = false;
 	qint64 tick = 0;
 
 	while (true) {
 		auto now = qpc100ns() - origin;
+
+		if (audio && !audioLostNotified && audio->lost()) {
+			// The default output device was lost (removed, or the WASAPI client failed to
+			// start): the rest of the recording gets silence rather than failing outright.
+			audioLostNotified = true;
+			auto* self = this;
+			this->post([self] {
+				RecorderController::instance()->onJobSoundUnavailable(
+				    self,
+				    "the audio output device was lost; the rest of the recording has no sound"
+				);
+			});
+		}
 
 		if (now - this->tickTime(tick) > this->tickTime(MAX_CATCH_UP)) {
 			auto skipTo = now * request.fps / 10'000'000;

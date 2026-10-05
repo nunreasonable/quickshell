@@ -117,7 +117,8 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 	));
 
 	winrt::com_ptr<IMFMediaType> videoOut;
-	MFCreateMediaType(videoOut.put());
+	hr = MFCreateMediaType(videoOut.put());
+	if (FAILED(hr)) return fail("MFCreateMediaType failed", hr);
 	videoOut->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
 	videoOut->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
 	videoOut->SetUINT32(MF_MT_AVG_BITRATE, bitrate);
@@ -134,7 +135,8 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 	// ARGB32 is the subtype whose D3D11 surfaces are B8G8R8A8 (RGB32's are B8G8R8X8, which the
 	// capture texture can't be copied into); from CPU memory both work and RGB32 is the common one.
 	winrt::com_ptr<IMFMediaType> videoIn;
-	MFCreateMediaType(videoIn.put());
+	hr = MFCreateMediaType(videoIn.put());
+	if (FAILED(hr)) return fail("MFCreateMediaType failed", hr);
 	videoIn->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
 	videoIn->SetGUID(MF_MT_SUBTYPE, gpu ? MFVideoFormat_ARGB32 : MFVideoFormat_RGB32);
 	videoIn->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
@@ -156,7 +158,8 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 		auto rate = static_cast<UINT32>(this->audioRate);
 
 		winrt::com_ptr<IMFMediaType> audioOut;
-		MFCreateMediaType(audioOut.put());
+		hr = MFCreateMediaType(audioOut.put());
+		if (FAILED(hr)) return fail("MFCreateMediaType failed", hr);
 		audioOut->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
 		audioOut->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
 		audioOut->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
@@ -169,7 +172,8 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 		if (FAILED(hr)) return fail("no AAC encoder", hr);
 
 		winrt::com_ptr<IMFMediaType> audioIn;
-		MFCreateMediaType(audioIn.put());
+		hr = MFCreateMediaType(audioIn.put());
+		if (FAILED(hr)) return fail("MFCreateMediaType failed", hr);
 		audioIn->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
 		audioIn->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_PCM);
 		audioIn->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
@@ -195,7 +199,8 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 		if (FAILED(hr)) return fail("IMFVideoSampleAllocatorEx::SetDirectXManager failed", hr);
 
 		winrt::com_ptr<IMFAttributes> allocatorAttributes;
-		MFCreateAttributes(allocatorAttributes.put(), 3);
+		hr = MFCreateAttributes(allocatorAttributes.put(), 3);
+		if (FAILED(hr)) return fail("MFCreateAttributes failed", hr);
 		allocatorAttributes->SetUINT32(MF_SA_D3D11_USAGE, D3D11_USAGE_DEFAULT);
 		allocatorAttributes->SetUINT32(
 		    MF_SA_D3D11_BINDFLAGS,

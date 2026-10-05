@@ -212,11 +212,11 @@ void LoopbackCapture::run() {
 	auto hr = this->client->Start();
 	if (FAILED(hr)) {
 		qCWarning(logLoopback) << "IAudioClient::Start failed:" << Qt::hex << hr;
-		this->lost = true;
+		this->mLost.store(true, std::memory_order_relaxed);
 	}
 
 	while (WaitForSingleObject(this->stopEvent, POLL_MS) == WAIT_TIMEOUT) {
-		if (!this->lost) this->drain();
+		if (!this->mLost.load(std::memory_order_relaxed)) this->drain();
 
 		// Nothing plays, so nothing arrives: pad with silence up to a margin behind now that is
 		// well past the engine's latency, so a packet that is merely late isn't overwritten.
@@ -251,7 +251,7 @@ void LoopbackCapture::drain() {
 		// Usually AUDCLNT_E_DEVICE_INVALIDATED: the default output changed or was unplugged. The
 		// rest of the recording gets silence rather than failing as a whole.
 		qCWarning(logLoopback) << "Loopback capture stopped:" << Qt::hex << hr;
-		this->lost = true;
+		this->mLost.store(true, std::memory_order_relaxed);
 	}
 }
 

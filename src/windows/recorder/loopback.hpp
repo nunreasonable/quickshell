@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -43,6 +44,10 @@ public:
 	// previous call returned.
 	std::vector<qint16> take();
 
+	// The capture thread lost the device (IAudioClient::Start failed, or it was invalidated
+	// mid-capture); the rest of the recording gets silence. Safe to poll from another thread.
+	[[nodiscard]] bool lost() const { return this->mLost.load(std::memory_order_relaxed); }
+
 private:
 	enum class SampleType : quint8 { Float32, Int16, Int24, Int32 };
 
@@ -73,7 +78,7 @@ private:
 	std::array<float, 2> resamplePrev {};
 	std::vector<float> scratch; // input converted to float stereo
 
-	bool lost = false;
+	std::atomic<bool> mLost {false};
 
 	std::mutex mutex;
 	std::vector<qint16> pending;
