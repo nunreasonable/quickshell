@@ -14,8 +14,6 @@ OcrBackend::OcrBackend(Ocr* frontend) {
 	this->mWorker = new OcrWorker(frontend);
 	this->mWorker->moveToThread(&this->mThread);
 
-	// start()/shutdown() run on the worker thread itself: started() is emitted there right
-	// before QThread::exec() begins, finished() right after it ends (see ocr_worker.hpp).
 	QObject::connect(&this->mThread, &QThread::started, this->mWorker, &OcrWorker::start);
 	QObject::connect(&this->mThread, &QThread::finished, this->mWorker, &OcrWorker::shutdown);
 

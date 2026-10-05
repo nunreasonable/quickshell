@@ -17,8 +17,6 @@ namespace qs::bluetooth {
 namespace {
 Q_LOGGING_CATEGORY(logBackend, "quickshell.windows.bluetooth", QtWarningMsg);
 
-// The worker's shutdown only revokes handlers and drops references, but a WinRT call it is
-// blocked in (e.g. GetDefaultAsync on a wedged stack) can't be interrupted; don't hang quitting.
 constexpr unsigned long STOP_TIMEOUT_MS = 3000;
 } // namespace
 
@@ -27,8 +25,6 @@ BtBackend::BtBackend(WinBluetooth* frontend): mThread(std::make_unique<QThread>(
 	this->mWorker = new BtWorker(frontend);
 	this->mWorker->moveToThread(this->mThread.get());
 
-	// start()/shutdown() run on the worker thread itself: started() is emitted there right before
-	// its event loop starts, finished() right after it ends.
 	QObject::connect(this->mThread.get(), &QThread::started, this->mWorker, &BtWorker::start);
 	QObject::connect(this->mThread.get(), &QThread::finished, this->mWorker, &BtWorker::shutdown);
 
@@ -42,8 +38,6 @@ void BtBackend::stop() {
 
 	this->mThread->quit();
 	if (!this->mThread->wait(STOP_TIMEOUT_MS)) {
-		// Leak the worker and its thread rather than destroy them while it still runs (a running
-		// QThread's destructor aborts); the process is on its way out anyway.
 		qCWarning(logBackend) << "Bluetooth worker didn't stop in time";
 		this->mWorker = nullptr;
 		(void) this->mThread.release();

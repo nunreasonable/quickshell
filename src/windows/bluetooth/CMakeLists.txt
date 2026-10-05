@@ -1,9 +1,3 @@
-# Native replacement for the Quickshell.Bluetooth shim, with the same QML API ii uses: WinRT
-# Windows.Devices.Bluetooth / Windows.Devices.Radios / DeviceWatcher for adapters, devices and
-# pairing, and the Bluetooth audio driver's KS reconnect/disconnect requests for connect().
-# All WinRT and COM calls happen on a dedicated MTA worker thread (bt_worker.*); bt_backend.* is
-# the GUI-thread side that owns that thread and queues commands to it (see docs/AGENTS.md).
-
 qt_add_library(quickshell-windows-bluetooth STATIC
 	bluetooth.cpp
 	adapter.cpp
@@ -24,11 +18,8 @@ qs_add_module_deps_light(quickshell-windows-bluetooth Quickshell)
 
 install_qml_module(quickshell-windows-bluetooth)
 
-# qmltyperegistrar includes the headers by basename.
 target_include_directories(quickshell-windows-bluetooth PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-# windowsapp/runtimeobject: WinRT activation for a classic desktop app. ole32/uuid: Core Audio
-# (MMDeviceEnumerator, IDeviceTopology) for the KS requests.
 target_link_libraries(quickshell-windows-bluetooth PRIVATE
 	Qt::Qml windowsapp runtimeobject ole32 uuid
 )

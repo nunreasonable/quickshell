@@ -26,7 +26,6 @@ QString FsUtils::findExecutable(const QString& name) {
 	auto local = QFileInfo(QDir(QCoreApplication::applicationDirPath()), name);
 	if (local.isFile()) return local.absoluteFilePath();
 
-	// Tries PATHEXT's extensions when `name` has none.
 	return QStandardPaths::findExecutable(name);
 }
 

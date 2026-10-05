@@ -18,7 +18,6 @@ namespace qs::hyprland::ipc {
 HyprlandWorkspace::HyprlandWorkspace(HyprlandIpc* ipc): QObject(ipc), ipc(ipc) {
 	Qt::beginPropertyUpdateGroup();
 
-	// Desktops are global, so active and focused coincide and the monitor is the focused one.
 	this->bActive.setBinding([this]() { return this->ipc->bindableFocusedWorkspace().value() == this; });
 	this->bFocused.setBinding([this]() { return this->ipc->bindableFocusedWorkspace().value() == this; });
 	this->bMonitor.setBinding([this]() { return this->ipc->bindableFocusedMonitor().value(); });

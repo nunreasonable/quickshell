@@ -16,19 +16,13 @@ namespace qs::bluetooth::ks {
 
 namespace {
 
-// KSPROPSETID_BtAudio from ksmedia.h, spelled out so it doesn't depend on DEFINE_GUIDNAMED's
-// __uuidof-of-a-struct trick.
 constexpr GUID BT_AUDIO_PROPSET = {0x7fa06c40, 0xb8f6, 0x4c7e, {0x85, 0x56, 0xe8, 0xc3, 0x3a, 0x12, 0xe5, 0x4d}};
 
-// PKEY_Device_ContainerId, spelled out so this file doesn't need the initguid.h dance for
-// functiondiscoverykeys_devpkey.h (the pipewire module already gives those keys storage).
 constexpr PROPERTYKEY CONTAINER_ID_KEY = {
     {0x8c7ed206, 0x3f8a, 0x4827, {0xb3, 0xab, 0xae, 0x9e, 0x1f, 0xae, 0xfc, 0x6c}},
     2,
 };
 
-// Calls `visit` with every audio endpoint (active, disabled, unplugged or not present: a
-// disconnected headset's endpoints are unplugged) whose PKEY_Device_ContainerId is `containerId`.
 HRESULT forEachEndpoint(
     IMMDeviceEnumerator* enumerator,
     const GUID& containerId,
@@ -73,8 +67,6 @@ winrt::com_ptr<IMMDeviceEnumerator> createEnumerator(HRESULT* hr) {
 	return enumerator;
 }
 
-// Device id of the KS filter an endpoint is wired to: the endpoint's only connector is
-// connected to a pin of the driver's filter.
 std::wstring filterIdForEndpoint(IMMDevice* endpoint, HRESULT* hr) {
 	winrt::com_ptr<IDeviceTopology> topology;
 	*hr = endpoint->Activate(__uuidof(IDeviceTopology), CLSCTX_ALL, nullptr, topology.put_void());
@@ -144,7 +136,6 @@ OneShotResult sendOneShot(const GUID& containerId, bool reconnect) {
 			continue;
 		}
 
-		// Both properties are GET-only with no value (the request itself is the action).
 		KSPROPERTY property {};
 		property.Set = BT_AUDIO_PROPSET;
 		property.Id = reconnect ? KSPROPERTY_ONESHOT_RECONNECT : KSPROPERTY_ONESHOT_DISCONNECT;

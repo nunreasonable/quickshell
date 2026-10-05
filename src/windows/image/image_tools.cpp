@@ -24,9 +24,6 @@ QString toHex(int r, int g, int b) {
 	return QColor(std::clamp(r, 0, 255), std::clamp(g, 0, 255), std::clamp(b, 0, 255)).name();
 }
 
-// Scales `src` to cover `targetW`x`targetH` ("fill", like least_busy_region.py's default
-// screen-mode) and center-crops to exactly that size. Matches the wallpaper's own on-screen
-// framing so the region search operates on what the user actually sees.
 QImage scaleAndCropToScreen(const QImage& src, int targetW, int targetH) {
 	if (targetW <= 0 || targetH <= 0 || src.isNull()) return src;
 
@@ -47,8 +44,6 @@ QImage scaleAndCropToScreen(const QImage& src, int targetW, int targetH) {
 	return scaled.copy(x1, y1, w, h);
 }
 
-// Summed-area table (and its square, for a region's variance) over a single-channel double
-// grid, ported from least_busy_region.py's use of cv2.integral.
 struct IntegralImage {
 	int w = 0;
 	int h = 0;
@@ -79,7 +74,6 @@ struct IntegralImage {
 
 	[[nodiscard]] size_t idx(int x, int y) const { return static_cast<size_t>(y) * w + x; }
 
-	// Inclusive region sum, identical logic to least_busy_region.py's region_sum().
 	[[nodiscard]] double regionSum(const std::vector<double>& ii, int x1, int y1, int x2, int y2)
 	    const {
 		double total = ii[idx(x2, y2)];
@@ -90,10 +84,6 @@ struct IntegralImage {
 	}
 };
 
-// Mean of the region's non-near-black pixels. A simplified stand-in for
-// least_busy_region.py's get_dominant_color(), which clusters the region into 3 colors with
-// k-means and takes the largest cluster - this is a text/UI contrast heuristic, not a design
-// requirement, so the simpler (and much cheaper) mean is close enough.
 QString dominantColorOfRegion(const QImage& color, const QRect& rect) {
 	auto clamped = rect.intersected(color.rect());
 	if (clamped.isEmpty()) return toHex(0, 0, 0);
@@ -113,8 +103,6 @@ QString dominantColorOfRegion(const QImage& color, const QRect& rect) {
 	}
 
 	if (count == 0) {
-		// Every pixel was near-black: fall back to the plain mean (matches the Python
-		// script falling back to the unfiltered region when non_black is empty).
 		for (int y = clamped.top(); y <= clamped.bottom(); y++) {
 			for (int x = clamped.left(); x <= clamped.right(); x++) {
 				auto pixel = color.pixelColor(x, y);
@@ -162,7 +150,6 @@ QVariantMap ImageTools::leastBusyRegion(
 	auto h = gray.height();
 	if (w <= 0 || h <= 0) return QVariantMap {{"error", QStringLiteral("Image too small")}};
 
-	// Clamp padding/region size to fit, exactly like least_busy_region.py.
 	if (horizontalPadding * 2 >= w || verticalPadding * 2 >= h) {
 		horizontalPadding = std::max(0, std::min(horizontalPadding, (w - 1) / 2));
 		verticalPadding = std::max(0, std::min(verticalPadding, (h - 1) / 2));
@@ -179,8 +166,7 @@ QVariantMap ImageTools::leastBusyRegion(
 
 	const IntegralImage integral(gray);
 
-	const int stride = 10; // least_busy_region.py's CLI default; AbstractBackgroundWidget.qml
-	                        // never overrides it.
+	const int stride = 10;
 	double area = static_cast<double>(width) * height;
 
 	std::optional<double> bestVar;
@@ -236,8 +222,6 @@ QVariantMap ImageTools::textColorFromImage(const QString& imagePath) {
 	auto h = img.height();
 	if (w <= 0 || h <= 0) return QVariantMap {{"error", QStringLiteral("Empty image")}};
 
-	// 1-2. Corner pixels, median as the background anchor (handles noise/gradients better
-	// than a plain average), exactly like text_color.py.
 	std::array<QColor, 4> corners = {
 	    img.pixelColor(0, 0),
 	    img.pixelColor(w - 1, 0),
@@ -253,13 +237,10 @@ QVariantMap ImageTools::textColorFromImage(const QString& imagePath) {
 	std::sort(rs.begin(), rs.end());
 	std::sort(gs.begin(), gs.end());
 	std::sort(bs.begin(), bs.end());
-	// Median of 4 = mean of the middle two (np.median behavior).
 	auto bgR = (rs[1] + rs[2]) / 2.0;
 	auto bgG = (gs[1] + gs[2]) / 2.0;
 	auto bgB = (bs[1] + bs[2]) / 2.0;
 
-	// 3. Distance of every pixel from the background; take the 95th percentile as the
-	// threshold and median the pixels beyond it.
 	std::vector<double> distances;
 	distances.reserve(static_cast<size_t>(w) * h);
 	std::vector<QRgb> pixels;
@@ -277,7 +258,6 @@ QVariantMap ImageTools::textColorFromImage(const QString& imagePath) {
 
 	std::vector<double> sortedDistances = distances;
 	std::sort(sortedDistances.begin(), sortedDistances.end());
-	// numpy's default (linear-interpolation) percentile.
 	double rank = 0.95 * (static_cast<double>(sortedDistances.size()) - 1);
 	auto lo = static_cast<size_t>(std::floor(rank));
 	auto hi = static_cast<size_t>(std::ceil(rank));
@@ -293,7 +273,7 @@ QVariantMap ImageTools::textColorFromImage(const QString& imagePath) {
 		}
 	}
 
-	int textR = 255, textG = 255, textB = 255; // fallback, matching text_color.py
+	int textR = 255, textG = 255, textB = 255;
 	if (!tr.empty()) {
 		auto median = [](std::vector<int> v) {
 			std::sort(v.begin(), v.end());
@@ -332,7 +312,6 @@ QString ImageTools::schemeForImage(const QString& imagePath) {
 	auto h = img.height();
 	if (w <= 0 || h <= 0) return QStringLiteral("scheme-tonal-spot");
 
-	// Hasler/Süsstrunk colorfulness metric, ported from scheme_for_image.py.
 	double sumRg = 0, sumYb = 0, sumRgSq = 0, sumYbSq = 0;
 	auto n = static_cast<double>(w) * h;
 
@@ -369,7 +348,6 @@ QSize ImageTools::imageSize(const QString& imagePath) {
 	auto size = reader.size();
 	if (!size.isValid()) return {};
 
-	// size() is the stored size; a rotated EXIF orientation swaps the sides on display.
 	if (reader.transformation().testFlag(QImageIOHandler::TransformationRotate90)) size.transpose();
 	return size;
 }

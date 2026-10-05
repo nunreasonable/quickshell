@@ -59,9 +59,6 @@ struct SessionFeatures {
 	bool cursor = false;
 };
 
-// Queried once per process. The borderless request is what lets IsBorderRequired(false) work
-// for an unpackaged app (Windows 11 only; Windows 10 always draws the yellow border).
-// Blocking .get() is fine: callers are on an MTA thread.
 SessionFeatures sessionFeatures() {
 	static std::once_flag once;
 	static SessionFeatures features;
@@ -99,8 +96,8 @@ BOOL CALLBACK collectMonitor(HMONITOR monitor, HDC /*dc*/, LPRECT /*rect*/, LPAR
 
 struct MonitorCapture {
 	HMONITOR handle = nullptr;
-	QPoint origin; // the monitor's top left, desktop coordinates
-	QRect crop;    // the part of the region this monitor provides, desktop coordinates
+	QPoint origin;
+	QRect crop;
 	GraphicsCaptureItem item {nullptr};
 	Direct3D11CaptureFramePool pool {nullptr};
 	GraphicsCaptureSession session {nullptr};
@@ -110,7 +107,6 @@ struct MonitorCapture {
 	bool delivered = false;
 };
 
-// Shared with the frame pool callbacks, which may outlive stop() by a moment.
 struct RegionCaptureState {
 	std::mutex mutex;
 	bool running = false;
@@ -147,8 +143,6 @@ void RegionCaptureState::onFrame(
 		D3D11_TEXTURE2D_DESC desc {};
 		source->GetDesc(&desc);
 
-		// After a mode change the content can outgrow the pool's surfaces until the pool is
-		// recreated below; only the part that's really there is copied.
 		auto visible = QRect(
 		    monitor->origin,
 		    QSize(
@@ -178,7 +172,6 @@ void RegionCaptureState::onFrame(
 			    0,
 			    &box
 			);
-			// The frame goes back to the pool right after; get the copy queued now.
 			this->context->Flush();
 
 			if (!monitor->delivered) {
@@ -196,7 +189,6 @@ void RegionCaptureState::onFrame(
 			monitor->poolSize = content;
 		}
 	} catch (const winrt::hresult_error& e) {
-		// Typically RO_E_CLOSED when stop() raced this callback.
 		qCDebug(logRegionCapture) << "Frame callback failed:" << hresultString(e);
 	}
 }
@@ -217,7 +209,6 @@ bool RegionCapture::start(ID3D11Device* device, const QRect& region, bool cursor
 	desc.SampleDesc.Count = 1;
 	desc.Usage = D3D11_USAGE_DEFAULT;
 
-	// Starts out black (opaque, not that the encoder looks at alpha).
 	std::vector<quint32> black(static_cast<size_t>(region.width()) * region.height(), 0xff000000);
 	D3D11_SUBRESOURCE_DATA initial {black.data(), static_cast<UINT>(region.width() * 4), 0};
 
@@ -338,8 +329,6 @@ void RegionCapture::stop() {
 		state->running = false;
 	}
 
-	// Outside the mutex: a FrameArrived callback may be waiting for it, and Close() may wait
-	// for that callback. Callbacks that get in afterwards see running == false.
 	for (auto& monitor: state->monitors) {
 		try {
 			if (monitor->pool) monitor->pool.FrameArrived(monitor->frameToken);

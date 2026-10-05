@@ -18,7 +18,6 @@ namespace qs::windows::sys {
 namespace {
 QS_LOGGING_CATEGORY(logSession, "quickshell.windows.session", QtWarningMsg);
 
-// Shutdown/restart (unlike logoff/lock/suspend) require the caller to hold SE_SHUTDOWN_NAME.
 bool enablePrivilege(LPCWSTR name) {
 	HANDLE token = nullptr;
 	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) {
@@ -100,13 +99,11 @@ void Session::hibernate() {
 }
 
 void Session::rebootToFirmware() {
-	// No documented user-mode API sets the "boot to firmware UI" EFI flag directly; shutdown.exe
-	// does this through the same mechanism Settings > Advanced Startup uses internally.
 	STARTUPINFOW si {};
 	si.cb = sizeof(si);
 	PROCESS_INFORMATION pi {};
 
-	wchar_t cmdLine[] = L"shutdown.exe /r /fw /t 0"; // NOLINT: CreateProcessW needs a mutable buffer
+	wchar_t cmdLine[] = L"shutdown.exe /r /fw /t 0"; // NOLINT
 
 	if (!CreateProcessW(nullptr, cmdLine, nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
 		qCWarning(logSession) << "CreateProcessW(shutdown /r /fw) failed:" << GetLastError();
@@ -124,8 +121,6 @@ bool Session::canHibernate() {
 }
 
 void Session::playSystemSound(const QString& name) {
-	// Sound event aliases from HKCU\AppEvents\Schemes\Apps\.Default, the ones Windows itself
-	// plays for the same situations.
 	static const QHash<QString, const wchar_t*> EVENTS = {
 	    {"dialog-warning", L"SystemExclamation"},
 	    {"dialog-error", L"SystemHand"},
@@ -145,7 +140,6 @@ void Session::playSystemSound(const QString& name) {
 	};
 
 	const auto* alias = EVENTS.value(name, L"Notification.Default");
-	// SND_NODEFAULT: an event the scheme silences must not fall back to the default beep.
 	PlaySoundW(alias, nullptr, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
 }
 
@@ -181,7 +175,6 @@ QVariantMap Session::osInfo() {
 	auto build = readString(L"CurrentBuildNumber");
 	auto name = readString(L"ProductName");
 
-	// ProductName was never updated for Windows 11, which is told apart by its build number.
 	if (build.toInt() >= 22000) name.replace("Windows 10", "Windows 11");
 	if (name.isEmpty()) name = "Windows";
 

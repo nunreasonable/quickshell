@@ -15,35 +15,21 @@
 
 namespace qs::windows::sys {
 
-///! Lightweight polled system resource stats (CPU, memory, swap, uptime, and GPU usage if cheap
-/// to obtain), for the bar/resource widgets that read `/proc/*` on Linux.
-///
-/// Nothing is sampled until @@active is set to true, since most of this (particularly the GPU
-/// counter) is only worth the overhead while something is actually displaying it.
 class SystemStats: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
 	QML_SINGLETON;
 	// clang-format off
-	/// Whether the timer backing every property below is running. Defaults to true; set to
-	/// false when nothing is displaying these values to stop sampling.
 	Q_PROPERTY(bool active READ active WRITE setActive NOTIFY activeChanged);
-	/// Sampling interval in milliseconds.
 	Q_PROPERTY(int updateIntervalMs READ updateIntervalMs WRITE setUpdateIntervalMs NOTIFY updateIntervalMsChanged);
 	Q_PROPERTY(qreal cpuUsage READ default NOTIFY cpuUsageChanged BINDABLE bindableCpuUsage);
 	Q_PROPERTY(quint64 memoryTotalKb READ default NOTIFY memoryTotalKbChanged BINDABLE bindableMemoryTotalKb);
 	Q_PROPERTY(quint64 memoryAvailableKb READ default NOTIFY memoryAvailableKbChanged BINDABLE bindableMemoryAvailableKb);
 	Q_PROPERTY(quint64 swapTotalKb READ default NOTIFY swapTotalKbChanged BINDABLE bindableSwapTotalKb);
 	Q_PROPERTY(quint64 swapAvailableKb READ default NOTIFY swapAvailableKbChanged BINDABLE bindableSwapAvailableKb);
-	/// Seconds since boot (`GetTickCount64() / 1000`).
 	Q_PROPERTY(qint64 uptimeSeconds READ default NOTIFY uptimeSecondsChanged BINDABLE bindableUptimeSeconds);
-	/// `ProcessorNameString` from the registry, read once.
 	Q_PROPERTY(QString cpuName READ cpuName CONSTANT);
-	/// Sample @@gpuUsage too. Off by default: collecting the GPU engine counters asks the graphics
-	/// driver about every process on every sample.
 	Q_PROPERTY(bool gpuEnabled READ gpuEnabled WRITE setGpuEnabled NOTIFY gpuEnabledChanged);
-	/// Summed `\GPU Engine(*engtype_3D)\Utilization Percentage` via PDH, in [0, 1].
-	/// -1 if no GPU engine counters are available on this machine or @@gpuEnabled is off.
 	Q_PROPERTY(qreal gpuUsage READ default NOTIFY gpuUsageChanged BINDABLE bindableGpuUsage);
 	// clang-format on
 

@@ -95,8 +95,6 @@ HyprlandIpc::HyprlandIpc()
     : mTracker(WindowTracker::instance())
     , mDesktops(VirtualDesktops::instance())
     , dispatcher(new Dispatcher(this)) {
-	// Windows move continuously while dragged; one event per burst is plenty for consumers
-	// that rebuild their window lists on every event.
 	this->geometryTimer.setSingleShot(true);
 	this->geometryTimer.setInterval(100);
 	QObject::connect(&this->geometryTimer, &QTimer::timeout, this, &HyprlandIpc::emitGeometryEvent);
@@ -110,7 +108,6 @@ HyprlandIpc::HyprlandIpc()
 	QObject::connect(this->mDesktops, &VirtualDesktops::currentChanged, this, &HyprlandIpc::onCurrentDesktopChanged);
 	// clang-format on
 
-	// `global` dispatches reach GlobalShortcut objects, like Hyprland's global dispatcher.
 	QObject::connect(this, &HyprlandIpc::dispatchGlobal, this, [](const QString& name) {
 		qs::windows::hotkeys::HotkeyManager::instance()->triggerGlobal(name);
 	});
@@ -236,7 +233,6 @@ void HyprlandIpc::syncMonitors(bool initial) {
 	for (auto* monitor: removed) {
 		if (this->bFocusedMonitor.value() == monitor) this->bFocusedMonitor = nullptr;
 		if (!initial) this->emitEvent("monitorremoved", monitor->bindableName().value().toUtf8());
-		// like upstream: keep the object around for a cycle in case something still references it
 		monitor->deleteLater();
 	}
 
@@ -267,8 +263,6 @@ void HyprlandIpc::syncWorkspaces(bool initial) {
 		return name.isEmpty() ? QString::number(index + 1) : name;
 	};
 
-	// Workspace ids are positions, so a desktop removed in the middle shows up as the last
-	// workspace going away and the others being renamed; windows are re-queried by the tracker.
 	QList<HyprlandWorkspace*> removed;
 	while (list.length() > count) {
 		auto* workspace = list.takeLast();
@@ -299,7 +293,6 @@ void HyprlandIpc::syncWorkspaces(bool initial) {
 	this->updateFocusedWorkspace();
 	this->updateVisibleWorkspaces(initial);
 
-	// like upstream: keep the objects around for a cycle in case something still references them
 	for (auto* workspace: removed) workspace->deleteLater();
 }
 
@@ -435,7 +428,6 @@ void HyprlandIpc::onActiveWindowChanged() {
 }
 
 void HyprlandIpc::onTrackerFlushed() {
-	// The active window may have moved to another screen.
 	if (auto* toplevel = this->bActiveToplevel.value()) {
 		this->updateFocusedMonitor(toplevel->bindableMonitor().value());
 	}

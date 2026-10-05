@@ -26,14 +26,10 @@ namespace qs::windows::recorder {
 namespace {
 Q_LOGGING_CATEGORY(logMp4Writer, "quickshell.windows.recorder", QtWarningMsg);
 
-// Screen content is mostly sharp edges and text; ~0.15 bits per pixel keeps that readable
-// (about 9 Mbit/s for 1080p30) without the files getting silly.
 constexpr double BITS_PER_PIXEL = 0.15;
 constexpr UINT32 MIN_BITRATE = 1'000'000;
 constexpr UINT32 MAX_BITRATE = 50'000'000;
-// 192 kbit/s, one of the four rates Media Foundation's AAC encoder takes.
 constexpr UINT32 AAC_BYTES_PER_SECOND = 24000;
-// AAC-LC, level 2 (what the encoder's documentation uses for stereo up to 48 kHz).
 constexpr UINT32 AAC_PROFILE_LEVEL = 0x29;
 
 QString hrMessage(const QString& what, HRESULT hr) {
@@ -83,8 +79,6 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 	if (FAILED(hr)) return fail("MFCreateAttributes failed", hr);
 
 	attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, gpu ? TRUE : FALSE);
-	// With throttling the sink writer blocks a stream that runs ahead of the other one, and
-	// both streams are written from the same thread.
 	attributes->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING, TRUE);
 	attributes->SetGUID(MF_TRANSCODE_CONTAINERTYPE, MFTranscodeContainerType_MPEG4);
 
@@ -108,8 +102,6 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 	);
 	if (FAILED(hr)) return fail("cannot create the video file", hr);
 
-	// --- video ---
-
 	auto bitrate = static_cast<UINT32>(std::clamp(
 	    static_cast<double>(width) * height * fps * BITS_PER_PIXEL,
 	    static_cast<double>(MIN_BITRATE),
@@ -123,7 +115,6 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 	videoOut->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
 	videoOut->SetUINT32(MF_MT_AVG_BITRATE, bitrate);
 	videoOut->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-	// The software encoder defaults to Baseline.
 	videoOut->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Main);
 	MFSetAttributeSize(videoOut.get(), MF_MT_FRAME_SIZE, width, height);
 	MFSetAttributeRatio(videoOut.get(), MF_MT_FRAME_RATE, fps, 1);
@@ -132,15 +123,12 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 	hr = this->writer->AddStream(videoOut.get(), &this->videoStream);
 	if (FAILED(hr)) return fail("no H.264 encoder for this size", hr);
 
-	// ARGB32 is the subtype whose D3D11 surfaces are B8G8R8A8 (RGB32's are B8G8R8X8, which the
-	// capture texture can't be copied into); from CPU memory both work and RGB32 is the common one.
 	winrt::com_ptr<IMFMediaType> videoIn;
 	hr = MFCreateMediaType(videoIn.put());
 	if (FAILED(hr)) return fail("MFCreateMediaType failed", hr);
 	videoIn->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
 	videoIn->SetGUID(MF_MT_SUBTYPE, gpu ? MFVideoFormat_ARGB32 : MFVideoFormat_RGB32);
 	videoIn->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-	// RGB in Media Foundation is bottom-up unless the stride says otherwise.
 	videoIn->SetUINT32(MF_MT_DEFAULT_STRIDE, width * 4);
 	videoIn->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
 	videoIn->SetUINT32(MF_MT_FIXED_SIZE_SAMPLES, TRUE);
@@ -151,8 +139,6 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 
 	hr = this->writer->SetInputMediaType(this->videoStream, videoIn.get(), nullptr);
 	if (FAILED(hr)) return fail("the H.264 encoder doesn't take the captured frames", hr);
-
-	// --- audio ---
 
 	if (this->audioRate > 0) {
 		auto rate = static_cast<UINT32>(this->audioRate);
@@ -190,8 +176,6 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 	if (FAILED(hr)) return fail("cannot start encoding", hr);
 
 	if (gpu) {
-		// Samples come back to the allocator once the encoder is done with them, which also
-		// bounds how far the encoder may fall behind.
 		hr = MFCreateVideoSampleAllocatorEx(IID_PPV_ARGS(this->allocator.put()));
 		if (FAILED(hr)) return fail("MFCreateVideoSampleAllocatorEx failed", hr);
 
@@ -212,7 +196,6 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 		         ->InitializeSampleAllocatorEx(4, 16, allocatorAttributes.get(), videoIn.get());
 		if (FAILED(hr)) return fail("cannot allocate encoder surfaces", hr);
 
-		// Frames are copied with CopySubresourceRegion, which needs the exact same format.
 		winrt::com_ptr<IMFSample> probe;
 		hr = this->allocator->AllocateSample(probe.put());
 		if (FAILED(hr)) return fail("cannot allocate an encoder surface", hr);
@@ -240,13 +223,10 @@ bool Mp4Writer::openWith(bool gpu, const QString& path, QString* error) {
 }
 
 bool Mp4Writer::encoderBehind() const {
-	// Only the CPU path needs this: the GPU path is bounded by the sample allocator.
 	MF_SINK_WRITER_STATISTICS stats {};
 	stats.cb = sizeof(stats);
 	if (FAILED(this->writer->GetStatistics(this->videoStream, &stats))) return false;
 
-	// More than a second queued in front of the encoder: drop instead of piling up memory.
-	// A counter that never moved (nothing encoded yet) isn't trusted.
 	if (stats.qwNumSamplesEncoded == 0) return false;
 	return stats.qwNumSamplesReceived > stats.qwNumSamplesEncoded + static_cast<ULONGLONG>(this->fps);
 }
@@ -264,7 +244,6 @@ bool Mp4Writer::writeVideo(ID3D11Texture2D* frame, qint64 time, qint64 duration,
 	if (this->mGpu) {
 		auto hr = this->allocator->AllocateSample(sample.put());
 		if (hr == MF_E_SAMPLEALLOCATOR_EMPTY) {
-			// Every surface is still queued at the encoder.
 			this->mFramesDropped++;
 			return true;
 		}
@@ -285,7 +264,6 @@ bool Mp4Writer::writeVideo(ID3D11Texture2D* frame, qint64 time, qint64 duration,
 
 		this->context->CopySubresourceRegion(texture.get(), subresource, 0, 0, 0, frame, 0, nullptr);
 
-		// Some encoders treat a zero length buffer as empty.
 		DWORD length = 0;
 		if (SUCCEEDED(buffer->GetMaxLength(&length)) && length > 0) buffer->SetCurrentLength(length);
 	} else {
@@ -372,7 +350,6 @@ bool Mp4Writer::writeAudio(const qint16* samples, qsizetype frames, QString* err
 	if (SUCCEEDED(hr)) hr = sample->AddBuffer(buffer.get());
 
 	if (SUCCEEDED(hr)) {
-		// From the running frame count, so rounding never accumulates.
 		auto start = this->audioFrames * 10'000'000 / this->audioRate;
 		auto end = (this->audioFrames + frames) * 10'000'000 / this->audioRate;
 		sample->SetSampleTime(start);
@@ -412,7 +389,6 @@ bool Mp4Writer::finalize(QString* error) {
 }
 
 void Mp4Writer::close() {
-	// The writer first: samples it still holds go back to the allocator.
 	this->writer = nullptr;
 	this->allocator = nullptr;
 	this->staging = nullptr;

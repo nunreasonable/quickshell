@@ -25,8 +25,6 @@ std::optional<Argb> parseColor(const QString& color) {
 	return parseColor(QColor::fromString(color));
 }
 
-// baseScheme comes from a JS object: its values are normally strings, but a property holding a
-// QML color arrives as a QColor.
 std::optional<Argb> parseColor(const QVariant& color) {
 	if (color.metaType() == QMetaType::fromType<QColor>()) return parseColor(color.value<QColor>());
 	if (color.metaType() == QMetaType::fromType<QString>()) return parseColor(color.toString());
@@ -66,7 +64,6 @@ QVariantMap TerminalColors::generate(
 	    .monochrome = monochrome,
 	};
 
-	// Same walk as the script: every key of the base scheme, term0/term15 by name.
 	auto result = QVariantMap();
 	for (auto it = baseScheme.cbegin(); it != baseScheme.cend(); ++it) {
 		auto name = it.key().toStdString();

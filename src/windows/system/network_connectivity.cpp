@@ -8,12 +8,6 @@
 #include <qmetaobject.h>
 #include <qmutex.h>
 
-// Must come before iphlpapi.h: IPTypes.h's GetAdaptersAddresses flags/types are guarded by
-// `#ifdef _WINSOCK2API_` (winsock2.h's own include guard), and netioapi.h's interface-change
-// notification API (NotifyIpInterfaceChange, MIB_IPINTERFACE_ROW, ...) needs ws2ipdef.h's
-// `_WS2IPDEF_` guard defined too -- iphlpapi.h's own comments say the caller is responsible for
-// both. WIN32_LEAN_AND_MEAN (set project-wide) keeps qt_windows.h's <windows.h> from pulling in
-// the old winsock.h first, so this is safe.
 #include <winsock2.h>
 #include <ws2ipdef.h>
 
@@ -32,18 +26,11 @@ QS_LOGGING_CATEGORY(logConnectivity, "quickshell.windows.network.connectivity", 
 
 bool ensureComInitialized() {
 	auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-	// S_FALSE: already initialized on this thread. RPC_E_CHANGED_MODE: initialized with a
-	// different concurrency model already (Qt's platform plugin does this for us) -- both fine,
-	// we just piggyback on the existing apartment, same as services/pipewire/pw_backend.cpp.
 	if (hr == S_OK || hr == S_FALSE || hr == RPC_E_CHANGED_MODE) return true;
 	qCWarning(logConnectivity) << "CoInitializeEx failed:" << Qt::hex << hr;
 	return false;
 }
 
-// `INetworkListManagerEvents::ConnectivityChanged` is documented as being invoked without
-// regard to the calling thread's apartment, so (like the Core Audio callbacks in
-// services/pipewire/com_util.hpp) this may run on an arbitrary thread. `target` is guarded by a
-// mutex and cleared (via detach()) before the backend it points to goes away.
 class NlmEventsSink final: public INetworkListManagerEvents {
 public:
 	explicit NlmEventsSink(NetworkConnectivityBackend* target): mTarget(target) {}
@@ -155,7 +142,7 @@ void NetworkConnectivityBackend::start() {
 			IConnectionPoint* cp = nullptr;
 			if (SUCCEEDED(cpc->FindConnectionPoint(IID_INetworkListManagerEvents, &cp)) && cp != nullptr) {
 				if (SUCCEEDED(cp->Advise(sink, &this->mAdviseCookie))) {
-					this->mConnectionPoint = cp; // keep the ref for Unadvise at teardown
+					this->mConnectionPoint = cp;
 				} else {
 					cp->Release();
 				}
@@ -215,8 +202,6 @@ void NetworkConnectivityBackend::refreshEthernet() {
 	auto ethernetUp = false;
 	if (result == ERROR_SUCCESS) {
 		for (auto* curr = addresses; curr != nullptr; curr = curr->Next) {
-			// Hyper-V/WSL vEthernet, VirtualBox/VMware host-only and TAP adapters are Ethernet
-			// too, but only a real link to a network has a default gateway.
 			if (curr->IfType == IF_TYPE_ETHERNET_CSMACD && curr->OperStatus == IfOperStatusUp
 			    && curr->FirstGatewayAddress != nullptr)
 			{

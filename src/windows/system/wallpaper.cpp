@@ -27,8 +27,6 @@ const wchar_t* const kDwmKey = L"Software\\Microsoft\\Windows\\DWM";
 
 void broadcastSettingChange(const wchar_t* setting) {
 	DWORD_PTR result = 0;
-	// Same message Settings sends after flipping its light/dark or accent color toggles;
-	// without it, only newly started apps would notice the registry change.
 	SendMessageTimeoutW(
 	    HWND_BROADCAST,
 	    WM_SETTINGCHANGE,
@@ -68,7 +66,6 @@ bool writeDword(HKEY root, const wchar_t* subkey, const wchar_t* name, DWORD val
 	return ok == ERROR_SUCCESS;
 }
 
-// Parses "#RRGGBB" / "RRGGBB". Returns false (leaving `out` untouched) if malformed.
 bool parseHexColor(const QString& hex, QColor& out) {
 	auto trimmed = hex.startsWith(u'#') ? hex.mid(1) : hex;
 	if (trimmed.length() != 6) return false;
@@ -95,9 +92,6 @@ QString Wallpaper::currentWallpaper() {
 
 	if (SUCCEEDED(hr) && wallpaper) {
 		LPWSTR path = nullptr;
-		// Monitor id null = "the first/primary monitor", which is what SPI_GETDESKWALLPAPER
-		// would give on single-wallpaper setups too; ii only needs *a* representative image
-		// to seed its background with on first run, not a per-monitor list.
 		hr = wallpaper->GetWallpaper(nullptr, &path);
 		if (SUCCEEDED(hr) && path != nullptr) {
 			auto result = QString::fromWCharArray(path);
@@ -105,9 +99,6 @@ QString Wallpaper::currentWallpaper() {
 			if (!result.isEmpty()) return result;
 		}
 
-		// With a different picture per monitor the shared query comes back empty; take the
-		// first monitor's own. The SPI fallback below would only give TranscodedWallpaper,
-		// Windows' cached copy, which can be an older picture.
 		UINT count = 0;
 		if (SUCCEEDED(wallpaper->GetMonitorDevicePathCount(&count))) {
 			for (UINT i = 0; i < count; i++) {
@@ -148,11 +139,8 @@ bool Wallpaper::setWallpaper(const QString& path) {
 		return false;
 	}
 
-	// DWPOS_FILL matches Hyprland's `wallpaper` default on the Linux side (crop to fill,
-	// no letterboxing).
 	wallpaper->SetPosition(DWPOS_FILL);
 
-	// IDesktopWallpaper stores the path as given, and Windows' own UI expects backslashes.
 	auto wpath = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath()).toStdWString();
 	bool anyOk = false;
 
@@ -177,8 +165,6 @@ bool Wallpaper::setWallpaper(const QString& path) {
 	}
 
 	if (!anyOk) {
-		// No per-monitor device paths (or all of them failed): a null monitor id targets
-		// every monitor at once.
 		auto setHr = wallpaper->SetWallpaper(nullptr, wpath.c_str());
 		anyOk = SUCCEEDED(setHr);
 		if (!anyOk) qCWarning(logWallpaper) << "SetWallpaper(all monitors) failed:" << Qt::hex << setHr;
@@ -210,14 +196,9 @@ bool Wallpaper::setAccentColor(const QString& hex) {
 		return false;
 	}
 
-	// AccentColor is 0xAABBGGRR (note: BGR, not RGB) with full alpha - used for title
-	// bars/borders when "Show accent color on title bars" is on.
 	DWORD accentColor = 0xFF000000u | (static_cast<DWORD>(color.blue()) << 16)
 	                   | (static_cast<DWORD>(color.green()) << 8) | static_cast<DWORD>(color.red());
 
-	// ColorizationColor is 0xAARRGGBB with the alpha DWM uses to blend the colorization atop
-	// the background (0xC4, the same value Windows itself writes for an accent set from a
-	// picture via Settings > Personalization > Colors).
 	DWORD colorizationColor = 0xC4000000u | (static_cast<DWORD>(color.red()) << 16)
 	                         | (static_cast<DWORD>(color.green()) << 8) | static_cast<DWORD>(color.blue());
 

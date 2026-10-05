@@ -12,10 +12,6 @@ namespace qs::hyprland::ipc {
 
 class HyprlandIpc;
 
-// Executes Hyprland dispatchers on Windows, in the classic spelling (`workspace 2`,
-// `movetoworkspace 3,address:0x1234`) and the Lua one configurations written against
-// Hyprland's Lua config use (`hl.dsp.focus({workspace = 2})`). Dispatchers without a Windows
-// equivalent are logged once and ignored.
 class Dispatcher {
 public:
 	explicit Dispatcher(HyprlandIpc* ipc): ipc(ipc) {}
@@ -25,9 +21,9 @@ public:
 private:
 	struct LuaCall {
 		QString function;
-		QString scalar;                // single argument, unquoted: hl.dsp.global("x")
-		QHash<QString, QString> table; // flat table fields, unquoted
-		QStringList positional;        // table entries without a key: {x = 1, "exact"}
+		QString scalar;
+		QHash<QString, QString> table;
+		QStringList positional;
 		bool ok = false;
 	};
 
@@ -37,8 +33,6 @@ private:
 	void dispatchLua(const LuaCall& call);
 	void dispatchClassic(const QString& name, const QString& args);
 
-	// Desktop index for a workspace argument (N, +N, -N, e+N, r+N, name:x); -1 if it has no
-	// Windows meaning. `create` is set for absolute ids beyond the existing desktops.
 	[[nodiscard]] qsizetype resolveWorkspace(const QString& arg, bool& create) const;
 	[[nodiscard]] qs::windows::TrackedWindow* resolveWindow(const QString& arg) const;
 
@@ -48,8 +42,6 @@ private:
 	void pin(qs::windows::TrackedWindow* window);
 	void moveFocus(const QString& direction);
 	void moveWindow(const QString& direction);
-	// Tiling aware dispatchers (Quickshell.Windows Tiling); without tiling they keep the plain
-	// Windows behavior described at each.
 	void swapWindow(const QString& direction);
 	void toggleFloating(qs::windows::TrackedWindow* window, const QString& action);
 	void toggleSplit();

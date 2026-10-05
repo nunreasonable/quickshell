@@ -106,7 +106,6 @@ void SystemStats::sample() {
 		user.HighPart = userTime.dwHighDateTime;
 
 		if (this->havePrevCpuTimes) {
-			// lpKernelTime already includes idle time.
 			auto idleDelta = idle.QuadPart - this->prevIdle.QuadPart;
 			auto kernelDelta = kernel.QuadPart - this->prevKernel.QuadPart;
 			auto userDelta = user.QuadPart - this->prevUser.QuadPart;
@@ -130,8 +129,6 @@ void SystemStats::sample() {
 		this->bMemoryTotalKb = mem.ullTotalPhys / 1024;
 		this->bMemoryAvailableKb = mem.ullAvailPhys / 1024;
 
-		// ullTotalPageFile/ullAvailPageFile are commit limits that already include physical RAM;
-		// subtracting approximates the page file (swap) contribution alone.
 		auto swapTotal =
 		    mem.ullTotalPageFile > mem.ullTotalPhys ? mem.ullTotalPageFile - mem.ullTotalPhys : 0;
 		auto swapAvail =
@@ -158,7 +155,6 @@ void SystemStats::setupGpuCounters() {
 	DWORD pathListSize = 0;
 	const auto* wildcard = L"\\GPU Engine(*engtype_3D)\\Utilization Percentage";
 
-	// First call with a null buffer reports the required size in characters.
 	auto status = PdhExpandWildCardPathW(nullptr, wildcard, nullptr, &pathListSize, 0);
 
 	if (status != PDH_MORE_DATA && status != ERROR_SUCCESS) {

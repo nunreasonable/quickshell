@@ -21,7 +21,6 @@
 #include "connection.hpp"
 #include "workspace.hpp"
 
-// last: pulls in the rpc headers, which define macros like `small`
 #include <shellapi.h>
 
 using namespace qs::windows;
@@ -46,7 +45,6 @@ void sendWinShortcut(WORD key) {
 	SendInput(4, inputs, sizeof(INPUT));
 }
 
-// Hyprland directions: l/r/u/d, also spelled out, and t/b for up/down.
 std::optional<TilingManager::Edge> directionEdge(const QString& direction) {
 	auto d = direction.trimmed();
 	if (d.startsWith('l')) return TilingManager::Edge::Left;
@@ -122,7 +120,6 @@ Dispatcher::LuaCall Dispatcher::parseLua(const QString& request) {
 	auto end = inner.lastIndexOf('}');
 	auto body = inner.mid(1, end - 1);
 
-	// Split on top level commas only: values may be quoted or nested tables.
 	QStringList fields;
 	qsizetype start = 0;
 	auto depth = 0;
@@ -200,12 +197,10 @@ void Dispatcher::dispatchLua(const LuaCall& call) {
 	} else if (fn == "hl.dsp.exec" || fn == "hl.dsp.exec_cmd") {
 		this->exec(call.scalar);
 	} else if (fn.startsWith("hl.config")) {
-		// Compositor settings (cursor warps and the like) have nothing to apply to here.
 		qCDebug(logDispatch) << "Ignoring config change" << fn;
 	} else if (fn == "hl.dsp.window.toggle_float") {
 		this->toggleFloating(this->resolveWindow(windowArg), "toggle");
 	} else if (fn == "hl.dsp.window.float" || fn == "hl.dsp.window.tile") {
-		// {action = "toggle" | "enable" | "disable"}, enable when left out.
 		auto action = t.value("action");
 		auto off = action == "disable" || action == "unset" || action == "off" || action == "false";
 		auto floating = (fn == "hl.dsp.window.float") != off;
@@ -216,7 +211,6 @@ void Dispatcher::dispatchLua(const LuaCall& call) {
 		if (t.contains("direction")) this->swapWindow(t.value("direction"));
 		else this->unsupported(fn);
 	} else if (fn == "hl.dsp.window.resize") {
-		// Without a size it is the mouse resize bind, which Windows' own borders do.
 		if (t.contains("x") || t.contains("y")) {
 			auto exact = call.positional.contains("exact") || t.value("exact") == "true";
 			auto x = t.value("x", "0");
@@ -261,7 +255,6 @@ void Dispatcher::dispatchClassic(const QString& name, const QString& args) {
 	} else if (name == "movewindow") {
 		this->moveWindow(args);
 	} else if (name == "movewindowpixel") {
-		// exact X Y,window
 		auto comma = args.indexOf(',');
 		auto coords = (comma == -1 ? args : args.left(comma)).split(' ', Qt::SkipEmptyParts);
 		auto window = comma == -1 ? QString() : args.mid(comma + 1);
@@ -318,7 +311,6 @@ qsizetype Dispatcher::resolveWorkspace(const QString& arg, bool& create) const {
 	}
 
 	if (a == "empty") {
-		// Every desktop, not just the listed workspaces: empty desktops are left out of those.
 		for (qsizetype i = 0; i < count; i++) {
 			auto* workspace = this->ipc->workspaceById(static_cast<qint32>(i + 1));
 			if (workspace != nullptr && workspace->toplevels()->valueList().isEmpty()) return i;
@@ -328,8 +320,6 @@ qsizetype Dispatcher::resolveWorkspace(const QString& arg, bool& create) const {
 		return count;
 	}
 
-	// +N / -N and the e (existing), r (on monitor), m (monitor) relative forms all mean the
-	// same thing with global desktops. Relative moves stop at the ends instead of creating.
 	auto relative = a;
 	if (relative.startsWith('e') || relative.startsWith('r') || relative.startsWith('m')) {
 		relative = relative.mid(1);
@@ -432,7 +422,6 @@ void Dispatcher::moveToWorkspace(TrackedWindow* window, const QString& arg, bool
 void Dispatcher::fullscreen(TrackedWindow* window, int mode) {
 	if (window == nullptr) return;
 
-	// Hyprland: 0 = fullscreen, 1 = maximize. Both toggle.
 	if (mode == 1) window->setMaximized(!window->maximized());
 	else window->setFullscreen(!window->fullscreen());
 }
@@ -450,8 +439,6 @@ void Dispatcher::pin(TrackedWindow* window) {
 }
 
 void Dispatcher::moveFocus(const QString& direction) {
-	// Tiled: the neighbour in the layout. Floating windows and windows at the layout's edge
-	// fall back to the nearest window in that direction.
 	auto edge = directionEdge(direction);
 	auto* tiling = TilingManager::active();
 	if (tiling != nullptr && edge && tiling->focusDirection(*edge)) return;
@@ -475,7 +462,6 @@ void Dispatcher::moveFocus(const QString& direction) {
 		return;
 	}
 
-	// Nearest window whose center lies in the requested direction, preferring ones in line.
 	auto origin = active->rect().center();
 	TrackedWindow* best = nullptr;
 	auto bestScore = std::numeric_limits<qint64>::max();
@@ -522,7 +508,6 @@ void Dispatcher::moveWindow(const QString& direction) {
 		return;
 	}
 
-	// Tiled: swap with the neighbour, or move to the monitor in that direction.
 	auto edge = directionEdge(direction);
 	auto* tiling = TilingManager::active();
 	if (tiling != nullptr && edge && tiling->moveDirection(*edge)) return;
@@ -533,8 +518,6 @@ void Dispatcher::moveWindow(const QString& direction) {
 		return;
 	}
 
-	// Win+Arrow: snap left/right, maximize up, restore/minimize down. The closest thing to
-	// moving a window within a layout.
 	sendWinShortcut(key);
 }
 
@@ -551,7 +534,6 @@ void Dispatcher::swapWindow(const QString& direction) {
 }
 
 void Dispatcher::toggleFloating(TrackedWindow* window, const QString& action) {
-	// Every window floats on Windows unless tiling is on.
 	auto* tiling = TilingManager::active();
 	if (tiling == nullptr) {
 		this->unsupported("togglefloating (without tiling)");
@@ -582,7 +564,6 @@ void Dispatcher::layoutMessage(const QString& message) {
 	auto* window = this->ipc->tracker()->activeWindow();
 	if (window == nullptr) return;
 
-	// Hyprland's dwindle messages that mean something here.
 	auto parts = message.split(' ', Qt::SkipEmptyParts);
 	if (parts.isEmpty()) return;
 	const auto& command = parts.first();
@@ -605,8 +586,6 @@ void Dispatcher::resizeActive(const QString& args) {
 	auto* window = this->ipc->tracker()->activeWindow();
 	if (window == nullptr || window->screen() == nullptr) return;
 
-	// `dx dy`, or `exact w h`; values in logical pixels or percentages (of the window for
-	// deltas, of the monitor for exact sizes), as Hyprland's resizeparams.
 	auto parts = args.split(' ', Qt::SkipEmptyParts);
 	auto exact = !parts.isEmpty() && parts.first() == "exact";
 	if (exact) parts.removeFirst();
@@ -633,7 +612,6 @@ void Dispatcher::resizeActive(const QString& args) {
 		return;
 	}
 
-	// Tiled windows change their split; floating ones (every window without tiling) resize.
 	if (auto* tiling = TilingManager::active()) {
 		auto dx = exact ? x - window->rect().width() : x;
 		auto dy = exact ? y - window->rect().height() : y;
@@ -647,7 +625,6 @@ void Dispatcher::centerWindow() {
 	auto* window = this->ipc->tracker()->activeWindow();
 	if (window == nullptr) return;
 
-	// Like Hyprland, only floating windows move.
 	auto* tiling = TilingManager::active();
 	if (tiling != nullptr && tiling->isTiled(window)) return;
 
@@ -660,7 +637,6 @@ void Dispatcher::moveWindowPixel(TrackedWindow* window, const QString& x, const 
 	auto* screen = window->screen();
 	if (screen == nullptr) return;
 
-	// Coordinates are relative to the window's screen, like Hyprland's monitor local layout.
 	auto origin = screen->geometry().topLeft();
 	auto logical = origin + QPoint(qRound(x.toDouble()), qRound(y.toDouble()));
 	window->moveTo(logical);
@@ -682,7 +658,6 @@ void Dispatcher::exec(const QString& command) {
 	startup.cb = sizeof(startup);
 	PROCESS_INFORMATION process {};
 
-	// CREATE_NO_WINDOW keeps `cmd /c <gui app>` from flashing a console; GUI apps are unaffected.
 	auto ok = CreateProcessW(
 	    nullptr,
 	    commandLine.data(),
@@ -702,7 +677,6 @@ void Dispatcher::exec(const QString& command) {
 		return;
 	}
 
-	// Not an executable: let the shell resolve URLs, documents and app aliases.
 	QString file;
 	QString params;
 

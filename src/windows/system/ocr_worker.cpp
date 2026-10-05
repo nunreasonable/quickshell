@@ -291,10 +291,6 @@ winrt::Windows::Media::Ocr::OcrEngine OcrWorker::engine() {
 	}
 
 	if (!this->mEngine) {
-		// No recognizer for any of the user's profile languages (or the OCR optional feature
-		// isn't installed for them); fall back to whatever recognizer language IS installed
-		// rather than failing outright - matches the Linux side's tesseract invocation, which
-		// also just asks for every language it has (`tesseract --list-langs`).
 		try {
 			auto available = OcrEngine::AvailableRecognizerLanguages();
 			if (available.Size() > 0) {
@@ -322,7 +318,6 @@ void OcrWorker::cmdRecognize(int requestId, const QString& path) {
 			    "add a language, then install its handwriting/OCR optional feature)"
 			);
 		} else {
-			// StorageFile wants an absolute path with backslashes; ii's paths use slashes.
 			auto wpath = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath()).toStdWString();
 			auto file = StorageFile::GetFileFromPathAsync(winrt::hstring(wpath)).get();
 			auto stream = file.OpenAsync(FileAccessMode::Read).get();

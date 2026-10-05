@@ -12,10 +12,6 @@ namespace qs::bluetooth {
 class WinBluetooth;
 class BtWorker;
 
-///! GUI-thread owner of the Bluetooth worker thread.
-/// Starts a dedicated MTA thread running a BtWorker (Qt's GUI thread is STA and can't block on
-/// WinRT, see docs/AGENTS.md) and queues commands to it. Every method returns immediately; the
-/// results come back to WinBluetooth as queued backend* calls.
 class BtBackend {
 public:
 	explicit BtBackend(WinBluetooth* frontend);
@@ -29,7 +25,6 @@ public:
 	void forget(const QString& key);
 	void connectDevice(const QString& key, bool connect);
 
-	/// Stops the worker thread (bounded wait). Safe to call more than once.
 	void stop();
 
 private:

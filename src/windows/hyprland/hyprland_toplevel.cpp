@@ -30,7 +30,6 @@ HyprlandToplevel::HyprlandToplevel(HyprlandIpc* ipc, TrackedWindow* window)
 	this->bActivated.setBinding([window]() { return window->bindableActivated().value(); });
 
 	this->bWorkspace.setBinding([this, window]() -> HyprlandWorkspace* {
-		// Depend on the list so a desktop added or removed re-resolves the index.
 		this->ipc->bindableWorkspacesVersion().value();
 		auto desktop = window->bindableDesktop().value();
 		if (desktop < 0) return this->ipc->bindableFocusedWorkspace().value();
@@ -57,7 +56,6 @@ HyprlandToplevel::HyprlandToplevel(HyprlandIpc* ipc, TrackedWindow* window)
 	QObject::connect(this, &HyprlandToplevel::monitorChanged, this, &HyprlandToplevel::refreshIpcObject);
 	// clang-format on
 
-	// Only reached when tiling gets used; the manager doesn't start anything by being created.
 	QObject::connect(
 	    TilingManager::instance(),
 	    &TilingManager::windowTilingChanged,
@@ -78,7 +76,6 @@ HyprlandToplevel::HyprlandToplevel(HyprlandIpc* ipc, Toplevel* toplevel)
     , mWaylandHandle(toplevel) {
 	this->setHyprlandHandle(ipc->toplevelForWindow(toplevel->window()));
 
-	// Attached before the Hyprland side saw the window (both react to the same tracker signal).
 	if (this->mHyprlandHandle == nullptr) {
 		QObject::connect(ipc, &HyprlandIpc::toplevelAdded, this, &HyprlandToplevel::onToplevelAdded);
 	}
@@ -131,8 +128,6 @@ void HyprlandToplevel::setHyprlandHandle(HyprlandToplevel* handle) {
 void HyprlandToplevel::bindToHandle() {
 	auto* handle = this->mHyprlandHandle;
 
-	// Plain copies kept in sync by signals rather than bindings: a binding would read the
-	// handle while it is being destroyed.
 	auto sync = [this, handle]() {
 		Qt::beginPropertyUpdateGroup();
 		this->bTitle = handle->bindableTitle().value();
@@ -203,11 +198,8 @@ void HyprlandToplevel::refreshIpcObject() {
 	auto* workspace = this->bWorkspace.value();
 	auto* monitor = this->bMonitor.value();
 
-	// Hyprland: 0 none, 1 maximized, 2 fullscreen.
 	auto fullscreen = window->fullscreen() ? 2 : (window->maximized() ? 1 : 0);
 
-	// With tiling on, whatever isn't in a layout floats. Without it, tiled is the Hyprland
-	// default and a restored window the Windows one.
 	auto* tiling = TilingManager::active();
 	auto floating = tiling != nullptr ? !tiling->isTiled(window) : fullscreen == 0;
 
@@ -239,7 +231,6 @@ void HyprlandToplevel::refreshIpcObject() {
 	    {"swallowing", "0x0"},
 	    {"focusHistoryID", window->activated() ? 0 : -1},
 	    {"inhibitingIdle", false},
-	    // Windows extras
 	    {"minimized", window->minimized()},
 	    {"exe", window->exePath()},
 	};

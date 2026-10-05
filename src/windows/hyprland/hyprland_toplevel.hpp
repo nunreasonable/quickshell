@@ -13,42 +13,25 @@
 
 namespace qs::hyprland::ipc {
 
-//! Hyprland Toplevel
-/// Represents a window the way Hyprland's IPC exposes it, backed by the Windows window tracker.
-/// Can also be used as an attached object of a @@Quickshell.Wayland.Toplevel, to resolve a
-/// handle to a Hyprland toplevel.
 class HyprlandToplevel: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
 	QML_UNCREATABLE("");
 	QML_ATTACHED(HyprlandToplevel);
 	// clang-format off
-	/// Hexadecimal window address (the HWND), without a `0x` prefix like Hyprland's.
 	Q_PROPERTY(QString address READ addressStr NOTIFY addressChanged);
-	/// The toplevel handle, exposing the Hyprland toplevel.
-	/// Null on an attached object until the window is known to the Hyprland module.
 	Q_PROPERTY(HyprlandToplevel* handle READ hyprlandHandle NOTIFY hyprlandHandleChanged);
-	/// The @@Quickshell.Wayland.Toplevel of the same window.
 	Q_PROPERTY(qs::wayland::toplevel::Toplevel* wayland READ waylandHandle NOTIFY waylandHandleChanged);
-	/// The title of the toplevel
 	Q_PROPERTY(QString title READ default NOTIFY titleChanged BINDABLE bindableTitle);
-	/// Whether the toplevel is the foreground window
 	Q_PROPERTY(bool activated READ default NOTIFY activatedChanged BINDABLE bindableActivated);
-	/// Whether the client is urgent or not. Always false on Windows for now.
 	Q_PROPERTY(bool urgent READ default NOTIFY urgentChanged BINDABLE bindableUrgent);
-	/// `hyprctl clients -j` style object for this window. Kept live on Windows.
 	Q_PROPERTY(QVariantMap lastIpcObject READ default BINDABLE bindableLastIpcObject NOTIFY lastIpcObjectChanged);
-	/// The current workspace (virtual desktop) of the toplevel. Windows shown on every desktop
-	/// follow the current one.
 	Q_PROPERTY(qs::hyprland::ipc::HyprlandWorkspace* workspace READ default NOTIFY workspaceChanged BINDABLE bindableWorkspace);
-	/// The current monitor of the toplevel (might be null)
 	Q_PROPERTY(qs::hyprland::ipc::HyprlandMonitor* monitor READ default NOTIFY monitorChanged BINDABLE bindableMonitor);
 	// clang-format on
 
 public:
-	/// Created by HyprlandIpc for a tracked window.
 	explicit HyprlandToplevel(HyprlandIpc* ipc, qs::windows::TrackedWindow* window);
-	/// When attached from a Toplevel
 	explicit HyprlandToplevel(HyprlandIpc* ipc, qs::wayland::toplevel::Toplevel* toplevel);
 
 	static HyprlandToplevel* qmlAttachedProperties(QObject* object);
@@ -72,7 +55,6 @@ public:
 	[[nodiscard]] QBindable<HyprlandMonitor*> bindableMonitor() { return &this->bMonitor; }
 
 	void refreshIpcObject();
-	// Drops the toplevel from its workspace's list; used right before it is deleted.
 	void leaveWorkspace();
 
 signals:
@@ -98,7 +80,6 @@ private:
 	quint64 mAddress = 0;
 	HyprlandIpc* ipc;
 
-	// Set for toplevels owned by HyprlandIpc; attached objects go through mHyprlandHandle.
 	qs::windows::TrackedWindow* mWindow = nullptr;
 	qs::wayland::toplevel::Toplevel* mWaylandHandle = nullptr;
 	HyprlandToplevel* mHyprlandHandle = nullptr;

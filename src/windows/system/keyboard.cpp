@@ -14,8 +14,6 @@ namespace qs::windows::sys {
 namespace {
 QS_LOGGING_CATEGORY(logKeyboard, "quickshell.windows.keyboard", QtWarningMsg);
 
-// Only one Keyboard ever exists (QML_SINGLETON); the WinEvent hook callback (a free function,
-// since SetWinEventHook takes a plain function pointer) reaches it through this.
 Keyboard* g_instance = nullptr;
 
 QString localeNameFromHkl(HKL hkl) {

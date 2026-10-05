@@ -13,9 +13,6 @@ namespace {
 
 using material_color_utilities::Hct;
 
-// The generator uses materialyoucolor's math_utils, whose sanitize_degrees_double is Python's
-// float %: fmod, moved into the divisor's sign, and +0 for a zero remainder. material-color-
-// utilities' C++ SanitizeDegreesDouble returns 360 for -360, so these are spelled out here.
 double sanitizeDegrees(double degrees) {
 	double mod = std::fmod(degrees, 360.0);
 	if (mod == 0.0) return 0.0;
@@ -54,8 +51,6 @@ std::optional<Argb>
 terminalColor(std::string_view name, std::optional<Argb> base, const TerminalInputs& inputs) {
 	if (inputs.monochrome) return std::nullopt;
 
-	// --blend_bg_fg: the background and foreground come from the material scheme, the base
-	// scheme's own term0/term15 aren't used.
 	if (name == "term0") {
 		if (!inputs.surfaceContainerLow) return std::nullopt;
 		return boostChromaTone(*inputs.surfaceContainerLow, 1.2, 0.95);

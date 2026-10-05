@@ -14,9 +14,6 @@ namespace qs::hyprland::ipc {
 
 class HyprlandWorkspace;
 
-///! A screen, presented like a Hyprland monitor.
-/// Same properties as the Hyprland IPC monitor. `id` is the screen's index, `width`/`height`
-/// are physical pixels and `scale` the device pixel ratio, like Hyprland reports them.
 class HyprlandMonitor: public QObject {
 	Q_OBJECT;
 	// clang-format off
@@ -28,12 +25,8 @@ class HyprlandMonitor: public QObject {
 	Q_PROPERTY(qint32 width READ default NOTIFY widthChanged BINDABLE bindableWidth);
 	Q_PROPERTY(qint32 height READ default NOTIFY heightChanged BINDABLE bindableHeight);
 	Q_PROPERTY(qreal scale READ default NOTIFY scaleChanged BINDABLE bindableScale);
-	/// `hyprctl monitors -j` style object for this monitor. Kept live on Windows.
 	Q_PROPERTY(QVariantMap lastIpcObject READ lastIpcObject NOTIFY lastIpcObjectChanged);
-	/// The currently active workspace. Virtual desktops are global, so this is the current
-	/// desktop on every monitor.
 	Q_PROPERTY(qs::hyprland::ipc::HyprlandWorkspace* activeWorkspace READ default NOTIFY activeWorkspaceChanged BINDABLE bindableActiveWorkspace);
-	/// If the foreground window is on this monitor.
 	Q_PROPERTY(bool focused READ default NOTIFY focusedChanged BINDABLE bindableFocused);
 	// clang-format on
 	QML_ELEMENT;

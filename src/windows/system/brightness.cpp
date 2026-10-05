@@ -27,8 +27,6 @@ namespace qs::windows::sys {
 namespace {
 QS_LOGGING_CATEGORY(logBrightness, "quickshell.windows.brightness", QtWarningMsg);
 
-// ---- DDC/CI (external monitors), dxva2.dll. Always called off the Qt thread: I2C is slow. ----
-
 bool ddcQuery(HMONITOR hMonitor, qreal& outBrightness) {
 	if (hMonitor == nullptr) return false;
 
@@ -65,7 +63,7 @@ bool ddcSet(HMONITOR hMonitor, qreal value) {
 
 	MC_VCP_CODE_TYPE vcpType {};
 	DWORD current = 0;
-	DWORD maxValue = 100; // fallback if the refresh read below fails
+	DWORD maxValue = 100;
 	GetVCPFeatureAndVCPFeatureReply(monitors[0].hPhysicalMonitor, 0x10, &vcpType, &current, &maxValue);
 
 	auto target = static_cast<DWORD>(std::clamp(value, 0.0, 1.0) * qreal(maxValue) + 0.5);
@@ -75,10 +73,6 @@ bool ddcSet(HMONITOR hMonitor, qreal value) {
 	return ok;
 }
 
-// ---- Internal panels via root\wmi WmiMonitorBrightness(Methods), classic COM/WMI. ----
-
-// RAII guard for a WMI ROOT\WMI connection. Always built and torn down on the worker thread
-// that uses it: COM apartments are thread-local, and opening one per call keeps this simple.
 struct WmiSession {
 	bool initializedCom = false;
 	IWbemLocator* locator = nullptr;
@@ -139,9 +133,6 @@ struct WmiSession {
 	WmiSession& operator=(WmiSession&&) = delete;
 };
 
-// Returns the InstanceName of the `index`-th WmiMonitorBrightness instance (enumeration order is
-// stable for the lifetime of a static set of panels, though not formally guaranteed by WMI) and
-// its current brightness (0..100). Returns false if there's no such instance.
 bool queryWmiBrightness(int index, qreal& outBrightness, QString* outInstanceName = nullptr) {
 	WmiSession session;
 	if (!session.open()) return false;
@@ -206,8 +197,6 @@ bool setWmiBrightness(int index, qreal value) {
 	WmiSession session;
 	if (!session.open()) return false;
 
-	// WmiMonitorBrightnessMethods shares InstanceName with the WmiMonitorBrightness instance
-	// above: find the matching methods object, then call its WmiSetBrightness method.
 	auto escaped = instanceName;
 	escaped.replace(QStringLiteral("'"), QStringLiteral("\\'"));
 	auto queryString =

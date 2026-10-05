@@ -20,7 +20,6 @@ namespace qs::windows::sys {
 namespace {
 Q_LOGGING_CATEGORY(logScreenRecorder, "quickshell.windows.recorder", QtWarningMsg);
 
-// Encoders reject tiny frames (hardware ones more so); nothing that small is worth a video.
 constexpr int MIN_SIZE = 16;
 
 using recorder::RecorderController;
@@ -59,7 +58,6 @@ bool ScreenRecorder::start(
 		return false;
 	};
 
-	// H.264 with 4:2:0 chroma needs even dimensions; a pixel less is unnoticeable.
 	auto region = QRect(x, y, width & ~1, height & ~1);
 	if (region.width() < MIN_SIZE || region.height() < MIN_SIZE) {
 		return fail("the region is too small");

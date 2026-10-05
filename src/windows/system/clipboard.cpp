@@ -26,8 +26,6 @@ QS_LOGGING_CATEGORY(logClipboard, "quickshell.windows.clipboard", QtWarningMsg);
 
 constexpr qsizetype MAX_ENTRIES = 200;
 
-// Copied images, a "<pid>-<n>" folder per Clipboard: the history lives in memory, so whatever a
-// process leaves behind (it crashed) is of no use to the next one.
 QString cacheRoot() {
 	return QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation)
 	     + QStringLiteral("/quickshell/clipboard");
@@ -70,8 +68,6 @@ Clipboard::Clipboard(QObject* parent): QObject(parent) {
 
 	auto* window = qs::windows::services::ServiceMessageWindow::instance();
 
-	// A config reload creates the new singleton before the old one goes away, and the window
-	// keeps both handlers; the listener stays registered for the window's lifetime.
 	static auto listening = false; // NOLINT
 	if (!listening) {
 		listening = AddClipboardFormatListener(window->hwnd()) != FALSE;
@@ -149,7 +145,7 @@ void Clipboard::captureText(const QString& text) {
 	if (!this->storage.empty() && !this->storage.front().isImage
 	    && this->storage.front().text == text)
 	{
-		return; // identical to the current top entry, nothing changed
+		return;
 	}
 
 	ClipboardEntry entry;
@@ -162,8 +158,6 @@ void Clipboard::captureText(const QString& text) {
 	this->rebuildEntriesProperty();
 }
 
-// Clipboard DIBs can be any bit depth; blitting through GDI onto a fresh 32bpp top-down DIB
-// section converts for us instead of hand-decoding every BITMAPINFOHEADER variant.
 void Clipboard::captureImage() {
 	auto* data = GetClipboardData(CF_DIB);
 	if (data == nullptr) return;
@@ -185,7 +179,7 @@ void Clipboard::captureImage() {
 	BITMAPINFO outInfo {};
 	outInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
 	outInfo.bmiHeader.biWidth = width;
-	outInfo.bmiHeader.biHeight = -height; // negative: top-down, matches QImage's row order
+	outInfo.bmiHeader.biHeight = -height;
 	outInfo.bmiHeader.biPlanes = 1;
 	outInfo.bmiHeader.biBitCount = 32;
 	outInfo.bmiHeader.biCompression = BI_RGB;
@@ -217,7 +211,6 @@ void Clipboard::captureImage() {
 
 	QImage image;
 	if (blitted) {
-		// Format_RGB32 (not ARGB32): CF_DIB has no alpha channel, the 4th byte is unused/garbage.
 		QImage view(
 		    static_cast<uchar*>(outBits),
 		    width,
@@ -225,7 +218,7 @@ void Clipboard::captureImage() {
 		    width * 4,
 		    QImage::Format_RGB32
 		);
-		image = view.copy(); // own the pixels before the DIB section is destroyed below
+		image = view.copy();
 	}
 
 	SelectObject(memDc, oldBmp);
@@ -292,7 +285,7 @@ void Clipboard::writeImageToClipboard(const QImage& imageIn) {
 	BITMAPINFOHEADER bih {};
 	bih.biSize = sizeof(BITMAPINFOHEADER);
 	bih.biWidth = image.width();
-	bih.biHeight = image.height(); // bottom-up, classic CF_DIB convention
+	bih.biHeight = image.height();
 	bih.biPlanes = 1;
 	bih.biBitCount = 32;
 	bih.biCompression = BI_RGB;
@@ -308,7 +301,6 @@ void Clipboard::writeImageToClipboard(const QImage& imageIn) {
 	}
 
 	memcpy(dst, &bih, sizeof(bih)); // NOLINT
-	// CF_DIB rows are bottom-up; QImage rows are top-down.
 	for (int y = 0; y < image.height(); y++) {
 		memcpy( // NOLINT
 		    dst + sizeof(bih) + static_cast<SIZE_T>(y) * image.width() * 4,
@@ -317,7 +309,6 @@ void Clipboard::writeImageToClipboard(const QImage& imageIn) {
 		);
 	}
 	GlobalUnlock(mem);
-	// The clipboard owns the memory only once SetClipboardData succeeds.
 	if (SetClipboardData(CF_DIB, mem) == nullptr) GlobalFree(mem);
 }
 

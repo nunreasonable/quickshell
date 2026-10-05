@@ -19,7 +19,6 @@ HyprlandMonitor::HyprlandMonitor(HyprlandIpc* ipc, QScreen* screen)
     : QObject(ipc)
     , ipc(ipc)
     , mScreen(screen) {
-	// Virtual desktops are global: every monitor shows the current one.
 	this->bActiveWorkspace.setBinding([this]() {
 		return this->ipc->bindableFocusedWorkspace().value();
 	});
@@ -30,7 +29,6 @@ HyprlandMonitor::HyprlandMonitor(HyprlandIpc* ipc, QScreen* screen)
 		this->updateFromScreen(this->bId.value());
 	});
 
-	// The work area changes as AppBars (ours included) come and go: that is `reserved`.
 	QObject::connect(screen, &QScreen::availableGeometryChanged, this, &HyprlandMonitor::refreshIpcObject);
 	QObject::connect(this, &HyprlandMonitor::activeWorkspaceChanged, this, &HyprlandMonitor::refreshIpcObject);
 	QObject::connect(this, &HyprlandMonitor::focusedChanged, this, &HyprlandMonitor::refreshIpcObject);
@@ -46,7 +44,6 @@ void HyprlandMonitor::updateFromScreen(qint32 id) {
 	this->bDescription = (this->mScreen->manufacturer() + " " + this->mScreen->model()).trimmed();
 	this->bX = geometry.x();
 	this->bY = geometry.y();
-	// Hyprland reports the mode size in physical pixels and the scale separately.
 	this->bWidth = static_cast<qint32>(std::lround(geometry.width() * dpr));
 	this->bHeight = static_cast<qint32>(std::lround(geometry.height() * dpr));
 	this->bScale = dpr;
@@ -59,7 +56,6 @@ void HyprlandMonitor::refreshIpcObject() {
 	auto dpr = this->mScreen->devicePixelRatio();
 	auto rects = qs::windows::monitorRects(qs::windows::monitorForScreen(this->mScreen));
 
-	// Space reserved by AppBars and the taskbar, in logical pixels, as left/top/right/bottom.
 	auto reserved = QVariantList {0, 0, 0, 0};
 	if (rects.valid) {
 		auto logical = [dpr](int physical) { return static_cast<int>(std::lround(physical / dpr)); };
