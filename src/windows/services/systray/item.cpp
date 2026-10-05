@@ -72,7 +72,19 @@ void SystemTrayItem::update(const TrayIconMessage& message) {
 	}
 
 	if ((message.flags & NIF_GUID) != 0) this->guid = message.guid;
-	if ((message.flags & NIF_MESSAGE) != 0) this->callbackMessage = message.callbackMessage;
+	if ((message.flags & NIF_MESSAGE) != 0) {
+		this->callbackMessage = message.callbackMessage;
+	} else if (!hadCallback && message.message == NIM_MODIFY && !message.seeded
+	           && message.callbackMessage >= WM_USER && message.callbackMessage <= 0xffff)
+	{
+		// The add that carried it went past us. Apps usually keep one NOTIFYICONDATA and only
+		// flag what changed, so the callback message (and the version they set) is still in
+		// there. Only an app message is taken: never a system one from a stray value.
+		this->callbackMessage = message.callbackMessage;
+		auto version = message.version;
+		if (version == NOTIFYICON_VERSION || version == NOTIFYICON_VERSION_4) this->version = version;
+	}
+
 	if (message.message == NIM_SETVERSION) this->version = message.version;
 
 	if ((message.flags & NIF_ICON) != 0) {

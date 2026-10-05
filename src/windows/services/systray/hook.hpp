@@ -23,7 +23,7 @@ struct TrayIconMessage {
 	QString tip;
 	DWORD state = 0;
 	DWORD stateMask = 0;
-	UINT version = 0; // NIM_SETVERSION only
+	UINT version = 0; // meant for NIM_SETVERSION
 	QUuid guid;
 
 	// From explorer's list of icons that were already there (seed.cpp) rather than from a

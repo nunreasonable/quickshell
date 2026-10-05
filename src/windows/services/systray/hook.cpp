@@ -219,7 +219,8 @@ TrayIconMessage decode(const TrayDataWire& wire) {
 		message.tip = QString::fromWCharArray(nid.szTip, length);
 	}
 
-	if (wire.message == NIM_SETVERSION) message.version = nid.uVersion;
+	// Outside NIM_SETVERSION it's whatever the app's structure holds (see SystemTrayItem::update).
+	message.version = nid.uVersion;
 	if ((nid.uFlags & NIF_GUID) != 0) message.guid = QUuid(nid.guidItem);
 
 	return message;
