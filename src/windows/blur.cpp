@@ -598,7 +598,7 @@ bool BackdropWindow::setPieces(const QList<BlurShape>& shapes) {
 		const auto& whole = wholes.at(i);
 		auto add = [&](const QRect& band) {
 			auto part = band.intersected(whole.clip);
-			if (!part.isEmpty()) kept.push_back({.rect = part});
+			if (!part.isEmpty()) kept.push_back({.rect = part, .shape = QRect()});
 		};
 
 		auto full = whole.full;
