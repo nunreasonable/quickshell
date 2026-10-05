@@ -7,7 +7,8 @@
 # (system/) ii's services call into instead of spawning Linux CLIs, and native service modules
 # (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower, Mpris on GSMTC,
 # Notifications (the shell's own plus a mirror of the Windows notification center), plus
-# Quickshell.Bluetooth on WinRT (bluetooth/).
+# Quickshell.Bluetooth on WinRT (bluetooth/). Wallpaper panels can live inside explorer's desktop
+# window, behind the icons (desktop_host.cpp).
 
 qt_add_library(quickshell-windows STATIC
 	util.cpp
@@ -23,6 +24,7 @@ qt_add_library(quickshell-windows STATIC
 	window_tracker.cpp
 	taskbar.cpp
 	capture.cpp
+	desktop_host.cpp
 	desktopentry_backend.cpp
 	appicon.cpp
 	system/session.cpp

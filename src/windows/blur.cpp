@@ -1432,7 +1432,10 @@ void PanelBlur::updateActive() {
 	// ignoreAlpha 1 leaves nothing to blur (ii uses it to opt namespaces out).
 	auto wanted = manager != nullptr && manager->enabled() && manager->available() && this->rule.blur
 	           && (!this->rule.ignoreAlpha.has_value() || *this->rule.ignoreAlpha < 1.0)
-	           && hwnd != nullptr && this->mWindow != nullptr;
+	           && hwnd != nullptr && this->mWindow != nullptr
+	           // the backdrop is a top level window behind the panel; nothing to show it through
+	           // behind the desktop icons
+	           && !this->panel->isEmbedded();
 
 	if (!wanted) {
 		if (this->active) qCDebug(logBlur) << "Blur off for" << this->panel->ns();

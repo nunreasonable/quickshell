@@ -22,9 +22,11 @@ Q_NAMESPACE;
 QML_ELEMENT;
 
 enum Enum : quint8 {
-	/// Directly above the desktop, below every other window.
+	/// Directly above the desktop, below every other window. Behind the desktop icons instead
+	/// while @@Quickshell.Windows.DesktopLayer.enabled is set.
 	Background = 0,
-	/// A normal window that is not kept on top.
+	/// A normal window that is not kept on top. Behind the desktop icons, like `Background`,
+	/// while @@Quickshell.Windows.DesktopLayer.enabled is set.
 	Bottom = 1,
 	/// Always on top of normal windows, lowered while a fullscreen application is active.
 	Top = 2,
