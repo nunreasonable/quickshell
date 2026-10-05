@@ -120,12 +120,17 @@ signals:
 private:
 	friend class CaptureSession;
 	void onSessionStopped(bool error);
-	void onFrame();
+	// `live` is the capture thread's own options.live at the moment this frame was published
+	// (under core->mutex, alongside the single-shot auto-stop decision it made from the same
+	// read). Deciding again here from a GUI-thread-local flag would race setLive(): a toggle
+	// that lands between the capture thread's decision and this call running would make the two
+	// sides disagree about whether the session is still alive, leaving mRunning stuck true for a
+	// session that already tore itself down (and start() a permanent no-op).
+	void onFrame(bool live);
 
 	std::shared_ptr<SessionCore> core;
 	CaptureSession* session = nullptr;
 	bool mRunning = false;
-	bool live = false;
 };
 
 ///! Process wide capture thread (MTA apartment + D3D11 device).

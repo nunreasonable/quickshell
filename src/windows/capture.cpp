@@ -762,7 +762,11 @@ void CaptureSession::onFrameArrived(
 
 		if (c.handle != nullptr) {
 			auto* handle = c.handle;
-			QMetaObject::invokeMethod(handle, [handle] { handle->onFrame(); }, Qt::QueuedConnection);
+			// Snapshot now, under the same lock and from the same read as the auto-stop decision
+			// just below: see the comment on CaptureHandle::onFrame for why this can't be
+			// recomputed later from a separately toggled flag.
+			auto live = c.options.live;
+			QMetaObject::invokeMethod(handle, [handle, live] { handle->onFrame(live); }, Qt::QueuedConnection);
 		}
 
 		if (!c.options.live) {
@@ -805,8 +809,7 @@ CaptureHandle::CaptureHandle(
     QObject* parent
 )
     : QObject(parent)
-    , core(std::make_shared<SessionCore>())
-    , live(options.live) {
+    , core(std::make_shared<SessionCore>()) {
 	this->core->target = target;
 	this->core->options = options;
 	this->core->handle = this;
@@ -845,7 +848,6 @@ void CaptureHandle::setCursor(bool cursor) {
 }
 
 void CaptureHandle::setLive(bool live) {
-	this->live = live;
 	auto* session = this->session;
 	QMetaObject::invokeMethod(session, [session, live] { session->setLive(live); }, Qt::QueuedConnection);
 }
@@ -856,8 +858,8 @@ std::shared_ptr<SharedFrame> CaptureHandle::latestFrame(quint64* serial) const {
 	return this->core->latest;
 }
 
-void CaptureHandle::onFrame() {
-	if (!this->live) this->mRunning = false;
+void CaptureHandle::onFrame(bool live) {
+	if (!live) this->mRunning = false;
 	emit this->frameReady();
 }
 
