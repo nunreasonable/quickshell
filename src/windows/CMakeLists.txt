@@ -2,7 +2,8 @@
 # a low level mouse hook for input masks, blur behind panels from layer rules through a
 # Windows.UI.Composition host backdrop), global shortcuts (RegisterHotKey + a low level
 # keyboard hook) and focus grabs, the window / virtual desktop tracker, the
-# Windows.Graphics.Capture engine (capture.cpp) behind ScreencopyView and Screenshot, stand-in
+# Windows.Graphics.Capture engine (capture.cpp) behind ScreencopyView and Screenshot, the screen
+# recorder (recorder/: WGC + Media Foundation + WASAPI loopback) behind ScreenRecorder, stand-in
 # Quickshell.Wayland and Quickshell.Hyprland modules built on it, small native singletons
 # (system/) ii's services call into instead of spawning Linux CLIs, and native service modules
 # (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower, Mpris on GSMTC,
@@ -49,6 +50,11 @@ qt_add_library(quickshell-windows STATIC
 	system/ocr.cpp
 	system/ocr_backend.cpp
 	system/ocr_worker.cpp
+	system/screen_recorder.cpp
+	recorder/recording.cpp
+	recorder/region_capture.cpp
+	recorder/mp4_writer.cpp
+	recorder/loopback.cpp
 )
 
 qt_add_qml_module(quickshell-windows
@@ -111,9 +117,22 @@ target_link_libraries(quickshell-windows PRIVATE
 	CoreMessaging
 	# system/terminal_colors_math.cpp: HCT
 	material-color
+	# recorder/: Media Foundation (sink writer, H.264/AAC encoders), delay loaded below
+	mfplat
+	mfreadwrite
+	mfuuid
+	delayimp
 )
 target_link_libraries(quickshell-windows-init PRIVATE Qt::Quick Qt::Qml)
 
 qs_module_pch(quickshell-windows SET large)
 
 target_link_libraries(quickshell PRIVATE quickshell-windowsplugin quickshell-windows-init)
+
+# Windows N editions ship without Media Foundation unless the Media Feature Pack is installed;
+# delay loading keeps the executables starting there (the recorder checks for the DLLs first).
+foreach(exe quickshell quickshell-gui)
+	if (TARGET ${exe})
+		target_link_options(${exe} PRIVATE /DELAYLOAD:mfplat.dll /DELAYLOAD:mfreadwrite.dll)
+	endif()
+endforeach()
