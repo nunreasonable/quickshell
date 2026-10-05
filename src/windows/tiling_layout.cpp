@@ -78,6 +78,8 @@ void DwindleLayout::insert(Id id, Id target, const QPoint* cursor) {
 		return;
 	}
 
+	if (this->mArea.isValid()) this->compute(this->mArea);
+
 	auto* split = this->find(target);
 	if (split == nullptr) split = this->lastLeaf();
 

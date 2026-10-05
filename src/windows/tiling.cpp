@@ -575,6 +575,8 @@ TilingManager::Layout* TilingManager::layoutAt(const GUID& desktop, QScreen* scr
 	layout->desktop = desktop;
 	layout->screen = screen;
 	layout->tree.setPreserveSplit(this->mPreserveSplit);
+	auto rects = monitorRects(monitorForScreen(screen));
+	if (rects.valid) layout->tree.compute(rects.work);
 
 	auto* raw = layout.get();
 	this->layouts.emplace(key, std::move(layout));
