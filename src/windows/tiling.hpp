@@ -214,10 +214,12 @@ private:
 /// dwindle layout, inside the monitor's work area (the taskbar and AppBars such as the bar
 /// stay clear). Windows' own virtual desktops stay the workspaces. Off by default.
 ///
-/// Dialogs, owned and tool windows, non resizable and always on top windows, windows of
-/// elevated processes (which can't be moved from a normal one), windows of @@excluded apps and
-/// windows that refuse the size of their tile float. Maximized and fullscreen windows keep
-/// their place and come back to it when restored; minimized ones leave the layout.
+/// Dialogs, owned and tool windows, non resizable and always on top windows, windows shown on
+/// every desktop (pinned), windows of elevated processes (which can't be moved from a normal
+/// one), windows of @@excluded apps and windows that refuse the size of their tile float.
+/// Maximized and fullscreen windows keep their place and come back to it when restored;
+/// minimized ones leave the layout. Rules are checked when a window appears or changes state,
+/// and on @@relayout().
 ///
 /// Dragging a tiled window onto another swaps them (onto another monitor moves it there),
 /// dragging a border changes the split. The Hyprland dispatchers movefocus, movewindow,
@@ -225,6 +227,7 @@ private:
 /// splitratio) act on the layout while tiling is on.
 ///
 /// Turning tiling off puts each tiled window back where it was before it was first tiled.
+/// Only one process tiles at a time: in a second Quickshell process @@enabled stays false.
 class Tiling: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
