@@ -3,6 +3,7 @@
 #include <qhash.h>
 #include <qset.h>
 #include <qstring.h>
+#include <qstringlist.h>
 #include <qtypes.h>
 
 #include "../window_tracker.hpp"
@@ -26,6 +27,7 @@ private:
 		QString function;
 		QString scalar;                // single argument, unquoted: hl.dsp.global("x")
 		QHash<QString, QString> table; // flat table fields, unquoted
+		QStringList positional;        // table entries without a key: {x = 1, "exact"}
 		bool ok = false;
 	};
 
@@ -46,6 +48,14 @@ private:
 	void pin(qs::windows::TrackedWindow* window);
 	void moveFocus(const QString& direction);
 	void moveWindow(const QString& direction);
+	// Tiling aware dispatchers (Quickshell.Windows Tiling); without tiling they keep the plain
+	// Windows behavior described at each.
+	void swapWindow(const QString& direction);
+	void toggleFloating(qs::windows::TrackedWindow* window, const QString& action);
+	void toggleSplit();
+	void layoutMessage(const QString& message);
+	void resizeActive(const QString& args);
+	void centerWindow();
 	void moveWindowPixel(qs::windows::TrackedWindow* window, const QString& x, const QString& y);
 	void exec(const QString& command);
 

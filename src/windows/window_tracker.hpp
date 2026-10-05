@@ -156,6 +156,10 @@ signals:
 	void windowRemoved(TrackedWindow* window);
 	void activeWindowChanged();
 	void flushed();
+	// The user started / finished dragging the window's caption or a border (the modal move/size
+	// loop). Emitted as the events arrive, before the window's state is refreshed.
+	void moveSizeStarted(TrackedWindow* window);
+	void moveSizeEnded(TrackedWindow* window);
 
 private:
 	explicit WindowTracker();

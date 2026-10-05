@@ -105,6 +105,8 @@ void eventThreadMain(HANDLE readyEvent) {
 	// The ranges stay tight. EVENT_OBJECT_CREATE is left out on purpose: nothing is known about
 	// a window before it is shown, and creations are by far the most frequent events.
 	hook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND);
+	// Once per drag, not per mouse move: for tiling's drag and drop.
+	hook(EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND);
 	hook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND);
 	hook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE);
 	hook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_NAMECHANGE);
@@ -532,8 +534,8 @@ void WindowTracker::startEventThread() {
 	WaitForSingleObject(ready, INFINITE);
 	CloseHandle(ready);
 
-	if (gEventHookCount.load() < 5) {
-		qCWarning(logTracker) << "Only" << gEventHookCount.load() << "of 5 window event hooks installed.";
+	if (gEventHookCount.load() < 6) {
+		qCWarning(logTracker) << "Only" << gEventHookCount.load() << "of 6 window event hooks installed.";
 	}
 }
 
@@ -595,6 +597,13 @@ void WindowTracker::onEvent(DWORD event, HWND hwnd) {
 	case EVENT_SYSTEM_MINIMIZEEND:
 		if (tracked) this->dirty[hwnd].state = true;
 		else this->candidates.insert(hwnd);
+		break;
+	case EVENT_SYSTEM_MOVESIZESTART:
+	case EVENT_SYSTEM_MOVESIZEEND:
+		if (!tracked) return;
+		this->dirty[hwnd].state = true;
+		if (event == EVENT_SYSTEM_MOVESIZESTART) emit this->moveSizeStarted(this->byHwnd.value(hwnd));
+		else emit this->moveSizeEnded(this->byHwnd.value(hwnd));
 		break;
 	default: return;
 	}

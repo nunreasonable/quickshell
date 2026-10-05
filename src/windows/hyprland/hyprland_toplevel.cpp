@@ -9,6 +9,7 @@
 #include <qtypes.h>
 #include <qvariant.h>
 
+#include "../tiling.hpp"
 #include "../wayland/toplevel.hpp"
 #include "../window_tracker.hpp"
 #include "connection.hpp"
@@ -55,6 +56,16 @@ HyprlandToplevel::HyprlandToplevel(HyprlandIpc* ipc, TrackedWindow* window)
 	QObject::connect(this, &HyprlandToplevel::workspaceChanged, this, &HyprlandToplevel::refreshIpcObject);
 	QObject::connect(this, &HyprlandToplevel::monitorChanged, this, &HyprlandToplevel::refreshIpcObject);
 	// clang-format on
+
+	// Only reached when tiling gets used; the manager doesn't start anything by being created.
+	QObject::connect(
+	    TilingManager::instance(),
+	    &TilingManager::windowTilingChanged,
+	    this,
+	    [this](TrackedWindow* changed) {
+		    if (changed == this->mWindow) this->refreshIpcObject();
+	    }
+	);
 
 	this->onWorkspaceChanged();
 	this->refreshIpcObject();
@@ -195,6 +206,11 @@ void HyprlandToplevel::refreshIpcObject() {
 	// Hyprland: 0 none, 1 maximized, 2 fullscreen.
 	auto fullscreen = window->fullscreen() ? 2 : (window->maximized() ? 1 : 0);
 
+	// With tiling on, whatever isn't in a layout floats. Without it, tiled is the Hyprland
+	// default and a restored window the Windows one.
+	auto* tiling = TilingManager::active();
+	auto floating = tiling != nullptr ? !tiling->isTiled(window) : fullscreen == 0;
+
 	QVariantMap object {
 	    {"address", "0x" + this->addressStr()},
 	    {"mapped", true},
@@ -206,8 +222,7 @@ void HyprlandToplevel::refreshIpcObject() {
 	         {"id", workspace == nullptr ? -1 : workspace->bindableId().value()},
 	         {"name", workspace == nullptr ? QString() : workspace->bindableName().value()},
 	     }},
-	    // Tiled is the Hyprland default; a restored window is the Windows one.
-	    {"floating", fullscreen == 0},
+	    {"floating", floating},
 	    {"pseudo", false},
 	    {"monitor", monitor == nullptr ? -1 : monitor->bindableId().value()},
 	    {"class", window->appId()},

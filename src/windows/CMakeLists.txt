@@ -9,7 +9,8 @@
 # (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower, Mpris on GSMTC,
 # Notifications (the shell's own plus a mirror of the Windows notification center), plus
 # Quickshell.Bluetooth on WinRT (bluetooth/). Wallpaper panels can live inside explorer's desktop
-# window, behind the icons (desktop_host.cpp).
+# window, behind the icons (desktop_host.cpp). Optional dwindle tiling of application windows
+# sits on top of the window tracker (tiling*.cpp).
 
 qt_add_library(quickshell-windows STATIC
 	util.cpp
@@ -23,6 +24,8 @@ qt_add_library(quickshell-windows STATIC
 	focus_grab.cpp
 	virtual_desktops.cpp
 	window_tracker.cpp
+	tiling_layout.cpp
+	tiling.cpp
 	taskbar.cpp
 	capture.cpp
 	desktop_host.cpp

@@ -1,5 +1,6 @@
 #include "dispatcher.hpp"
 #include <limits>
+#include <optional>
 #include <string>
 
 #include <qdir.h>
@@ -14,6 +15,7 @@
 #include <qstringlist.h>
 #include <qtypes.h>
 
+#include "../tiling.hpp"
 #include "../virtual_desktops.hpp"
 #include "../window_tracker.hpp"
 #include "connection.hpp"
@@ -42,6 +44,16 @@ void sendWinShortcut(WORD key) {
 	inputs[3].ki.wVk = VK_LWIN;
 	inputs[3].ki.dwFlags = KEYEVENTF_KEYUP;
 	SendInput(4, inputs, sizeof(INPUT));
+}
+
+// Hyprland directions: l/r/u/d, also spelled out, and t/b for up/down.
+std::optional<TilingManager::Edge> directionEdge(const QString& direction) {
+	auto d = direction.trimmed();
+	if (d.startsWith('l')) return TilingManager::Edge::Left;
+	if (d.startsWith('r')) return TilingManager::Edge::Right;
+	if (d.startsWith('u') || d.startsWith('t')) return TilingManager::Edge::Top;
+	if (d.startsWith('d') || d.startsWith('b')) return TilingManager::Edge::Bottom;
+	return std::nullopt;
 }
 
 WORD arrowKey(const QString& direction) {
@@ -137,7 +149,12 @@ Dispatcher::LuaCall Dispatcher::parseLua(const QString& request) {
 
 	for (const auto& field: fields) {
 		auto eq = field.indexOf('=');
-		if (eq == -1) continue;
+		if (eq == -1) {
+			auto value = Dispatcher::unquote(field);
+			if (!value.isEmpty()) call.positional.append(value);
+			continue;
+		}
+
 		call.table.insert(field.left(eq).trimmed(), Dispatcher::unquote(field.mid(eq + 1)));
 	}
 
@@ -151,6 +168,7 @@ void Dispatcher::dispatchLua(const LuaCall& call) {
 
 	if (fn == "hl.dsp.focus") {
 		if (t.contains("workspace")) this->focusWorkspace(t.value("workspace"));
+		else if (t.contains("direction")) this->moveFocus(t.value("direction"));
 		else if (t.contains("window")) {
 			if (auto* window = this->resolveWindow(windowArg)) window->activate();
 		} else if (t.contains("monitor")) this->unsupported("focus monitor");
@@ -184,9 +202,34 @@ void Dispatcher::dispatchLua(const LuaCall& call) {
 	} else if (fn.startsWith("hl.config")) {
 		// Compositor settings (cursor warps and the like) have nothing to apply to here.
 		qCDebug(logDispatch) << "Ignoring config change" << fn;
-	} else if (fn == "hl.dsp.workspace.toggle_special" || fn == "hl.dsp.window.toggle_float"
-	           || fn == "hl.dsp.window.float" || fn == "hl.dsp.window.tile")
-	{
+	} else if (fn == "hl.dsp.window.toggle_float") {
+		this->toggleFloating(this->resolveWindow(windowArg), "toggle");
+	} else if (fn == "hl.dsp.window.float" || fn == "hl.dsp.window.tile") {
+		// {action = "toggle" | "enable" | "disable"}, enable when left out.
+		auto action = t.value("action");
+		auto off = action == "disable" || action == "unset" || action == "off" || action == "false";
+		auto floating = (fn == "hl.dsp.window.float") != off;
+		auto mode = QStringLiteral("toggle");
+		if (action != "toggle") mode = floating ? QStringLiteral("float") : QStringLiteral("tile");
+		this->toggleFloating(this->resolveWindow(windowArg), mode);
+	} else if (fn == "hl.dsp.window.swap") {
+		if (t.contains("direction")) this->swapWindow(t.value("direction"));
+		else this->unsupported(fn);
+	} else if (fn == "hl.dsp.window.resize") {
+		// Without a size it is the mouse resize bind, which Windows' own borders do.
+		if (t.contains("x") || t.contains("y")) {
+			auto exact = call.positional.contains("exact") || t.value("exact") == "true";
+			auto x = t.value("x", "0");
+			auto y = t.value("y", "0");
+			this->resizeActive((exact ? "exact " : "") + x + ' ' + y);
+		} else {
+			this->unsupported(fn + " (mouse)");
+		}
+	} else if (fn == "hl.dsp.window.center") {
+		this->centerWindow();
+	} else if (fn == "hl.dsp.layout") {
+		this->layoutMessage(call.scalar);
+	} else if (fn == "hl.dsp.workspace.toggle_special" || fn == "hl.dsp.window.drag") {
 		this->unsupported(fn);
 	} else {
 		this->unknown(fn);
@@ -231,10 +274,24 @@ void Dispatcher::dispatchClassic(const QString& name, const QString& args) {
 		this->exec(args);
 	} else if (name == "global") {
 		emit this->ipc->dispatchGlobal(args.trimmed());
-	} else if (name == "togglefloating" || name == "togglespecialworkspace" || name == "layoutmsg"
-	           || name == "pseudo" || name == "togglesplit" || name == "swapwindow"
-	           || name == "focusmonitor" || name == "cyclenext" || name == "centerwindow"
-	           || name == "movecurrentworkspacetomonitor" || name == "resizeactive"
+	} else if (name == "swapwindow") {
+		this->swapWindow(args);
+	} else if (name == "togglefloating") {
+		this->toggleFloating(this->resolveWindow(args), "toggle");
+	} else if (name == "setfloating") {
+		this->toggleFloating(this->resolveWindow(args), "float");
+	} else if (name == "settiled") {
+		this->toggleFloating(this->resolveWindow(args), "tile");
+	} else if (name == "togglesplit") {
+		this->toggleSplit();
+	} else if (name == "layoutmsg") {
+		this->layoutMessage(args);
+	} else if (name == "resizeactive") {
+		this->resizeActive(args);
+	} else if (name == "centerwindow") {
+		this->centerWindow();
+	} else if (name == "togglespecialworkspace" || name == "pseudo" || name == "focusmonitor"
+	           || name == "cyclenext" || name == "movecurrentworkspacetomonitor"
 	           || name == "swapnext" || name == "togglegroup" || name == "submap")
 	{
 		this->unsupported(name);
@@ -393,6 +450,12 @@ void Dispatcher::pin(TrackedWindow* window) {
 }
 
 void Dispatcher::moveFocus(const QString& direction) {
+	// Tiled: the neighbour in the layout. Floating windows and windows at the layout's edge
+	// fall back to the nearest window in that direction.
+	auto edge = directionEdge(direction);
+	auto* tiling = TilingManager::active();
+	if (tiling != nullptr && edge && tiling->focusDirection(*edge)) return;
+
 	auto* tracker = this->ipc->tracker();
 	auto* desktops = this->ipc->desktops();
 	auto* active = tracker->activeWindow();
@@ -459,6 +522,11 @@ void Dispatcher::moveWindow(const QString& direction) {
 		return;
 	}
 
+	// Tiled: swap with the neighbour, or move to the monitor in that direction.
+	auto edge = directionEdge(direction);
+	auto* tiling = TilingManager::active();
+	if (tiling != nullptr && edge && tiling->moveDirection(*edge)) return;
+
 	auto key = arrowKey(direction.trimmed());
 	if (key == 0) {
 		this->unsupported("movewindow " + direction);
@@ -468,6 +536,122 @@ void Dispatcher::moveWindow(const QString& direction) {
 	// Win+Arrow: snap left/right, maximize up, restore/minimize down. The closest thing to
 	// moving a window within a layout.
 	sendWinShortcut(key);
+}
+
+void Dispatcher::swapWindow(const QString& direction) {
+	auto edge = directionEdge(direction);
+	auto* tiling = TilingManager::active();
+
+	if (tiling == nullptr || !edge) {
+		this->unsupported("swapwindow (without tiling)");
+		return;
+	}
+
+	tiling->swapDirection(*edge);
+}
+
+void Dispatcher::toggleFloating(TrackedWindow* window, const QString& action) {
+	// Every window floats on Windows unless tiling is on.
+	auto* tiling = TilingManager::active();
+	if (tiling == nullptr) {
+		this->unsupported("togglefloating (without tiling)");
+		return;
+	}
+
+	if (window == nullptr) return;
+	tiling->setFloating(window, action == "float", action == "toggle");
+}
+
+void Dispatcher::toggleSplit() {
+	auto* tiling = TilingManager::active();
+	if (tiling == nullptr) {
+		this->unsupported("togglesplit (without tiling)");
+		return;
+	}
+
+	if (auto* window = this->ipc->tracker()->activeWindow()) tiling->toggleSplit(window);
+}
+
+void Dispatcher::layoutMessage(const QString& message) {
+	auto* tiling = TilingManager::active();
+	if (tiling == nullptr) {
+		this->unsupported("layoutmsg (without tiling)");
+		return;
+	}
+
+	auto* window = this->ipc->tracker()->activeWindow();
+	if (window == nullptr) return;
+
+	// Hyprland's dwindle messages that mean something here.
+	auto parts = message.split(' ', Qt::SkipEmptyParts);
+	if (parts.isEmpty()) return;
+	const auto& command = parts.first();
+
+	if (command == "togglesplit") {
+		tiling->toggleSplit(window);
+	} else if (command == "swapsplit") {
+		tiling->swapSplit(window);
+	} else if (command == "splitratio" && parts.length() >= 2) {
+		auto exact = parts[1] == "exact";
+		auto ok = false;
+		auto value = parts.value(exact ? 2 : 1).toDouble(&ok);
+		if (ok) tiling->splitRatio(window, value, exact);
+	} else {
+		this->unsupported("layoutmsg " + command);
+	}
+}
+
+void Dispatcher::resizeActive(const QString& args) {
+	auto* window = this->ipc->tracker()->activeWindow();
+	if (window == nullptr || window->screen() == nullptr) return;
+
+	// `dx dy`, or `exact w h`; values in logical pixels or percentages (of the window for
+	// deltas, of the monitor for exact sizes), as Hyprland's resizeparams.
+	auto parts = args.split(' ', Qt::SkipEmptyParts);
+	auto exact = !parts.isEmpty() && parts.first() == "exact";
+	if (exact) parts.removeFirst();
+	if (parts.length() < 2) {
+		this->unsupported("resizeactive " + args);
+		return;
+	}
+
+	auto reference = exact ? window->screen()->geometry().size() : window->rect().size();
+
+	auto parse = [](QString value, int whole, bool& ok) {
+		auto percent = value.endsWith('%');
+		if (percent) value.chop(1);
+		auto number = value.toDouble(&ok);
+		return qRound(percent ? number * whole / 100.0 : number);
+	};
+
+	auto okX = false;
+	auto okY = false;
+	auto x = parse(parts[0], reference.width(), okX);
+	auto y = parse(parts[1], reference.height(), okY);
+	if (!okX || !okY) {
+		this->unsupported("resizeactive " + args);
+		return;
+	}
+
+	// Tiled windows change their split; floating ones (every window without tiling) resize.
+	if (auto* tiling = TilingManager::active()) {
+		auto dx = exact ? x - window->rect().width() : x;
+		auto dy = exact ? y - window->rect().height() : y;
+		if (tiling->resizeTiled(window, dx, dy)) return;
+	}
+
+	TilingManager::resizeFloating(window, x, y, exact);
+}
+
+void Dispatcher::centerWindow() {
+	auto* window = this->ipc->tracker()->activeWindow();
+	if (window == nullptr) return;
+
+	// Like Hyprland, only floating windows move.
+	auto* tiling = TilingManager::active();
+	if (tiling != nullptr && tiling->isTiled(window)) return;
+
+	TilingManager::center(window);
 }
 
 void Dispatcher::moveWindowPixel(TrackedWindow* window, const QString& x, const QString& y) {
