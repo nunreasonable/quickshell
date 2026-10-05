@@ -28,6 +28,12 @@ public:
 	/// `ls -1 <path>`: names of the files in `path` (no directories, no dot entries), sorted.
 	/// Empty if it doesn't exist. Unlike `cmd /c dir /b` this keeps non-ASCII names intact.
 	Q_INVOKABLE static QStringList listDir(const QString& path);
+
+	/// `command -v <name>` for the helper programs ii runs (songrec.exe...): `name` next to
+	/// qs.exe first, where the package stages its optional tools, then on PATH. Returns the
+	/// absolute path with forward slashes, or an empty string if it is nowhere to be found -
+	/// so callers can say what's missing instead of Process failing to start silently.
+	Q_INVOKABLE static QString findExecutable(const QString& name);
 };
 
 } // namespace qs::windows::sys
