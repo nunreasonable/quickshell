@@ -47,6 +47,8 @@ constexpr int RECOVER_DELAY_MS = 1500;
 constexpr ULONGLONG ANNOUNCE_COOLDOWN_MS = 15000;
 // ...unless the icon is clicked and this long went by since.
 constexpr ULONGLONG CLICK_ANNOUNCE_GAP_MS = 2000;
+// Brief mode: how often explorer's list is read, which is how fast icon changes show.
+constexpr int BRIEF_POLL_MS = 1500;
 
 struct KnownIcon {
 	QUuid guid;
@@ -179,15 +181,33 @@ TrayHost::TrayHost() {
 		);
 	};
 
+	auto mode = qEnvironmentVariable("QS_WINDOWS_TRAY_HOOK");
+
 	// Escape hatch for tools that need FindWindow(L"Shell_TrayWnd") to be explorer's. Without the
 	// hook, icons we seed now would never update or go away (nothing is watching for that), so
 	// skip seeding too: the tray stays empty instead of filling with icons stuck at startup state.
-	if (qEnvironmentVariable("QS_WINDOWS_TRAY_HOOK") == QStringLiteral("0")) {
+	if (mode == QStringLiteral("0")) {
 		qCInfo(logTrayHost) << "QS_WINDOWS_TRAY_HOOK=0: not hooking the system tray";
 		return;
 	}
 
-	TrayHook::start(this->sink, missedTraffic);
+	// The middle way for such tools: the hook only steps in front of explorer's tray for a few
+	// seconds when apps are asked to add their icons again, and icon changes come from reading
+	// explorer's list every BRIEF_POLL_MS (so they show that much later, and an icon's hidden
+	// state isn't followed).
+	auto brief = mode == QStringLiteral("brief");
+	if (brief) {
+		qCInfo(logTrayHost) << "QS_WINDOWS_TRAY_HOOK=brief: the tray hook stays behind explorer's"
+		                    << "tray but for short moments";
+
+		this->pollTimer.setInterval(BRIEF_POLL_MS);
+		QObject::connect(&this->pollTimer, &QTimer::timeout, this, [this]() {
+			if (!this->snapshotRunning) this->startSnapshot();
+		});
+		this->pollTimer.start();
+	}
+
+	TrayHook::start(this->sink, missedTraffic, brief);
 
 	QObject::connect(
 	    QCoreApplication::instance(),

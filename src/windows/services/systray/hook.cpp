@@ -57,6 +57,9 @@ constexpr UINT ANNOUNCE_DELAY_MS = 1500;
 constexpr UINT FORWARD_TIMEOUT_MS = 4000;
 // How long after our TaskbarCreated a NIM_ADD explorer refuses is taken for a re-add.
 constexpr ULONGLONG READD_GRACE_MS = 30000;
+// Brief mode: how long the window stays in front after asking apps to add their icons again.
+// Apps answer TaskbarCreated within a moment; a busy one may take a few seconds.
+constexpr ULONGLONG BRIEF_FRONT_MS = 8000;
 
 // NOTIFYICONDATAW as shell32 sends it to the tray: handles cut to 32 bits so 32 and 64 bit
 // processes share one format (sign extending them back is how Windows shares handles between
@@ -141,6 +144,7 @@ private:
 	std::optional<LRESULT> forward(UINT msg, WPARAM wParam, LPARAM lParam);
 	HWND explorerWindow();
 	void keepFirst(bool report = true);
+	void stepBack(HWND first);
 	void syncGeometry();
 	void mirrorProps();
 	void watchExplorer(HWND target);
@@ -169,6 +173,17 @@ std::thread gThread;                // NOLINT
 std::atomic<HWND> gHwnd = nullptr;  // NOLINT
 std::atomic<bool> gStopping = false; // NOLINT
 std::atomic<bool> gStarted = false;  // NOLINT
+// Brief mode (see TrayHook::start): only in front of explorer's window until this time.
+std::atomic<bool> gBrief = false;         // NOLINT
+std::atomic<ULONGLONG> gFrontUntil = 0;   // NOLINT
+
+void stayInFront(ULONGLONG ms) {
+	auto until = GetTickCount64() + ms;
+	auto current = gFrontUntil.load();
+	while (current < until && !gFrontUntil.compare_exchange_weak(current, until)) {}
+}
+
+bool wantFront() { return !gBrief.load() || GetTickCount64() < gFrontUntil.load(); }
 // Only touched on the hook thread (WinEvent callbacks have no user data).
 HookWindow* gWindow = nullptr; // NOLINT
 
@@ -308,6 +323,8 @@ void HookWindow::probeTitle() {
 // own panels would take it for an explorer restart and register their AppBars again.
 void HookWindow::announce() {
 	this->readdGraceUntil = GetTickCount64() + READD_GRACE_MS;
+	stayInFront(BRIEF_FRONT_MS);
+	this->keepFirst(false);
 
 	EnumWindows(
 	    [](HWND window, LPARAM message) -> BOOL {
@@ -338,6 +355,7 @@ void HookWindow::announceQueued() {
 	if (owners.empty()) return;
 
 	// Their answer has to come through here.
+	stayInFront(BRIEF_FRONT_MS);
 	this->keepFirst();
 	this->readdGraceUntil = GetTickCount64() + READD_GRACE_MS;
 
@@ -505,6 +523,8 @@ void HookWindow::onTaskbarCreated() {
 	if (this->explorer == previous || this->explorer == nullptr) return;
 
 	qCInfo(logTrayHook) << "Explorer restarted, asking apps for their tray icons again";
+	// Its own TaskbarCreated is already out: the apps' answers should come here too.
+	stayInFront(ANNOUNCE_DELAY_MS + BRIEF_FRONT_MS);
 	this->propsSyncedAt = 0;
 	this->lastRect = {};
 	this->lastNotifyRect = {};
@@ -558,6 +578,12 @@ HWND HookWindow::explorerWindow() {
 
 void HookWindow::keepFirst(bool report) {
 	auto* first = FindWindowW(TRAY_CLASS, nullptr);
+
+	if (!wantFront()) {
+		this->stepBack(first);
+		return;
+	}
+
 	if (first == this->hwnd || first == nullptr) return;
 
 	// Another Quickshell process got there first: one hook is enough, don't fight over it.
@@ -578,6 +604,26 @@ void HookWindow::keepFirst(bool report) {
 	// Icon changes apps sent meanwhile reached explorer only; the host reads explorer's list
 	// again to catch up.
 	if (report && this->missed) this->missed();
+}
+
+// Brief mode outside of its moments in front: right behind explorer's window, so FindWindow
+// finds explorer's and only the host's reads of explorer's list see icon changes.
+void HookWindow::stepBack(HWND first) {
+	if (first != this->hwnd) return;
+
+	// No explorer tray: we are the only one, and stay.
+	auto* target = this->explorerWindow();
+	if (target == nullptr) return;
+
+	SetWindowPos(
+	    this->hwnd,
+	    target,
+	    0,
+	    0,
+	    0,
+	    0,
+	    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER
+	);
 }
 
 // Explorer raises its taskbar when it's activated or shown (the taskbar was clicked, auto-hide
@@ -717,6 +763,10 @@ void runHook(TrayIconSink sink, std::function<void()> missed) {
 	// Explorer's rects are physical pixels; ours must be too.
 	SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
+	// In front for the start in brief mode too: the title probe and the apps' answers to the
+	// first TaskbarCreated need it.
+	stayInFront(BRIEF_FRONT_MS);
+
 	HookWindow window(std::move(sink), std::move(missed));
 	if (!window.create()) return;
 
@@ -749,7 +799,7 @@ void runHook(TrayIconSink sink, std::function<void()> missed) {
 
 } // namespace
 
-void TrayHook::start(TrayIconSink sink, std::function<void()> missedTraffic) {
+void TrayHook::start(TrayIconSink sink, std::function<void()> missedTraffic, bool brief) {
 	auto lock = std::lock_guard(gMutex);
 	if (gThread.joinable()) return;
 
@@ -763,6 +813,7 @@ void TrayHook::start(TrayIconSink sink, std::function<void()> missedTraffic) {
 
 	gStopping.store(false);
 	gStarted.store(true);
+	gBrief.store(brief);
 	gThread = std::thread(runHook, std::move(sink), std::move(missedTraffic));
 }
 

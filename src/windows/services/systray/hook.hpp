@@ -54,7 +54,11 @@ class TrayHook {
 public:
 	// Both callbacks are called on the hook thread. missedTraffic is called when explorer's
 	// window was found above ours: whatever apps sent in the meantime went to explorer only.
-	static void start(TrayIconSink sink, std::function<void()> missedTraffic);
+	//
+	// Brief mode keeps the window in front only for a few seconds after each TaskbarCreated
+	// (ours, explorer's, announceTo()) and right behind explorer's otherwise, for tools that
+	// mistake it for the taskbar. Icon changes then come from reading explorer's list.
+	static void start(TrayIconSink sink, std::function<void()> missedTraffic, bool brief);
 	static void stop();
 
 	// Sends TaskbarCreated to just these windows (icon owners), from the hook thread once ours

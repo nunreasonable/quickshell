@@ -73,6 +73,7 @@ private:
 	ULONGLONG snapshotDoneAt = 0;
 	int snapshotReported = 0;
 
+	QTimer pollTimer;
 	QTimer recoverTimer;
 	bool toolbarReading = false;
 	bool recoverAgain = false;
