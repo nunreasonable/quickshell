@@ -21,6 +21,27 @@ namespace qs::windows {
 namespace {
 Q_LOGGING_CATEGORY(logDesktops, "quickshell.windows.desktops", QtWarningMsg);
 
+constexpr ULONGLONG ACCESSOR_RESTART_INTERVAL = 60000;
+
+template <typename R, typename... P, typename... A>
+bool sehCall(R (*fn)(P...), R& out, A... args) {
+	__try {
+		out = fn(args...);
+		return true;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return false;
+	}
+}
+
+bool sehCallVoid(void (*fn)()) {
+	__try {
+		fn();
+		return true;
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		return false;
+	}
+}
+
 constexpr const wchar_t* DESKTOPS_KEY =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\VirtualDesktops";
 constexpr const wchar_t* SESSION_KEY_FORMAT =
@@ -210,7 +231,7 @@ VirtualDesktops::~VirtualDesktops() {
 
 	if (this->listener != nullptr) {
 		if (this->accessor.unregisterPostMessageHook != nullptr) {
-			this->accessor.unregisterPostMessageHook(this->listener);
+			this->call(-1, this->accessor.unregisterPostMessageHook, this->listener);
 		}
 
 		DestroyWindow(this->listener);
@@ -218,6 +239,35 @@ VirtualDesktops::~VirtualDesktops() {
 
 	if (this->manager != nullptr) this->manager->Release();
 	if (this->accessor.module != nullptr) FreeLibrary(this->accessor.module);
+}
+
+template <typename R, typename... P, typename... A>
+R VirtualDesktops::call(R fallback, R (*fn)(P...), A... args) const {
+	if (fn == nullptr) return fallback;
+
+	R result = fallback;
+	if (sehCall(fn, result, args...)) return result;
+
+	this->accessorFailed();
+	return fallback;
+}
+
+void VirtualDesktops::accessorFailed() const {
+	auto& a = this->accessor;
+	if (!a.loaded) return;
+
+	auto now = GetTickCount64();
+	if (a.restart != nullptr
+	    && (this->accessorRestartedAt == 0 || now - this->accessorRestartedAt > ACCESSOR_RESTART_INTERVAL))
+	{
+		this->accessorRestartedAt = now;
+		qCWarning(logDesktops) << "VirtualDesktopAccessor.dll crashed; restarting it";
+		if (sehCallVoid(a.restart)) return;
+	}
+
+	qCWarning(logDesktops) << "VirtualDesktopAccessor.dll keeps crashing; using the registry and"
+	                       << "keyboard shortcuts instead";
+	a.loaded = false;
 }
 
 void VirtualDesktops::loadAccessor() {
@@ -258,10 +308,11 @@ void VirtualDesktops::loadAccessor() {
 	load(a.isPinnedWindow, "IsPinnedWindow");
 	load(a.pinWindow, "PinWindow");
 	load(a.unPinWindow, "UnPinWindow");
+	load(a.restart, "RestartVirtualDesktopAccessor");
 
 	// The dll talks to undocumented COM interfaces that change between Windows builds; a build
 	// mismatch shows up as -1 from everything, in which case it is as good as absent.
-	if (!ok || a.getDesktopCount() <= 0) {
+	if (!ok || this->call(-1, a.getDesktopCount) <= 0) {
 		qCWarning(logDesktops) << "VirtualDesktopAccessor.dll" << path
 		                       << "does not work on this Windows build; ignoring it.";
 		FreeLibrary(module);
@@ -315,7 +366,7 @@ void VirtualDesktops::installListener() {
 		return;
 	}
 
-	this->accessor.registerPostMessageHook(this->listener, ACCESSOR_MESSAGE);
+	this->call(-1, this->accessor.registerPostMessageHook, this->listener, ACCESSOR_MESSAGE);
 }
 
 QString VirtualDesktops::readDesktopName(const GUID& id) const {
@@ -385,12 +436,12 @@ void VirtualDesktops::refresh() {
 	// fresh profile or might lag behind.
 	const auto& a = this->accessor;
 	if (a.loaded) {
-		auto count = a.getDesktopCount();
+		auto count = this->call(-1, a.getDesktopCount);
 		if (count > 0) {
 			ids.resize(count);
 			if (a.getDesktopIdByNumber != nullptr) {
 				for (auto i = 0; i < count; i++) {
-					if (guidIsNull(ids[i])) ids[i] = a.getDesktopIdByNumber(i);
+					if (guidIsNull(ids[i])) ids[i] = this->call(GUID {}, a.getDesktopIdByNumber, i);
 				}
 			}
 		}
@@ -411,7 +462,7 @@ void VirtualDesktops::refresh() {
 	}
 
 	if (a.loaded) {
-		auto number = a.getCurrentDesktopNumber();
+		auto number = this->call(-1, a.getCurrentDesktopNumber);
 		if (number >= 0 && number < desktops.length()) {
 			currentIndex = number;
 			current = desktops[number].id;
@@ -473,7 +524,7 @@ qsizetype VirtualDesktops::windowDesktopIndex(HWND hwnd) const {
 	// Public API unanswered (fresh profile without registry ids, or a stale list): ask the shell.
 	const auto& a = this->accessor;
 	if (a.loaded && a.getWindowDesktopNumber != nullptr) {
-		auto number = a.getWindowDesktopNumber(hwnd);
+		auto number = this->call(-1, a.getWindowDesktopNumber, hwnd);
 		if (number >= 0 && number < this->count()) return number;
 	}
 
@@ -515,7 +566,7 @@ bool VirtualDesktops::switchTo(qsizetype index) {
 	if (index == this->mCurrent) return true;
 
 	if (this->accessor.loaded) {
-		if (this->accessor.goToDesktopNumber(static_cast<int>(index)) == -1) {
+		if (this->call(-1, this->accessor.goToDesktopNumber, static_cast<int>(index)) == -1) {
 			qCWarning(logDesktops) << "GoToDesktopNumber" << index << "failed";
 			return false;
 		}
@@ -551,7 +602,7 @@ bool VirtualDesktops::ensureCount(qsizetype count) {
 		auto before = this->count();
 
 		if (this->accessor.loaded && this->accessor.createDesktop != nullptr) {
-			if (this->accessor.createDesktop() == -1) {
+			if (this->call(-1, this->accessor.createDesktop) == -1) {
 				qCWarning(logDesktops) << "CreateDesktop failed";
 				return false;
 			}
@@ -582,7 +633,7 @@ bool VirtualDesktops::removeDesktop(qsizetype index, qsizetype fallback) {
 		return false;
 	}
 
-	if (a.removeDesktop(static_cast<int>(index), static_cast<int>(fallback)) == -1) {
+	if (this->call(-1, a.removeDesktop, static_cast<int>(index), static_cast<int>(fallback)) == -1) {
 		qCWarning(logDesktops) << "RemoveDesktop" << index << "failed";
 		return false;
 	}
@@ -599,7 +650,7 @@ bool VirtualDesktops::moveWindow(HWND hwnd, qsizetype index) {
 	}
 
 	if (this->accessor.loaded) {
-		return this->accessor.moveWindowToDesktopNumber(hwnd, static_cast<int>(index)) != -1;
+		return this->call(-1, this->accessor.moveWindowToDesktopNumber, hwnd, static_cast<int>(index)) != -1;
 	}
 
 	qCWarning(logDesktops) << "Moving another application's window to a desktop needs"
@@ -610,13 +661,13 @@ bool VirtualDesktops::moveWindow(HWND hwnd, qsizetype index) {
 bool VirtualDesktops::pinWindow(HWND hwnd, bool pinned) {
 	auto& a = this->accessor;
 	if (!a.loaded || a.pinWindow == nullptr || a.unPinWindow == nullptr) return false;
-	return (pinned ? a.pinWindow(hwnd) : a.unPinWindow(hwnd)) != -1;
+	return this->call(-1, pinned ? a.pinWindow : a.unPinWindow, hwnd) != -1;
 }
 
 bool VirtualDesktops::isWindowPinned(HWND hwnd) const {
 	const auto& a = this->accessor;
 	if (!a.loaded || a.isPinnedWindow == nullptr) return false;
-	return a.isPinnedWindow(hwnd) == 1;
+	return this->call(-1, a.isPinnedWindow, hwnd) == 1;
 }
 
 QString VirtualDesktops::guidToString(const GUID& guid) {

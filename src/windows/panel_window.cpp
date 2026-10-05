@@ -466,7 +466,18 @@ void WinPanelWindow::onWindowVisibleChanged() {
 		this->updateLayer();
 		this->stickToAllDesktops();
 
-		if (this->bKeyboardFocus == PanelKeyboardFocus::Exclusive) this->grabKeyboardFocus();
+		if (this->bKeyboardFocus == PanelKeyboardFocus::Exclusive) {
+			this->grabKeyboardFocus();
+		} else if (this->bKeyboardFocus == PanelKeyboardFocus::OnDemand) {
+			QTimer::singleShot(50, this, [this]() {
+				if (this->window == nullptr || !this->isVisibleDirect()
+				    || this->bKeyboardFocus != PanelKeyboardFocus::OnDemand)
+					return;
+
+				qCDebug(logPanel) << "Taking keyboard focus for" << this << "as it is shown";
+				this->grabKeyboardFocus();
+			});
+		}
 	} else {
 		// Hidden AppBars still reserve space, so drop the reservation with the window.
 		this->appBar.remove();

@@ -2,6 +2,8 @@
 
 #include <memory>
 
+#include <qvariant.h>
+
 #include "ocr_backend.hpp"
 
 namespace qs::windows::sys {
@@ -16,8 +18,14 @@ int Ocr::recognizeText(const QString& path) {
 	return requestId;
 }
 
-void Ocr::backendDone(int requestId, const QString& text, bool ok, const QString& error) {
-	emit this->recognized(requestId, text, ok, error);
+void Ocr::backendDone(
+    int requestId,
+    const QString& text,
+    bool ok,
+    const QString& error,
+    const QVariantList& lines
+) {
+	emit this->recognized(requestId, text, ok, error, lines);
 }
 
 } // namespace qs::windows::sys
