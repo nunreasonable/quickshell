@@ -190,7 +190,19 @@ WinPanelWindow::WinPanelWindow(QObject* parent)
 	// Queued: lookups run from inside updateLayer, which must not re-enter itself.
 	auto* host = DesktopHost::instance();
 	auto queued = Qt::QueuedConnection;
-	QObject::connect(host, &DesktopHost::parentChanged, this, [this] { this->updateLayer(); }, queued);
+	QObject::connect(
+	    host,
+	    &DesktopHost::parentChanged,
+	    this,
+	    [this] {
+		    // A fresh lookup result: a handle refused earlier may since have been reused by an
+		    // unrelated window (handles are small integers recycled quickly), so don't let a
+		    // coincidental match keep refusing it forever.
+		    this->embedRefusedBy = nullptr;
+		    this->updateLayer();
+	    },
+	    queued
+	);
 	QObject::connect(host, &DesktopHost::parentMoved, this, &WinPanelWindow::placeEmbedded, queued);
 }
 
@@ -730,28 +742,35 @@ void WinPanelWindow::onWindowScreenChanged() {
 	// Qt takes a child window's screen from its top level ancestor, the desktop window spanning
 	// every monitor, and switches it on geometry and DPI changes. The panel is placed on its
 	// own screen regardless, but QML reads `screen` and Qt the DPI from it: put it back.
-	if (this->mEmbedParent == nullptr || this->mScreen == nullptr || this->screenRestorePending) {
+	// mTrackedScreen (not the base class's mScreen, which stays null unless QML sets `screen:`
+	// explicitly) is the screen updateDimensions() actually placed this panel on.
+	if (this->mEmbedParent == nullptr || this->mTrackedScreen == nullptr || this->screenRestorePending)
+	{
 		return;
 	}
 
-	if (this->window->screen() == this->mScreen) return;
+	if (this->window->screen() == this->mTrackedScreen) return;
 	this->screenRestorePending = true;
 
 	QTimer::singleShot(0, this, [this] {
 		this->screenRestorePending = false;
 
-		if (this->window != nullptr && this->mEmbedParent != nullptr && this->mScreen != nullptr
-		    && this->window->screen() != this->mScreen)
+		if (this->window != nullptr && this->mEmbedParent != nullptr && this->mTrackedScreen != nullptr
+		    && this->window->screen() != this->mTrackedScreen)
 		{
 			// Screens of one virtual desktop: the window is neither moved nor recreated.
-			this->window->setScreen(this->mScreen);
+			this->window->setScreen(this->mTrackedScreen);
 		}
 	});
 }
 
 void WinPanelWindow::recreateDestroyedWindow() {
 	auto* dead = std::exchange(this->destroyedHwnd, nullptr);
-	if (dead == nullptr || this->window == nullptr || this->hwnd() != dead || IsWindow(dead)) return;
+	// Qt clears its own handle once it has processed the WM_DESTROY (hwnd() goes back to
+	// nullptr), so the dead handle can't be matched against hwnd() here: that check never
+	// passed, leaving the panel stuck. A reload in between already cleared `dead` above, via
+	// releaseNativeState(), so there's nothing left to guard against but the handle lingering.
+	if (dead == nullptr || this->window == nullptr || IsWindow(dead)) return;
 
 	qCInfo(logPanel) << "The desktop went away with" << this << "inside, recreating its window";
 
