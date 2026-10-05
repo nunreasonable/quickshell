@@ -7,6 +7,7 @@
 #include <qstring.h>
 #include <qtclasshelpermacros.h>
 #include <qtmetamacros.h>
+#include <qvariant.h>
 
 namespace qs::windows::sys {
 
@@ -32,12 +33,24 @@ public:
 	Q_INVOKABLE int recognizeText(const QString& path);
 
 	// Called by OcrWorker (through OcrBackend's queued post), GUI thread only.
-	void backendDone(int requestId, const QString& text, bool ok, const QString& error);
+	void backendDone(
+	    int requestId,
+	    const QString& text,
+	    bool ok,
+	    const QString& error,
+	    const QVariantList& lines
+	);
 
 signals:
 	/// `ok` is false if the image couldn't be decoded or no OCR language is available; `error`
 	/// then holds a short reason and `text` is empty.
-	void recognized(int requestId, const QString& text, bool ok, const QString& error);
+	void recognized(
+	    int requestId,
+	    const QString& text,
+	    bool ok,
+	    const QString& error,
+	    const QVariantList& lines
+	);
 
 private:
 	std::unique_ptr<OcrBackend> mBackend;
