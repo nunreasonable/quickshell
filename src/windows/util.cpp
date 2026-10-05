@@ -134,6 +134,18 @@ bool isOwnProcessWindow(HWND hwnd) {
 	return pid == GetCurrentProcessId();
 }
 
+bool isTrayHookWindow(HWND hwnd) {
+	return hwnd != nullptr && GetPropW(hwnd, TRAY_HOOK_PROP) != nullptr;
+}
+
+HWND explorerTaskbarWindow() {
+	HWND hwnd = nullptr;
+	while ((hwnd = FindWindowExW(nullptr, hwnd, L"Shell_TrayWnd", nullptr)) != nullptr) {
+		if (!isTrayHookWindow(hwnd)) return hwnd;
+	}
+	return nullptr;
+}
+
 void applyPanelDwmAttributes(HWND hwnd) {
 	if (hwnd == nullptr) return;
 

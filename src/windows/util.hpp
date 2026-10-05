@@ -58,6 +58,15 @@ DWORD windowsBuild();
 // True if the window belongs to this process (used to avoid fighting our own popups for focus).
 [[nodiscard]] bool isOwnProcessWindow(HWND hwnd);
 
+// The system tray hook (services/systray) is a Shell_TrayWnd of our own that apps' FindWindow
+// reaches before explorer's, marked with this window property so every Quickshell process can
+// tell it apart.
+inline constexpr const wchar_t* TRAY_HOOK_PROP = L"QuickshellTrayHook";
+[[nodiscard]] bool isTrayHookWindow(HWND hwnd);
+
+// Explorer's primary taskbar. FindWindow(L"Shell_TrayWnd") may return the tray hook instead.
+[[nodiscard]] HWND explorerTaskbarWindow();
+
 // Keeps explorer from treating the window as a fullscreen app (see util.cpp).
 void markNonRude(HWND hwnd);
 

@@ -15,6 +15,7 @@
 
 #include "../core/logcat.hpp"
 #include "input_mask.hpp"
+#include "util.hpp"
 
 namespace qs::windows {
 
@@ -35,6 +36,10 @@ constexpr int CHECK_REVEALED_MS = 250;
 constexpr int CHECK_CONCEALED_MS = 2000;
 
 bool isTaskbarWindow(HWND hwnd) {
+	// The system tray hook has the class but no taskbar: showing it would put an empty
+	// window over the real one.
+	if (isTrayHookWindow(hwnd)) return false;
+
 	wchar_t cls[32] {};
 	GetClassNameW(hwnd, cls, 32);
 	return wcscmp(cls, L"Shell_TrayWnd") == 0 || wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0;
@@ -59,7 +64,7 @@ UINT appBarState() {
 void setAutoHide(bool autoHide) {
 	APPBARDATA data {};
 	data.cbSize = sizeof(data);
-	data.hWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
+	data.hWnd = explorerTaskbarWindow();
 	data.lParam = (appBarState() & ABS_ALWAYSONTOP) | (autoHide ? ABS_AUTOHIDE : 0);
 	SHAppBarMessage(ABM_SETSTATE, &data);
 }
@@ -218,7 +223,7 @@ void TaskbarManager::findBars() {
 		    // allows any edge, and secondary monitors' bars may differ from the primary one.
 		    TaskbarEdge edge = TaskbarEdge::Bottom;
 		    int thickness = 0;
-		    auto* primary = FindWindowW(L"Shell_TrayWnd", nullptr);
+		    auto* primary = explorerTaskbarWindow();
 
 		    if (hwnd != primary || !primaryBarEdge(hwnd, edge, thickness)) {
 			    edge = inferBarEdge(window, monitor);
