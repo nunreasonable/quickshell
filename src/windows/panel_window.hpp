@@ -205,8 +205,8 @@ private:
 	HWND mEmbedParent = nullptr;
 	HWND mEmbedInsertAfter = nullptr;
 	HWND embedRefusedBy = nullptr;
-	// Inside the icons view, above the icons list. The input mask is then the window region
-	// (physical window coordinates), lifted while a mouse button is held on the window.
+	// Next to the icons view and above it. The input mask is then the window region (physical
+	// window coordinates), lifted while a mouse button is held on the window.
 	bool mEmbedAboveIcons = false;
 	QRegion mInputMask;
 	bool mHasInputMask = false;

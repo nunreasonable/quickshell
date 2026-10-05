@@ -27,11 +27,14 @@ namespace qs::windows {
 // Without a WorkerW, Progman draws the wallpaper itself; panels then go into Progman right
 // below the icons view.
 //
-// Desktop widgets that take the mouse can't live back there: the icons view covers the whole
-// desktop and takes every click. Those go into the icons view itself (SHELLDLL_DefView), above
-// the icons list, with their input mask as their window region so the icons get the clicks
-// everywhere else. The icons view is the same window class in every layout above; explorer moves
-// it between Progman and a WorkerW when it rebuilds the desktop, and its children go with it.
+// Desktop widgets that take the mouse can't live back there: the icons view (SHELLDLL_DefView)
+// covers the whole desktop and takes every click. Those go right above the icons view, into the
+// window holding it (Progman, or the top level WorkerW before 24H2), with their input mask as
+// their window region so the icons get the clicks everywhere else. Inside the icons view itself
+// would follow it around, but how explorer draws it changed across builds (on 24H2 it may be
+// layered, no place to rely on for DirectX content), while children of Progman are where the
+// wallpaper panels are known to render. Explorer moves the icons view between Progman and a
+// WorkerW when it rebuilds the desktop, which is watched for.
 //
 // Child windows get none of the broadcasts top level windows get (TaskbarCreated, display
 // changes), so a hidden top level window listens for them, and a WinEvent hook follows the
@@ -52,8 +55,9 @@ public:
 	[[nodiscard]] HWND parentWindow();
 	// Sibling to place desktop panels right below, when the parent also holds the icons view.
 	[[nodiscard]] HWND insertAfter() const { return this->mInsertAfter; }
-	// The window desktop panels that take input go into (above the icons list), or null.
-	[[nodiscard]] HWND iconsView();
+	// The window holding the icons view, where desktop panels that take input go (above the
+	// icons view), or null.
+	[[nodiscard]] HWND iconsHost();
 
 	// Namespaces of desktop panels that go above the icons instead of behind them.
 	[[nodiscard]] QStringList aboveIcons() const { return this->mAboveIcons; }
@@ -71,8 +75,8 @@ signals:
 	// panels in them.
 	void parentMoved();
 	void aboveIconsChanged();
-	// Explorer created, showed or restacked something inside the icons view (the icons list
-	// can be recreated): panels above the icons make sure they still are.
+	// Explorer created, showed or restacked something next to the icons view: panels above the
+	// icons make sure they still are.
 	void iconsRestacked();
 
 private:
@@ -102,6 +106,7 @@ private:
 	HWND mParent = nullptr;
 	HWND mInsertAfter = nullptr;
 	HWND mIconsView = nullptr;
+	HWND mIconsHost = nullptr;
 	QStringList mAboveIcons;
 	HWND listener = nullptr;
 	HWINEVENTHOOK hook = nullptr;

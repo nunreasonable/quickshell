@@ -178,14 +178,14 @@ HWND DesktopHost::parentWindow() {
 	return this->mParent;
 }
 
-HWND DesktopHost::iconsView() {
+HWND DesktopHost::iconsHost() {
 	if (!this->mEnabled) return nullptr;
 
-	if (!this->lookedUp || (this->mIconsView != nullptr && !IsWindow(this->mIconsView))) {
+	if (!this->lookedUp || (this->mIconsHost != nullptr && !IsWindow(this->mIconsHost))) {
 		this->refresh();
 	}
 
-	return this->mIconsView;
+	return this->mIconsHost;
 }
 
 void DesktopHost::setAboveIcons(const QStringList& namespaces) {
@@ -201,7 +201,7 @@ void DesktopHost::refresh() {
 
 	auto* oldParent = this->mParent;
 	auto* oldInsertAfter = this->mInsertAfter;
-	auto* oldIconsView = this->mIconsView;
+	auto* oldIconsHost = this->mIconsHost;
 	auto wasActive = this->active();
 
 	if (this->mEnabled) {
@@ -212,12 +212,13 @@ void DesktopHost::refresh() {
 		this->mParent = nullptr;
 		this->mInsertAfter = nullptr;
 		this->mIconsView = nullptr;
+		this->mIconsHost = nullptr;
 		this->lookedUp = false;
 		this->removeHook();
 	}
 
 	if (this->mParent != oldParent || this->mInsertAfter != oldInsertAfter
-	    || this->mIconsView != oldIconsView)
+	    || this->mIconsHost != oldIconsHost)
 	{
 		emit this->parentChanged();
 	} else if (this->mParent != nullptr) {
@@ -274,6 +275,7 @@ void DesktopHost::lookup() {
 	this->mParent = found.parent;
 	this->mInsertAfter = found.insertAfter;
 	this->mIconsView = iconsView;
+	this->mIconsHost = iconsView == nullptr ? nullptr : GetAncestor(iconsView, GA_PARENT);
 }
 
 void DesktopHost::ensureListener() {
@@ -344,7 +346,7 @@ void DesktopHost::installHook() {
 
 	// Out of context: the callback runs on this (the gui) thread, from its message loop.
 	// Restricted to explorer's desktop thread, which also owns the parent's siblings and the
-	// icons view. Creation and reordering are for the windows inside the icons view.
+	// icons view. Creation and reordering are for the windows next to the icons view.
 	this->hook = SetWinEventHook(
 	    EVENT_OBJECT_CREATE,
 	    EVENT_OBJECT_REORDER,
@@ -355,9 +357,10 @@ void DesktopHost::installHook() {
 	    WINEVENT_OUTOFCONTEXT
 	);
 
+	// Up to the icons view moving to another window.
 	this->moveHook = SetWinEventHook(
 	    EVENT_OBJECT_LOCATIONCHANGE,
-	    EVENT_OBJECT_LOCATIONCHANGE,
+	    EVENT_OBJECT_PARENTCHANGE,
 	    nullptr,
 	    &DesktopHost::eventProc,
 	    pid,
@@ -414,7 +417,8 @@ void CALLBACK DesktopHost::eventProc(
 		default: break;
 		}
 
-		return;
+		// Progman without a WorkerW holds both.
+		if (hwnd != host->mIconsHost) return;
 	}
 
 	if (event == EVENT_OBJECT_SHOW && (host->mParent == nullptr || host->mInsertAfter != nullptr)
@@ -437,8 +441,19 @@ void CALLBACK DesktopHost::eventProc(
 	}
 
 	if (hwnd == host->mIconsView) {
+		// Gone, hidden or moved to another window: look for it again.
+		if (event == EVENT_OBJECT_DESTROY || event == EVENT_OBJECT_HIDE
+		    || event == EVENT_OBJECT_PARENTCHANGE)
+		{
+			host->scheduleRefresh(SETTLE_MS);
+		}
+
+		return;
+	}
+
+	if (hwnd == host->mIconsHost) {
 		switch (event) {
-		// Panels above the icons went or are hidden with it; look for it again.
+		// The panels above the icons went or are hidden with it.
 		case EVENT_OBJECT_DESTROY:
 		case EVENT_OBJECT_HIDE: host->scheduleRefresh(SETTLE_MS); return;
 		// The panels inside are placed relative to it.
@@ -448,8 +463,14 @@ void CALLBACK DesktopHost::eventProc(
 		default: return;
 		}
 	} else if ((event != EVENT_OBJECT_CREATE && event != EVENT_OBJECT_SHOW)
-	           || GetAncestor(hwnd, GA_PARENT) != host->mIconsView)
+	           || GetAncestor(hwnd, GA_PARENT) != host->mIconsHost)
 	{
+		return;
+	}
+
+	// The icons view may have been moved out, in case that wasn't reported by itself.
+	if (GetAncestor(host->mIconsView, GA_PARENT) != host->mIconsHost) {
+		host->scheduleRefresh(SETTLE_MS);
 		return;
 	}
 

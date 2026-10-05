@@ -701,7 +701,7 @@ void WinPanelWindow::updateEmbedding() {
 	HWND parent = nullptr;
 	// Without an icons view, a panel that takes input is better off as a window than out of
 	// reach behind the icons.
-	if (embed) parent = aboveIcons ? host->iconsView() : host->parentWindow();
+	if (embed) parent = aboveIcons ? host->iconsHost() : host->parentWindow();
 	// Refused once (DPI awareness or integrity mismatch): it would be refused again.
 	if (parent != nullptr && parent == this->embedRefusedBy) parent = nullptr;
 	if (parent == nullptr) aboveIcons = false;
@@ -807,7 +807,7 @@ void WinPanelWindow::placeEmbedded() {
 	auto rect = this->embeddedRect();
 	UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER;
 	// Inside Progman, the icons view is a sibling and explorer may restack its children. Above
-	// the icons, the icons list is.
+	// the icons, it is a sibling too.
 	auto* insertAfter = this->mEmbedAboveIcons ? HWND_TOP : this->mEmbedInsertAfter;
 	if (insertAfter == nullptr && !this->mEmbedAboveIcons) flags |= SWP_NOZORDER;
 
