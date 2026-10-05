@@ -33,19 +33,9 @@ Q_DECLARE_OPAQUE_POINTER(qs::hyprland::ipc::HyprlandToplevel*);
 
 namespace qs::hyprland::ipc {
 
-///! Live Hyprland style event.
-/// Event in the format Hyprland's event socket uses, generated from Windows window and virtual
-/// desktop changes. Holding this object after the signal handler exits is undefined as the
-/// event instance is reused.
-///
-/// Emitted by @@Hyprland.rawEvent(s).
 class HyprlandIpcEvent: public QObject {
 	Q_OBJECT;
-	/// The name of the event.
-	///
-	/// See [Hyprland Wiki: IPC](https://wiki.hyprland.org/IPC/) for a list of events.
 	Q_PROPERTY(QString name READ nameStr CONSTANT);
-	/// The unparsed data of the event.
 	Q_PROPERTY(QString data READ dataStr CONSTANT);
 	QML_NAMED_ELEMENT(HyprlandEvent);
 	QML_UNCREATABLE("HyprlandIpcEvents cannot be created.");
@@ -53,10 +43,6 @@ class HyprlandIpcEvent: public QObject {
 public:
 	HyprlandIpcEvent(QObject* parent): QObject(parent) {}
 
-	/// Parse this event with a known number of arguments.
-	///
-	/// Argument count is required as some events can contain commas
-	/// in the last argument, which can be ignored as long as the count is known.
 	Q_INVOKABLE [[nodiscard]] QVector<QString> parse(qint32 argumentCount) const;
 	[[nodiscard]] QVector<QByteArrayView> parseView(qint32 argumentCount) const;
 
@@ -67,8 +53,6 @@ public:
 	QByteArray data;
 };
 
-// The Windows "connection": the window tracker and virtual desktops presented the way the
-// Hyprland IPC module does. Workspace N is virtual desktop N-1; monitors are the screens.
 class HyprlandIpc: public QObject {
 	Q_OBJECT;
 
@@ -95,8 +79,6 @@ public:
 		return &this->bActiveToplevel;
 	}
 
-	// Bumped whenever the monitor or workspace lists change, so bindings that look objects up
-	// by index re-evaluate.
 	[[nodiscard]] QBindable<quint32> bindableMonitorsVersion() const { return &this->bMonitorsVersion; }
 	[[nodiscard]] QBindable<quint32> bindableWorkspacesVersion() const { return &this->bWorkspacesVersion; }
 
@@ -112,18 +94,14 @@ public:
 	[[nodiscard]] qs::windows::WindowTracker* tracker() const { return this->mTracker; }
 	[[nodiscard]] qs::windows::VirtualDesktops* desktops() const { return this->mDesktops; }
 
-	// Rebuild the lastIpcObject of every object of a kind. Everything is kept live on Windows,
-	// so these only exist for API compatibility.
 	void refreshWorkspaces();
 	void refreshMonitors();
 	void refreshToplevels();
 
 	void emitEvent(const QByteArray& name, const QByteArray& data);
 
-	// A workspace gained its first window or lost its last one.
 	void workspaceOccupancyChanged() { this->updateVisibleWorkspaces(); }
 
-	// The last argument may contain commas, so the count is required.
 	[[nodiscard]] static QVector<QByteArrayView> parseEventArgs(QByteArrayView event, quint16 count);
 
 signals:
@@ -134,11 +112,8 @@ signals:
 	void focusedWorkspaceChanged();
 	void activeToplevelChanged();
 
-	/// Windows only: a `global <name>` dispatch (Hyprland's shortcut forwarding), with the name
-	/// as given, e.g. `quickshell:overviewToggle`. The GlobalShortcut implementation connects here.
 	void dispatchGlobal(const QString& name);
 
-	// For attached HyprlandToplevels created before their window was known here.
 	void toplevelAdded(HyprlandToplevel* toplevel);
 
 private slots:
@@ -166,8 +141,6 @@ private:
 	Dispatcher* dispatcher = nullptr;
 
 	ObjectModel<HyprlandMonitor> mMonitors {this};
-	// One workspace per virtual desktop, by index. Like Hyprland, only workspaces with windows
-	// and the focused one are listed in mWorkspaces; the rest exist as empty desktops only.
 	QList<HyprlandWorkspace*> mAllWorkspaces;
 	ObjectModel<HyprlandWorkspace> mWorkspaces {this};
 	ObjectModel<HyprlandToplevel> mToplevels {this};

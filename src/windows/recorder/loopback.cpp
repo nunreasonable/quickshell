@@ -25,11 +25,10 @@ namespace qs::windows::recorder {
 namespace {
 Q_LOGGING_CATEGORY(logLoopback, "quickshell.windows.recorder", QtWarningMsg);
 
-// Shared mode buffer; capture polls far more often than this, it only needs to cover a stall.
 constexpr REFERENCE_TIME BUFFER_DURATION = 10'000'000;
 constexpr DWORD POLL_MS = 10;
 
-constexpr float HALF_POWER = 0.70710678F; // -3 dB, the usual weight for folding a channel in
+constexpr float HALF_POWER = 0.70710678F;
 
 std::array<float, 2> speakerWeights(DWORD speaker) {
 	switch (speaker) {
@@ -50,7 +49,7 @@ std::array<float, 2> speakerWeights(DWORD speaker) {
 	case SPEAKER_FRONT_RIGHT_OF_CENTER:
 	case SPEAKER_TOP_FRONT_RIGHT:
 	case SPEAKER_TOP_BACK_RIGHT: return {0.0F, HALF_POWER};
-	default: return {0.0F, 0.0F}; // LFE and anything unknown
+	default: return {0.0F, 0.0F};
 	}
 }
 
@@ -98,8 +97,6 @@ bool LoopbackCapture::open(QString* error) {
 	auto extensible = mix->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX);
 	if (tag == WAVE_FORMAT_EXTENSIBLE && extensible) {
 		const auto* ext = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(mix); // NOLINT
-		// KSDATAFORMAT_SUBTYPE_PCM / _IEEE_FLOAT are the format tag inside the base audio GUID;
-		// comparing that part avoids pulling the GUID definitions in.
 		if (ext->SubFormat.Data2 == 0x0000 && ext->SubFormat.Data3 == 0x0010) {
 			tag = static_cast<WORD>(ext->SubFormat.Data1);
 		}
@@ -131,14 +128,12 @@ bool LoopbackCapture::open(QString* error) {
 		this->weights[0] = {1.0F, 0.0F};
 		this->weights[1] = {0.0F, 1.0F};
 	} else {
-		// Channels come in the order of the mask's bits.
 		auto channel = 0;
 		for (DWORD bit = 1; bit != 0 && channel < this->inChannels; bit <<= 1) {
 			if ((mask & bit) == 0) continue;
 			this->weights[channel++] = speakerWeights(bit);
 		}
 
-		// Keep a full scale signal on every channel from clipping after the fold.
 		std::array<float, 2> sums {};
 		for (const auto& w: this->weights) {
 			sums[0] += w[0];
@@ -206,7 +201,6 @@ void LoopbackCapture::appendSilenceLocked(qint64 frames) {
 }
 
 void LoopbackCapture::run() {
-	// The audio client lives in the MTA; this thread joins it to keep using it.
 	auto com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
 	auto hr = this->client->Start();
@@ -218,8 +212,6 @@ void LoopbackCapture::run() {
 	while (WaitForSingleObject(this->stopEvent, POLL_MS) == WAIT_TIMEOUT) {
 		if (!this->mLost.load(std::memory_order_relaxed)) this->drain();
 
-		// Nothing plays, so nothing arrives: pad with silence up to a margin behind now that is
-		// well past the engine's latency, so a packet that is merely late isn't overwritten.
 		auto target = this->framesAt(qpc100ns()) - this->outRate / 10;
 		std::lock_guard lock(this->mutex);
 		if (target > this->written) this->appendSilenceLocked(target - this->written);
@@ -248,8 +240,6 @@ void LoopbackCapture::drain() {
 	}
 
 	if (FAILED(hr)) {
-		// Usually AUDCLNT_E_DEVICE_INVALIDATED: the default output changed or was unplugged. The
-		// rest of the recording gets silence rather than failing as a whole.
 		qCWarning(logLoopback) << "Loopback capture stopped:" << Qt::hex << hr;
 		this->mLost.store(true, std::memory_order_relaxed);
 	}
@@ -258,7 +248,6 @@ void LoopbackCapture::drain() {
 void LoopbackCapture::consume(const BYTE* data, UINT32 frames, DWORD flags, UINT64 qpcPosition) {
 	if (frames == 0) return;
 
-	// Downmix to float stereo.
 	this->scratch.assign(static_cast<size_t>(frames) * CHANNELS, 0.0F);
 
 	if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) == 0 && data != nullptr) {
@@ -309,8 +298,6 @@ void LoopbackCapture::consume(const BYTE* data, UINT32 frames, DWORD flags, UINT
 		out.resize(this->scratch.size());
 		std::ranges::transform(this->scratch, out.begin(), toInt16);
 	} else {
-		// Linear interpolation; resamplePos is the next output sample's position in input
-		// frames relative to this packet, -1 meaning the previous packet's last frame.
 		out.reserve(static_cast<size_t>(frames / this->resampleStep + 2) * CHANNELS);
 		auto pos = this->resamplePos;
 
@@ -336,15 +323,12 @@ void LoopbackCapture::consume(const BYTE* data, UINT32 frames, DWORD flags, UINT
 
 	std::lock_guard lock(this->mutex);
 
-	// Line the packet up with the video clock. Small differences are jitter; a packet starting
-	// later than expected follows a pause in playback (filled with silence), one starting
-	// earlier overlaps silence already padded in or predates the recording (trimmed).
 	auto start = this->written;
 	if ((flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) == 0) {
 		start = this->framesAt(static_cast<qint64>(qpcPosition));
 	}
 
-	auto slack = static_cast<qint64>(this->outRate / 50); // 20 ms
+	auto slack = static_cast<qint64>(this->outRate / 50);
 	qint64 skip = 0;
 
 	if (start > this->written + slack) this->appendSilenceLocked(start - this->written);

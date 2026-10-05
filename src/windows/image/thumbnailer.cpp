@@ -21,9 +21,6 @@ namespace qs::windows::image {
 namespace {
 Q_LOGGING_CATEGORY(logThumbnailer, "quickshell.windows.thumbnailer", QtWarningMsg);
 
-// Writes `image` to `outputPath` as a PNG via a unique temp file + rename, so a half-written
-// thumbnail never gets mistaken for a finished one by a concurrent reader (ThumbnailImage.qml
-// just checks for the file's existence).
 bool saveAtomically(const QImage& image, const QString& outputPath) {
 	auto dir = QFileInfo(outputPath).absoluteDir();
 	if (!dir.exists() && !dir.mkpath(".")) {
@@ -54,11 +51,8 @@ bool writeThumbnail(const QString& sourcePath, const QString& outputPath, int ma
 
 	auto size = reader.size();
 	if (size.isValid()) {
-		// Scale while decoding (cheaper than decoding full-res then scaling) when the format
-		// reports a size upfront.
 		reader.setScaledSize(size.scaled(maxSize, maxSize, Qt::KeepAspectRatio));
-	} // else: some formats (e.g. SVG) don't report a size upfront; read() decodes at full
-	  // size and the scale below applies afterwards.
+	}
 
 	auto image = reader.read();
 	if (image.isNull()) {
@@ -83,8 +77,6 @@ public:
 
 	void run() override {
 		auto ok = writeThumbnail(this->source, this->output, this->maxSize);
-		// The singleton belongs to its QML engine and goes away on reload while tasks may still
-		// be queued, so the result is handed to the GUI thread, which checks it still exists.
 		QMetaObject::invokeMethod(
 		    QCoreApplication::instance(),
 		    [owner = this->owner, source = this->source, output = this->output, ok] {

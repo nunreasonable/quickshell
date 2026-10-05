@@ -21,8 +21,6 @@ QS_LOGGING_CATEGORY(logGamma, "quickshell.windows.gamma", QtWarningMsg);
 
 constexpr qreal BRIGHTNESS_STEP = 0.05;
 
-// Tanner Helland's blackbody-radiation RGB approximation (the same one most open source
-// blue-light filters use), returns 0..1 per channel for `kelvin`.
 void factorsForTemperature(int kelvin, double factors[3]) { // NOLINT
 	auto temp = std::clamp(kelvin, 1000, 40000) / 100.0;
 
@@ -55,7 +53,6 @@ GammaController* GammaController::instance() {
 	static QPointer<GammaController> controller; // NOLINT
 
 	if (controller.isNull()) {
-		// owned by the application: the ramps go back on exit even with no QML object left
 		controller = new GammaController(QCoreApplication::instance());
 	}
 
@@ -102,8 +99,6 @@ qreal GammaController::floorFor(const QString& screenName) {
 	auto iter = this->floors.constFind(screenName);
 	if (iter != this->floors.constEnd()) return *iter;
 
-	// Without the color temperature, so it's the limit of the brightness alone. The caller
-	// applies the real ramp right after.
 	auto kelvin = std::exchange(this->mKelvin, 0);
 	auto floor = 0.0;
 	while (floor < 1.0 && !this->apply(screenName, floor)) floor += BRIGHTNESS_STEP;
@@ -123,7 +118,6 @@ bool GammaController::apply(const QString& screenName, qreal brightness) {
 	auto ok = false;
 
 	if (neutral) {
-		// back to the screen's own ramp, if we ever changed it
 		auto iter = this->originals.constFind(screenName);
 		ok = iter == this->originals.constEnd()
 		  || SetDeviceGammaRamp(hdc, const_cast<WORD*>(&iter.value().values[0][0])); // NOLINT

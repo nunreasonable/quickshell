@@ -16,8 +16,6 @@ namespace qs::bluetooth {
 namespace {
 Q_LOGGING_CATEGORY(logAdapter, "quickshell.windows.bluetooth.adapter", QtWarningMsg);
 
-// Power requests are numbered process-wide, not per adapter object: the worker's "done" counter
-// outlives an adapter that is removed and re-added, and a fresh object must not start below it.
 quint64 nextPowerSeq() {
 	static quint64 seq = 0;
 	return ++seq;
@@ -53,8 +51,6 @@ BluetoothAdapter::BluetoothAdapter(const AdapterSnapshot& snapshot, QObject* par
 void BluetoothAdapter::applySnapshot(const AdapterSnapshot& snapshot) {
 	Qt::beginPropertyUpdateGroup();
 	this->bName = snapshot.name;
-	// While one of our own power requests is still pending, keep Enabling/Disabling instead of
-	// echoing intermediate radio states (which ii's switches would turn into new requests).
 	if (snapshot.powerSeqDone >= this->mPowerSeq) this->applyPower(snapshot.power);
 	Qt::endPropertyUpdateGroup();
 }
@@ -105,8 +101,6 @@ void BluetoothAdapter::setDiscovering(bool discovering) {
 	}
 }
 
-// Always forwarded, even when bDiscovering already matches: the worker may be holding a request
-// (e.g. discovery asked for while the radio is still turning on) that this has to update.
 void BluetoothAdapter::startDiscovery() {
 	qCDebug(logAdapter) << "Starting discovery for adapter" << this;
 	WinBluetooth::instance()->backend()->setDiscovering(true);
@@ -117,7 +111,6 @@ void BluetoothAdapter::stopDiscovery() {
 	WinBluetooth::instance()->backend()->setDiscovering(false);
 }
 
-// No Windows equivalent; kept so bindings and writes behave like on BlueZ.
 void BluetoothAdapter::setDiscoverableTimeout(quint32 timeout) { this->bDiscoverableTimeout = timeout; }
 void BluetoothAdapter::setPairable(bool pairable) { this->bPairable = pairable; }
 void BluetoothAdapter::setPairableTimeout(quint32 timeout) { this->bPairableTimeout = timeout; }

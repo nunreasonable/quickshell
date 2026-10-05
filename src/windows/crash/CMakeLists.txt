@@ -1,5 +1,3 @@
-# Windows crash handler: self-contained minidump handler, no cpptrace/libunwind dependency
-# (unlike src/crash/, which this replaces on Windows - see src/CMakeLists.txt).
 qt_add_library(quickshell-windows-crash STATIC
 	handler.cpp
 )

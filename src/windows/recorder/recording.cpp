@@ -35,14 +35,8 @@ namespace qs::windows::recorder {
 namespace {
 Q_LOGGING_CATEGORY(logRecorder, "quickshell.windows.recorder", QtWarningMsg);
 
-// How long to wait for every monitor's first frame before starting the clock anyway, so the
-// video doesn't open on a black frame.
-constexpr qint64 PRIME_TIMEOUT = 10'000'000; // 1 s, in 100 ns units
-// Ticks missed (the thread didn't get scheduled, the encoder blocked) are made up with repeats
-// of the current frame to keep the frame rate constant, up to this many; beyond that the time
-// is skipped.
+constexpr qint64 PRIME_TIMEOUT = 10'000'000;
 constexpr qint64 MAX_CATCH_UP = 10;
-// Finalizing writes the MP4 index; on exit the GUI thread waits this long for it.
 constexpr int SHUTDOWN_WAIT_MS = 15000;
 
 QString hrMessage(const QString& what, HRESULT hr) {
@@ -50,8 +44,6 @@ QString hrMessage(const QString& what, HRESULT hr) {
 }
 
 bool createDevice(winrt::com_ptr<ID3D11Device>& device, QString* error) {
-	// Video support is what the sink writer's hardware encoder path needs; some drivers (or
-	// the basic render driver) don't offer it, and the software path does without.
 	const UINT attempts[] = {
 	    D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
 	    D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -80,7 +72,6 @@ bool createDevice(winrt::com_ptr<ID3D11Device>& device, QString* error) {
 		return false;
 	}
 
-	// Capture callbacks (thread pool) and Media Foundation's own threads share the context.
 	winrt::com_ptr<ID3D11DeviceContext> context;
 	device->GetImmediateContext(context.put());
 	if (auto multithread = context.try_as<ID3D11Multithread>()) {
@@ -93,9 +84,6 @@ bool createDevice(winrt::com_ptr<ID3D11Device>& device, QString* error) {
 QString checkAvailability() {
 	if (windowsBuild() < 19041) return "screen recording needs Windows 10 version 2004 or newer";
 
-	// Media Foundation is delay loaded: Windows N editions without the Media Feature Pack don't
-	// have it, and the shell must still start there. Loaded just to probe for presence, then
-	// released; the delay loader reloads whichever of these is actually needed later.
 	for (const auto* dll: {L"mfplat.dll", L"mfreadwrite.dll"}) {
 		auto* module = LoadLibraryExW(dll, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
 		if (module == nullptr) {
@@ -133,8 +121,6 @@ QString checkAvailability() {
 }
 
 } // namespace
-
-// --- job (recorder thread) ---------------------------------------------------------------------
 
 class RecordingJob {
 public:
@@ -187,7 +173,6 @@ void RecordingJob::run() {
 			try {
 				ok = this->record(&error);
 			} catch (const winrt::hresult_error& e) {
-				// Unexpected; the expected failures come back through `error`.
 				ok = false;
 				error = hrMessage(QString::fromWCharArray(e.message().c_str()), e.code().value);
 			}
@@ -202,7 +187,6 @@ void RecordingJob::run() {
 
 	if (!ok) {
 		qCWarning(logRecorder) << "Recording failed:" << error;
-		// Whatever got written isn't playable without the index.
 		DeleteFileW(reinterpret_cast<LPCWSTR>(QDir::toNativeSeparators(this->request.path).utf16()));
 	}
 
@@ -239,7 +223,6 @@ bool RecordingJob::record(QString* error) {
 	auto opened = writer.open(request.path, size, request.fps, audioRate, device.get(), error);
 
 	if (!opened && audio) {
-		// No AAC encoder or one that wants something else: video only beats nothing.
 		auto reason = *error;
 		audio.reset();
 		opened = writer.open(request.path, size, request.fps, 0, device.get(), error);
@@ -272,7 +255,6 @@ bool RecordingJob::record(QString* error) {
 		this->post([self] { RecorderController::instance()->onJobStarted(self); });
 	}
 
-	// The default timer resolution (15.6 ms) would make every other frame late at 30 fps.
 	auto* timer = CreateWaitableTimerExW(
 	    nullptr,
 	    nullptr,
@@ -289,8 +271,6 @@ bool RecordingJob::record(QString* error) {
 		auto now = qpc100ns() - origin;
 
 		if (audio && !audioLostNotified && audio->lost()) {
-			// The default output device was lost (removed, or the WASAPI client failed to
-			// start): the rest of the recording gets silence rather than failing outright.
 			audioLostNotified = true;
 			auto* self = this;
 			this->post([self] {
@@ -307,7 +287,6 @@ bool RecordingJob::record(QString* error) {
 			tick = skipTo;
 		}
 
-		// One frame per tick whether or not the screen changed: constant frame rate.
 		while (!failed && this->tickTime(tick) <= now) {
 			auto time = this->tickTime(tick);
 			auto duration = this->tickTime(tick + 1) - time;
@@ -333,7 +312,7 @@ bool RecordingJob::record(QString* error) {
 			stopping = WaitForSingleObject(this->stopEvent, 0) == WAIT_OBJECT_0;
 		} else if (timer != nullptr) {
 			LARGE_INTEGER due {};
-			due.QuadPart = -wait; // relative, 100 ns units
+			due.QuadPart = -wait;
 			SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
 			HANDLE handles[] = {this->stopEvent, timer};
 			stopping = WaitForMultipleObjects(2, handles, FALSE, INFINITE) == WAIT_OBJECT_0;
@@ -367,8 +346,6 @@ bool RecordingJob::record(QString* error) {
 
 	return writer.finalize(error);
 }
-
-// --- controller (GUI thread) -------------------------------------------------------------------
 
 RecorderController* RecorderController::instance() {
 	static auto* instance = new RecorderController(); // NOLINT
@@ -440,7 +417,7 @@ void RecorderController::onJobDone(RecordingJob* job, bool ok, const QString& re
 
 	auto path = job->request.path;
 	this->job = nullptr;
-	this->thread = nullptr; // deletes itself once finished
+	this->thread = nullptr;
 
 	emit this->recordingChanged();
 	if (ok) emit this->finished(path);

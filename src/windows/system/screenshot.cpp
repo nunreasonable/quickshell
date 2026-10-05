@@ -22,9 +22,6 @@ namespace qs::windows::sys {
 namespace {
 Q_LOGGING_CATEGORY(logScreenshot, "quickshell.windows.screenshot", QtWarningMsg);
 
-// grabMonitor() itself bounds the wait to this (plus a little slack) no matter what the capture
-// thread is doing; spelled out here instead of relying on its default so a stuck capture (e.g. a
-// monitor that won't wake from DPMS) fails this call cleanly instead of hanging the caller.
 constexpr int CAPTURE_TIMEOUT_MS = 2000;
 }
 
@@ -41,7 +38,7 @@ bool Screenshot::captureScreen(const QString& screenName, const QString& path) {
 	}
 
 	struct Shot {
-		QRect rect; // physical pixels, desktop coordinates
+		QRect rect;
 		QImage image;
 	};
 

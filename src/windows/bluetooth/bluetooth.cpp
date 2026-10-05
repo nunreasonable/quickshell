@@ -27,8 +27,6 @@ WinBluetooth* WinBluetooth::instance() {
 WinBluetooth::WinBluetooth() {
 	this->mBackend = std::make_unique<BtBackend>(this);
 
-	// The instance is never destroyed (like upstream's Bluez); stop the worker thread while the
-	// application still exists so its WinRT objects are released in its own apartment.
 	if (auto* app = QCoreApplication::instance()) {
 		QObject::connect(app, &QCoreApplication::aboutToQuit, this, [this] { this->mBackend->stop(); });
 	}

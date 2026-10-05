@@ -16,8 +16,6 @@ Network::Network(QObject* parent): QObject(parent) {
 	this->mWifi = std::make_unique<NetworkWifiBackend>(this);
 	this->mConnectivity = std::make_unique<NetworkConnectivityBackend>(this);
 
-	// Periodic rescan while ii's Wi-Fi list is actually visible (see setWifiListVisible); off
-	// by default, like every other polling loop in this module.
 	this->mScanTimer.setInterval(8000);
 	QObject::connect(&this->mScanTimer, &QTimer::timeout, this, &Network::scanWifiNetworks);
 
@@ -56,8 +54,6 @@ void Network::connectToNetwork(const QString& ssid, const QString& password) {
 void Network::disconnectActive() { this->mWifi->disconnectActive(); }
 
 void Network::forgetNetwork(const QString& ssid) {
-	// findNetwork/profileName: see connectToNetwork -- a saved profile's name can differ from
-	// its SSID, and WlanDeleteProfile needs the former.
 	auto* net = this->findNetwork(ssid);
 	this->mWifi->forgetNetwork(ssid, net != nullptr ? net->profileName() : QString());
 }
@@ -130,8 +126,6 @@ void Network::backendSetCurrentConnection(
 	this->bActiveSignalQuality = connected ? signalQuality : 0;
 	this->bActiveSecurity = connected ? security : QString();
 
-	// Safety net in case a connection succeeds without us ever seeing the ACM
-	// connection_complete notification for it (e.g. Windows' own auto-reconnect).
 	if (connected && ssid == this->bWifiConnectingSsid.value()) {
 		this->bWifiConnecting = false;
 		this->bWifiConnectingSsid = QString();

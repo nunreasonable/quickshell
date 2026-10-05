@@ -37,8 +37,6 @@ QString macToString(const DOT11_MAC_ADDRESS& mac) {
 	    .toUpper();
 }
 
-// Short label for WifiAccessPoint.qml's `security` (only its length is checked by ii today, but
-// a real label is nicer for any future UI/debugging).
 QString securityLabel(DOT11_AUTH_ALGORITHM algo) {
 	switch (algo) {
 	case DOT11_AUTH_ALGO_80211_OPEN: return {};
@@ -64,10 +62,6 @@ QString xmlEscape(const QString& s) {
 	return out;
 }
 
-// Minimal WLAN profile XML: open, or WPA2/WPA3-Personal with a passphrase. `name` and the SSID
-// are always the same string here: this only ever builds a *new* profile (connectToNetwork's
-// !hasProfile branch), so there is nothing else to name it after. An existing profile keeps
-// whatever name it already has -- see RawWifiNetwork::profileName.
 QString buildProfileXml(const QString& ssid, const QString& password, bool secure, bool wpa3) {
 	auto escapedSsid = xmlEscape(ssid);
 	auto hexSsid = QString::fromLatin1(ssid.toUtf8().toHex()).toUpper();
@@ -251,8 +245,6 @@ void NetworkWifiBackend::refreshAvailableNetworks() {
 	}
 	this->mOwner->backendSetNeedsLocationPermission(false);
 
-	// One entry per unique SSID+security combination; collapse to one per SSID the same way
-	// services/Network.qml's nmcli branch does, preferring the connected/strongest entry.
 	QHash<QString, RawWifiNetwork> byName;
 	for (DWORD i = 0; i < list->dwNumberOfItems; i++) {
 		const auto& net = list->Network[i]; // NOLINT
@@ -265,7 +257,6 @@ void NetworkWifiBackend::refreshAvailableNetworks() {
 		raw.active = (net.dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED) != 0;
 		raw.hasProfile = (net.dwFlags & WLAN_AVAILABLE_NETWORK_HAS_PROFILE) != 0;
 		raw.security = net.bSecurityEnabled ? securityLabel(net.dot11DefaultAuthAlgorithm) : QString();
-		// Empty when !hasProfile (MSDN: "If no profile is associated ... an empty string").
 		if (raw.hasProfile) raw.profileName = QString::fromWCharArray(net.strProfileName);
 
 		auto existing = byName.constFind(ssid);
@@ -279,8 +270,6 @@ void NetworkWifiBackend::refreshAvailableNetworks() {
 	}
 	WlanFreeMemory(list);
 
-	// One extra call gets every visible BSS in one shot (cheap: it's the scan cache, no new
-	// air time) so we can fill in a representative bssid/frequency per SSID.
 	PWLAN_BSS_LIST bssList = nullptr;
 	result = WlanGetNetworkBssList(
 	    this->mHandle,
@@ -341,7 +330,6 @@ void NetworkWifiBackend::refreshCurrentConnection() {
 		return;
 	}
 	if (result != ERROR_SUCCESS || data == nullptr) {
-		// Not an error: this is the normal result while disconnected.
 		this->mOwner->backendSetCurrentConnection({}, {}, 0, {}, false, false);
 		return;
 	}
@@ -375,9 +363,6 @@ void NetworkWifiBackend::connectToNetwork(
 		return;
 	}
 
-	// The profile to connect with: the existing one (keyed by its own name, which doesn't have
-	// to match the SSID) or, when there isn't one yet, the one just created below (named after
-	// the SSID, same as buildProfileXml's <name>).
 	auto targetProfile = ssid;
 
 	if (!hasProfile) {
@@ -420,9 +405,6 @@ void NetworkWifiBackend::connectToNetwork(
 		this->mOwner->backendWifiConnectResult(ssid, false, QStringLiteral("other"));
 		return;
 	}
-
-	// Success/failure is reported asynchronously via an ACM connection_complete/
-	// connection_attempt_fail notification, handled in notificationCallback below.
 }
 
 void NetworkWifiBackend::disconnectActive() {
@@ -436,9 +418,6 @@ void NetworkWifiBackend::forgetNetwork(const QString& ssid, const QString& profi
 	WlanDeleteProfile(this->mHandle, &this->mInterfaceGuid, name.c_str(), nullptr);
 }
 
-// Invoked by the WLAN service on one of its own worker threads -- see the class comment in
-// network_wifi.hpp. `data` (and anything it points at) is only valid for the duration of this
-// call, so every field we need is copied out into plain locals before crossing threads.
 void WINAPI NetworkWifiBackend::notificationCallback(PWLAN_NOTIFICATION_DATA data, PVOID context) {
 	if (data == nullptr || context == nullptr) return;
 	auto* self = static_cast<NetworkWifiBackend*>(context);

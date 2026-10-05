@@ -14,30 +14,18 @@ namespace qs::hyprland::ipc {
 
 class HyprlandMonitor;
 
-///! A virtual desktop, presented like a Hyprland workspace.
-/// Workspace `id` N is virtual desktop N (1-based); `name` is the desktop's name when the user
-/// gave it one, otherwise the id. Desktops are global across monitors, so `active` and
-/// `focused` are the same thing and `monitor` is the focused monitor.
 class HyprlandWorkspace: public QObject {
 	Q_OBJECT;
 	// clang-format off
-	/// The workspace id as a string, as upstream reports it for Hyprland before 0.57.
-	/// Desktops have no separate address on Windows.
 	Q_PROPERTY(QString address READ default NOTIFY addressChanged BINDABLE bindableAddress);
 	Q_PROPERTY(qint32 id READ default NOTIFY idChanged BINDABLE bindableId);
 	Q_PROPERTY(QString name READ default NOTIFY nameChanged BINDABLE bindableName);
-	/// If this workspace is the current virtual desktop. See also @@focused.
 	Q_PROPERTY(bool active READ default NOTIFY activeChanged BINDABLE bindableActive);
-	/// If this workspace is the current virtual desktop. See also @@active.
 	Q_PROPERTY(bool focused READ default NOTIFY focusedChanged BINDABLE bindableFocused);
-	/// If this workspace has a window that is urgent. Always false on Windows for now.
 	Q_PROPERTY(bool urgent READ default NOTIFY urgentChanged BINDABLE bindableUrgent);
-	/// If this workspace currently has a fullscreen window.
 	Q_PROPERTY(bool hasFullscreen READ default NOTIFY hasFullscreenChanged BINDABLE bindableHasFullscreen);
-	/// `hyprctl workspaces -j` style object for this workspace. Kept live on Windows.
 	Q_PROPERTY(QVariantMap lastIpcObject READ lastIpcObject NOTIFY lastIpcObjectChanged);
 	Q_PROPERTY(qs::hyprland::ipc::HyprlandMonitor* monitor READ default NOTIFY monitorChanged BINDABLE bindableMonitor);
-	/// List of toplevels on this workspace.
 	QSDOC_TYPE_OVERRIDE(ObjectModel<qs::hyprland::ipc::HyprlandToplevel*);
 	Q_PROPERTY(UntypedObjectModel* toplevels READ toplevels CONSTANT);
 	// clang-format on
@@ -50,12 +38,6 @@ public:
 	void updateInitial(qint32 id, const QString& name);
 	void refreshIpcObject();
 
-	/// Switch to the workspace's virtual desktop.
-	///
-	/// > [!NOTE] This is equivalent to running
-	/// > ```qml
-	/// > HyprlandIpc.dispatch(`workspace ${workspace.id}`);
-	/// > ```
 	Q_INVOKABLE void activate();
 
 	[[nodiscard]] QBindable<QString> bindableAddress() { return &this->bAddress; }

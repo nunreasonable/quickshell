@@ -15,8 +15,6 @@ namespace {
 QS_LOGGING_CATEGORY(logNotificationSettings, "quickshell.windows.notificationsettings", QtWarningMsg);
 
 void openUri(const wchar_t* uri) {
-	// ms-settings: is a protocol handled by the Settings app; ShellExecute returns once the
-	// activation is handed off, so this doesn't wait for Settings to start.
 	auto result = reinterpret_cast<INT_PTR>( // NOLINT
 	    ShellExecuteW(nullptr, L"open", uri, nullptr, nullptr, SW_SHOWNORMAL)
 	);

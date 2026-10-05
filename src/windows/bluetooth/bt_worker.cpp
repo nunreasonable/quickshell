@@ -26,7 +26,6 @@
 #include "device_class.hpp"
 #include "ks_audio.hpp"
 
-// Aliases rather than a using-directive: qs::bluetooth has its own BluetoothAdapter/Device.
 using WinRtAdapter = winrt::Windows::Devices::Bluetooth::BluetoothAdapter;
 using WinRtDevice = winrt::Windows::Devices::Bluetooth::BluetoothDevice;
 using WinRtLeDevice = winrt::Windows::Devices::Bluetooth::BluetoothLEDevice;
@@ -41,8 +40,6 @@ namespace qs::bluetooth {
 namespace {
 Q_LOGGING_CATEGORY(logWorker, "quickshell.windows.bluetooth.worker", QtWarningMsg);
 
-// Association endpoint properties requested from every device watcher. CanPair/IsPaired are
-// what DeviceInformationPairing reads; the rest feed the snapshot.
 constexpr auto PROP_ADDRESS = L"System.Devices.Aep.DeviceAddress";
 constexpr auto PROP_CONNECTED = L"System.Devices.Aep.IsConnected";
 constexpr auto PROP_PAIRED = L"System.Devices.Aep.IsPaired";
@@ -52,18 +49,13 @@ constexpr auto PROP_COD_MAJOR = L"System.Devices.Aep.Bluetooth.Cod.Major";
 constexpr auto PROP_COD_MINOR = L"System.Devices.Aep.Bluetooth.Cod.Minor";
 constexpr auto PROP_LE_APPEARANCE = L"System.Devices.Aep.Bluetooth.Le.Appearance";
 
-// Battery: the device container's PKEY_Devices_BatteryLife when Windows fills it in, else the
-// property the Bluetooth stack sets on a hands-free device's devnodes (no public DEVPKEY name;
-// it's the key Settings' battery readout comes from).
 constexpr auto PROP_BATTERY_LIFE = L"System.Devices.BatteryLife";
 constexpr auto PROP_BT_BATTERY = L"{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2";
 
 constexpr int ADAPTER_REFRESH_DELAY_MS = 250;
-// A device moving from the discovery watcher to the paired one (or back) is first removed by
-// one and then added by the other; keep its QML object alive across that gap.
 constexpr int REMOVAL_GRACE_MS = 3000;
 constexpr int BATTERY_POLL_MS = 60'000;
-constexpr int BATTERY_AFTER_CONNECT_MS = 5000; // hands-free reports its level after connecting
+constexpr int BATTERY_AFTER_CONNECT_MS = 5000;
 constexpr int WATCHER_RETRY_MS = 5000;
 
 QString toQString(const winrt::hstring& value) {
@@ -154,7 +146,6 @@ propGuid(const IMapView<winrt::hstring, IInspectable>& props, const wchar_t* nam
 	return value.GetGuid();
 }
 
-// "aa:bb:cc:dd:ee:ff" from any of "AA:BB:..", "aa-bb-..", "aabbccddeeff"; empty if invalid.
 QString normalizeAddress(const QString& raw) {
 	QString hex;
 	for (auto c: raw.trimmed()) {
@@ -179,7 +170,6 @@ QString addressOf(const DeviceInformation& info) {
 	auto address = normalizeAddress(propString(propsOf(info), PROP_ADDRESS));
 	if (!address.isEmpty()) return address;
 
-	// Bluetooth AEP ids end in "<local address>-<remote address>".
 	auto id = toQString(info.Id());
 	return normalizeAddress(id.mid(id.lastIndexOf(QLatin1Char('-')) + 1));
 }
@@ -264,9 +254,6 @@ const char* sourceName(int source) {
 	}
 }
 
-// Runs on a WinRT pool thread, synchronously inside PairAsync's ceremony; only logs and answers.
-// ii has no pairing UI (on Linux it relies on BlueZ's agent-less defaults), so only ceremonies
-// that need no user input on this side are accepted.
 void answerPairingRequest(const QString& key, const DevicePairingRequestedEventArgs& args) {
 	try {
 		switch (args.PairingKind()) {
@@ -275,9 +262,6 @@ void answerPairingRequest(const QString& key, const DevicePairingRequestedEventA
 			args.Accept();
 			break;
 		case DevicePairingKinds::ConfirmPinMatch:
-			// Numeric comparison. BlueZ without an agent pairs as NoInputNoOutput, which turns this
-			// into "just works" with only the remote side confirming; accepting matches that. The
-			// PIN is logged so it can still be compared by hand.
 			qCInfo(logWorker).nospace() << "Pairing " << key << " - accepting numeric comparison, PIN "
 			                            << toQString(args.Pin());
 			args.Accept();
@@ -313,8 +297,6 @@ BtWorker::BtWorker(WinBluetooth* frontend)
 
 BtWorker::~BtWorker() = default;
 
-// ---- lifecycle ----
-
 void BtWorker::start() {
 	try {
 		winrt::init_apartment(winrt::apartment_type::multi_threaded);
@@ -334,8 +316,6 @@ void BtWorker::start() {
 	QObject::connect(this->mBatteryTimer, &QTimer::timeout, this, &BtWorker::pollBatteries);
 	this->mBatteryTimer->start();
 
-	// Adapters come and go (USB dongles, driver restarts, the adapter being disabled in Device
-	// Manager): watch the adapter interface class and re-resolve the default adapter on changes.
 	try {
 		this->mAdapterWatcher = DeviceInformation::CreateWatcher(WinRtAdapter::GetDeviceSelector());
 
@@ -374,8 +354,6 @@ void BtWorker::shutdown() {
 		this->mAdapterWatcher = nullptr;
 	}
 
-	// Release every WinRT object here, on the thread and apartment that created them, without
-	// posting anything more to the GUI.
 	for (auto& slot: this->mWatchers) {
 		if (!slot.watcher) continue;
 		slot.generation++;
@@ -416,7 +394,6 @@ void BtWorker::shutdown() {
 	}
 	this->mAdapter = nullptr;
 
-	// Queued callbacks can hold WinRT references; drop them while the apartment still exists.
 	QCoreApplication::removePostedEvents(this);
 
 	if (this->mApartmentInitialized) {
@@ -424,8 +401,6 @@ void BtWorker::shutdown() {
 		this->mApartmentInitialized = false;
 	}
 }
-
-// ---- adapter and radio ----
 
 void BtWorker::scheduleAdapterRefresh() {
 	if (this->mAdapterRefreshQueued) return;
@@ -577,7 +552,6 @@ RadioPower BtWorker::currentPower() const {
 void BtWorker::onRadioStateChanged() {
 	auto power = this->currentPower();
 
-	// Like BlueZ: powering the adapter off ends discovery, it doesn't resume on power on.
 	if (this->mLastPower == RadioPower::On && power != RadioPower::On) this->mDiscoveryWanted = false;
 	this->mLastPower = power;
 
@@ -596,7 +570,6 @@ void BtWorker::cmdSetPowered(bool on, quint64 seq) {
 		return;
 	}
 
-	// A request in flight picks the newest wanted state up when it completes.
 	if (!this->mPowerInFlight) this->requestPower();
 }
 
@@ -642,8 +615,6 @@ void BtWorker::requestPower() {
 	};
 
 	if (!this->mRadioAccessRequested) {
-		// Radio control needs consent for packaged apps; desktop apps normally get Allowed without
-		// a prompt. SetStateAsync reports its own access status, so a refusal here is only logged.
 		this->mRadioAccessRequested = true;
 		try {
 			Radio::RequestAccessAsync().Completed(
@@ -691,8 +662,6 @@ void BtWorker::onPowerCompleted(bool on, quint64 seq, AsyncStatus status, RadioA
 
 	this->onRadioStateChanged();
 }
-
-// ---- watchers ----
 
 void BtWorker::cmdSetDiscovering(bool on) {
 	if (on && !this->mAdapter) qCDebug(logWorker) << "Discovery requested without an adapter";
@@ -812,7 +781,6 @@ void BtWorker::stopWatcher(Source source) {
 	} catch (const winrt::hresult_error&) {
 	}
 
-	// Stop() doesn't report removals: forget everything this watcher had reported.
 	auto le = isLe(source);
 	auto paired = isPairedSource(source);
 
@@ -841,7 +809,7 @@ void BtWorker::stopWatcher(Source source) {
 
 void BtWorker::onWatcherStopped(Source source, quint64 generation) {
 	auto& slot = this->mWatchers[source];
-	if (slot.generation != generation || !slot.watcher) return; // stopped by us
+	if (slot.generation != generation || !slot.watcher) return;
 
 	DeviceWatcherStatus status = DeviceWatcherStatus::Stopped;
 	try {
@@ -858,8 +826,6 @@ void BtWorker::onWatcherStopped(Source source, quint64 generation) {
 			if (this->mAdapter) this->startWatcher(source);
 		});
 	} else {
-		// Like a BlueZ discovery that fails: it ends (discovering goes false) and can be started
-		// again; no automatic retry, so a watcher that keeps aborting can't spin.
 		qCWarning(logWorker) << "The" << sourceName(source) << "device watcher stopped on its own (status"
 		                     << static_cast<int>(status) << "), ending discovery";
 		this->mDiscoveryWanted = false;
@@ -889,7 +855,7 @@ void BtWorker::onAdded(Source source, const DeviceInformation& info) {
 	}
 
 	auto* entry = owner.get();
-	entry->removalSerial++; // cancels a pending removal
+	entry->removalSerial++;
 
 	auto le = isLe(source);
 	auto& transport = le ? entry->le : entry->classic;
@@ -952,8 +918,6 @@ void BtWorker::onRemoved(Source source, const DeviceInformationUpdate& update) {
 	if (!entry->classic && !entry->le) this->scheduleRemoval(key);
 	else this->publish(*entry);
 }
-
-// ---- devices ----
 
 BtWorker::Entry* BtWorker::findEntry(const QString& key) {
 	if (key.isEmpty()) return nullptr;
@@ -1028,7 +992,6 @@ void BtWorker::onClassicDeviceReady(const QString& key, const QString& id, const
 			} catch (const winrt::hresult_error&) {
 			}
 		} else if (transport && transport->id == id) {
-			// Connection state falls back to the endpoint's IsConnected property.
 			qCDebug(logWorker) << "No BluetoothDevice for" << id;
 			transport->objectRequested = false;
 		}
@@ -1121,7 +1084,7 @@ void BtWorker::scheduleRemoval(const QString& key) {
 	QTimer::singleShot(REMOVAL_GRACE_MS, this, [this, key, serial] {
 		auto* entry = this->findEntry(key);
 		if (!entry || entry->removalSerial != serial || entry->classic || entry->le) return;
-		if (entry->pairOp) return; // re-checked when pairing finishes
+		if (entry->pairOp) return;
 		this->removeEntry(key);
 	});
 }
@@ -1133,7 +1096,7 @@ void BtWorker::removeEntry(const QString& key) {
 	auto& entry = *it->second;
 	if (entry.pairOp) {
 		try {
-			entry.pairOp.Cancel(); // its Completed handler finds no entry and does nothing
+			entry.pairOp.Cancel();
 		} catch (const winrt::hresult_error&) {
 		}
 	}
@@ -1158,12 +1121,10 @@ void BtWorker::onConnectionChanged(const QString& key) {
 }
 
 void BtWorker::publish(Entry& entry) {
-	if (!entry.classic && !entry.le) return; // waiting for removal
+	if (!entry.classic && !entry.le) return;
 
 	auto snapshot = this->buildSnapshot(entry);
 
-	// Battery: read shortly after a connection comes up (and by the poll timer), dropped on
-	// disconnect like BlueZ's Battery1 interface.
 	if (snapshot.connected && (!entry.published || !entry.last.connected)) {
 		auto key = entry.key;
 		QTimer::singleShot(entry.published ? BATTERY_AFTER_CONNECT_MS : 0, this, [this, key] {
@@ -1210,8 +1171,6 @@ DeviceSnapshot BtWorker::buildSnapshot(const Entry& entry) const {
 
 	auto name = infoName(classic);
 	if (name.isEmpty()) name = infoName(le);
-	// Nameless devices go by their address, dash separated like BlueZ's default alias (ii sorts
-	// those after named ones).
 	snapshot.name = name.isEmpty() ? QString(snapshot.address).replace(QLatin1Char(':'), QLatin1Char('-'))
 	                               : name;
 
@@ -1340,8 +1299,6 @@ void BtWorker::pollBatteries() {
 	}
 }
 
-// ---- commands ----
-
 void BtWorker::cmdPair(const QString& key) {
 	auto finished = [this, key](bool paired) {
 		QMetaObject::invokeMethod(
@@ -1357,9 +1314,8 @@ void BtWorker::cmdPair(const QString& key) {
 		finished(false);
 		return;
 	}
-	if (entry->pairOp) return; // already pairing; that attempt reports
+	if (entry->pairOp) return;
 
-	// Classic first: for a dual-mode device it's the transport that carries audio and input.
 	auto* transport = entry->classic ? entry->classic.get() : entry->le.get();
 	if (!transport || !transport->info) {
 		finished(false);
@@ -1454,7 +1410,7 @@ void BtWorker::cmdCancelPair(const QString& key) {
 	auto* entry = this->findEntry(key);
 	if (entry && entry->pairOp) {
 		try {
-			entry->pairOp.Cancel(); // completes as PairingCanceled through onPairCompleted
+			entry->pairOp.Cancel();
 			return;
 		} catch (const winrt::hresult_error& e) {
 			qCWarning(logWorker) << "Can't cancel pairing" << key << hresultText(e.code());
@@ -1497,7 +1453,6 @@ void BtWorker::cmdForget(const QString& key) {
 					    } else {
 						    qCWarning(logWorker) << "Forgetting" << key << "failed:" << unpairingResultName(result);
 					    }
-					    // The paired watcher reports the removal itself.
 					    if (auto* entry = self->findEntry(key)) self->publish(*entry);
 				    });
 			    }

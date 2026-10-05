@@ -17,8 +17,6 @@ namespace qs::bluetooth {
 namespace {
 Q_LOGGING_CATEGORY(logDevice, "quickshell.windows.bluetooth.device", QtWarningMsg);
 
-// How long Connecting/Disconnecting may last without the connection actually changing. The KS
-// request only starts the (dis)connection; the result arrives as a ConnectionStatusChanged.
 constexpr int STATE_TIMEOUT_MS = 20'000;
 } // namespace
 
@@ -52,7 +50,6 @@ void BluetoothDevice::applySnapshot(const DeviceSnapshot& snapshot) {
 	this->bDeviceName = snapshot.deviceName;
 	this->bIcon = snapshot.icon;
 	this->bPaired = snapshot.paired;
-	// Windows keeps link keys for every paired device and lets them reconnect by themselves.
 	this->bBonded = snapshot.paired;
 	this->bTrusted = snapshot.paired;
 	this->bConnected = snapshot.connected;
@@ -100,7 +97,6 @@ void BluetoothDevice::connect() {
 	}
 
 	if (!this->bPaired) {
-		// BlueZ pairs as part of Connect(); on Windows, pairing is what connects a new device.
 		qCDebug(logDevice) << "Device" << this << "isn't paired, pairing instead of connecting";
 		if (!this->bPairing) this->pair();
 		return;
@@ -130,8 +126,6 @@ void BluetoothDevice::disconnect() {
 }
 
 void BluetoothDevice::applyConnectFinished(bool /*connect*/, ConnectResult result) {
-	// Sent: the connection change (or the timeout) settles the state. Unsupported/Failed are
-	// logged by the worker.
 	if (result != ConnectResult::Sent) this->settleState();
 }
 

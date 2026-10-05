@@ -15,19 +15,12 @@
 
 namespace qs::windows::recorder {
 
-///! H.264 (+ optional AAC) into an .mp4 through Media Foundation's sink writer.
-/// First tries the GPU path: the sink writer gets the recorder's D3D11 device, a hardware
-/// encoder when there is one, and frames as D3D11 textures (the sink writer's video processor
-/// turns BGRA into NV12 on the GPU). If the driver refuses any of that, it starts over with the
-/// software encoder fed from CPU memory. Media Foundation must be started on the calling thread.
 class Mp4Writer {
 public:
 	Mp4Writer() = default;
 	~Mp4Writer();
 	Q_DISABLE_COPY_MOVE(Mp4Writer);
 
-	// `audioRate` 0 means no audio stream; otherwise 16-bit stereo PCM at that rate is expected.
-	// `device` must be multithread protected and created with video support for the GPU path.
 	bool open(
 	    const QString& path,
 	    QSize size,
@@ -37,14 +30,10 @@ public:
 	    QString* error
 	);
 
-	// Encodes `frame` (BGRA, `size`, on the device given to open()). Returns false only on
-	// errors that end the recording; a frame dropped because the encoder fell behind is fine.
 	bool writeVideo(ID3D11Texture2D* frame, qint64 time, qint64 duration, QString* error);
 	bool writeAudio(const qint16* samples, qsizetype frames, QString* error);
 
-	// Writes the index and closes the file. Fails if nothing was written.
 	bool finalize(QString* error);
-	// Drops everything without finalizing (the file is left unplayable; delete it).
 	void close();
 
 	[[nodiscard]] bool gpu() const { return this->mGpu; }
@@ -65,7 +54,7 @@ private:
 	winrt::com_ptr<IMFDXGIDeviceManager> manager;
 	winrt::com_ptr<IMFSinkWriter> writer;
 	winrt::com_ptr<IMFVideoSampleAllocatorEx> allocator;
-	winrt::com_ptr<ID3D11Texture2D> staging; // CPU path readback
+	winrt::com_ptr<ID3D11Texture2D> staging;
 
 	DWORD videoStream = 0;
 	DWORD audioStream = 0;
