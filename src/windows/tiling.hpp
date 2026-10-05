@@ -218,9 +218,10 @@ private:
 /// Dialogs, owned and tool windows, non resizable and always on top windows, windows shown on
 /// every desktop (pinned), windows of elevated processes (which can't be moved from a normal
 /// one), windows of @@excluded apps and windows that refuse the size of their tile float.
-/// Maximized and fullscreen windows keep their place and come back to it when restored;
-/// minimized ones leave the layout. Rules are checked when a window appears or changes state,
-/// and on @@relayout().
+/// Maximized and fullscreen windows keep their place and come back to it when restored.
+/// Minimized windows leave the layout (the others take their space) and come back to their
+/// old place too. Rules are checked when a window appears or changes state, and on
+/// @@relayout().
 ///
 /// Dragging a tiled window onto another swaps them (onto another monitor moves it there),
 /// dragging a border changes the split. The Hyprland dispatchers movefocus, movewindow,
