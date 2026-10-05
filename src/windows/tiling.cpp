@@ -479,12 +479,12 @@ void TilingManager::unmanage(TrackedWindow* window) {
 TilingManager::State TilingManager::stateOf(const Managed& m) const {
 	auto* window = m.window;
 
-	if (window->minimized()) return State::Out;
 	if (window->desktop() < 0 || window->screen() == nullptr) return State::Out;
 	if (m.elevated) return State::Out;
 	if (m.override == Override::Float) return State::Out;
 	if (m.override != Override::Tile && (m.autoFloat || this->floatsByRule(m))) return State::Out;
 
+	if (window->minimized()) return State::Hidden;
 	if (window->maximized()) return State::Suspended;
 
 	// The tracker calls a window covering its monitor fullscreen; a lone tile without gaps or
@@ -657,7 +657,7 @@ void TilingManager::syncWindow(TrackedWindow* window) {
 		if (m.layout == nullptr) return;
 
 		// Floated (by the user, a rule or because it refused its tile): give it its old size
-		// back. Minimized windows and windows that went to every desktop keep where they are.
+		// back. Windows that went to every desktop keep where they are.
 		auto floated = !window->minimized() && window->desktop() >= 0 && !m.elevated;
 		this->takeOut(m);
 		if (floated) this->restoreFloating(m);
@@ -686,9 +686,10 @@ void TilingManager::syncWindow(TrackedWindow* window) {
 	}
 
 	if (want == m.layout) {
-		// Back from maximized or fullscreen in its slot: a fresh placement, not a correction.
-		if (m.suspended && state == State::Tiled) m.target = QRect();
-		m.suspended = state == State::Suspended;
+		// Back from minimized, maximized or fullscreen in its slot: a fresh placement, not a
+		// correction. A minimized slot gives its space to the others meanwhile.
+		if (m.parked && state == State::Tiled) m.target = QRect();
+		m.parked = state != State::Tiled;
 		this->markLayout(m.layout);
 		return;
 	}
@@ -716,11 +717,13 @@ void TilingManager::insertInto(
 	}
 
 	if (target == nullptr || !layout->tree.contains(idOf(target))) target = layout->lastFocused;
+	// Not into a minimized window's slot, which would hand the new window its whole space.
+	if (target != nullptr && layout->tree.isHidden(idOf(target))) target = nullptr;
 	auto targetId = target == nullptr ? tiling::DwindleLayout::Id(0) : idOf(target);
 
 	layout->tree.insert(idOf(window), targetId, cursor);
 	m.layout = layout;
-	m.suspended = false;
+	m.parked = false;
 	m.target = QRect();
 	m.accepted = QRect();
 	m.corrections = 0;
@@ -767,6 +770,12 @@ void TilingManager::apply(Layout* layout) {
 	if (!rects.valid) return;
 
 	layout->tree.setPreserveSplit(this->mPreserveSplit);
+	for (auto id: layout->tree.ids()) {
+		auto* window = this->windowOf(id);
+		auto hidden = window != nullptr && this->stateOf(this->managed.at(window)) == State::Hidden;
+		layout->tree.setHidden(id, hidden);
+	}
+
 	layout->tree.compute(rects.work);
 
 	for (auto id: layout->tree.ids()) {

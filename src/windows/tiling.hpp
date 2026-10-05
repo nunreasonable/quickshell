@@ -107,7 +107,8 @@ private:
 	};
 
 	enum class State : quint8 {
-		Out,       // not tiled: floating, minimized, on every desktop...
+		Out,       // not tiled: floating, on every desktop...
+		Hidden,    // minimized: keeps its slot, which takes no space meanwhile
 		Suspended, // keeps its slot but isn't placed: maximized or fullscreen
 		Tiled,
 	};
@@ -129,7 +130,7 @@ private:
 		qint32 corrections = 0;
 		qint64 lastCorrection = 0;
 		bool verifying = false;
-		bool suspended = false; // maximized or fullscreen in its slot
+		bool parked = false; // minimized, maximized or fullscreen in its slot
 		// Raw window rect before it was first tiled, restored when it floats again.
 		QRect preTiling;
 		quint64 focusStamp = 0;

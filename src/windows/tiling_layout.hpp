@@ -5,6 +5,7 @@
 #include <qlist.h>
 #include <qpoint.h>
 #include <qrect.h>
+#include <qset.h>
 #include <qtypes.h>
 
 namespace qs::windows::tiling {
@@ -62,10 +63,15 @@ public:
 
 	void setPreserveSplit(bool preserve) { this->preserveSplit = preserve; }
 
+	// A hidden leaf keeps its place in the tree but takes no space: its sibling gets the whole
+	// box until it is shown again (minimized windows).
+	void setHidden(Id id, bool hidden);
+	[[nodiscard]] bool isHidden(Id id) const { return this->hidden.contains(id); }
+
 	// Lays the tree out in `area`.
 	void compute(const QRect& area);
 	[[nodiscard]] QRect area() const { return this->mArea; }
-	// Box of a leaf from the last compute(), null if not in the layout.
+	// Box of a leaf from the last compute(), null if not in the layout or hidden.
 	[[nodiscard]] QRect box(Id id) const;
 
 private:
@@ -84,15 +90,18 @@ private:
 
 	[[nodiscard]] Node* find(Id id) const;
 	[[nodiscard]] Node* lastLeaf() const;
-	// Nearest ancestor whose divider is on that edge of the leaf.
-	[[nodiscard]] static Node* dividerAncestor(Node* leaf, Edge edge);
+	// Nearest ancestor whose divider is on that edge of the leaf (and shown: the other side has
+	// something visible).
+	[[nodiscard]] Node* dividerAncestor(Node* leaf, Edge edge) const;
 	static void setDivider(Node* node, int position);
 	void computeNode(Node* node, const QRect& box) const;
+	[[nodiscard]] bool hasVisible(const Node* node) const;
 	static void collect(const Node* node, QList<Id>& out);
 
 	std::unique_ptr<Node> root;
 	QRect mArea;
 	bool preserveSplit = true;
+	QSet<Id> hidden;
 };
 
 } // namespace qs::windows::tiling

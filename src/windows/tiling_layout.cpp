@@ -6,6 +6,7 @@
 #include <qlist.h>
 #include <qpoint.h>
 #include <qrect.h>
+#include <qset.h>
 #include <qtypes.h>
 
 namespace qs::windows::tiling {
@@ -111,6 +112,8 @@ void DwindleLayout::remove(Id id) {
 	auto* node = this->find(id);
 	if (node == nullptr) return;
 
+	this->hidden.remove(id);
+
 	if (node == this->root.get()) {
 		this->root.reset();
 		return;
@@ -141,7 +144,18 @@ bool DwindleLayout::replace(Id id, Id with) {
 	auto* node = this->find(id);
 	if (node == nullptr) return false;
 	node->id = with;
+	this->hidden.remove(id);
 	return true;
+}
+
+void DwindleLayout::setHidden(Id id, bool hidden) {
+	if (hidden && this->contains(id)) this->hidden.insert(id);
+	else this->hidden.remove(id);
+}
+
+bool DwindleLayout::hasVisible(const Node* node) const {
+	if (node->isLeaf()) return !this->hidden.contains(node->id);
+	return this->hasVisible(node->first.get()) || this->hasVisible(node->second.get());
 }
 
 bool DwindleLayout::toggleSplit(Id id) {
@@ -169,7 +183,7 @@ bool DwindleLayout::splitRatio(Id id, double value, bool exact) {
 	return true;
 }
 
-DwindleLayout::Node* DwindleLayout::dividerAncestor(Node* leaf, Edge edge) {
+DwindleLayout::Node* DwindleLayout::dividerAncestor(Node* leaf, Edge edge) const {
 	auto vertical = isVerticalEdge(edge);
 	auto trailing = edge == Edge::Right || edge == Edge::Bottom;
 
@@ -182,7 +196,10 @@ DwindleLayout::Node* DwindleLayout::dividerAncestor(Node* leaf, Edge edge) {
 		// The divider is on the trailing edge of the first child and the leading edge of the
 		// second.
 		auto childFirst = node->first.get() == child;
-		if (childFirst == trailing) return node;
+		if (childFirst != trailing) continue;
+
+		// With everything on the other side hidden this leaf's side takes the whole box.
+		if (this->hasVisible(childFirst ? node->second.get() : node->first.get())) return node;
 	}
 
 	return nullptr;
@@ -201,7 +218,7 @@ bool DwindleLayout::moveEdge(Id id, Edge edge, int position) {
 	auto* leaf = this->find(id);
 	if (leaf == nullptr) return false;
 
-	auto* node = DwindleLayout::dividerAncestor(leaf, edge);
+	auto* node = this->dividerAncestor(leaf, edge);
 	if (node == nullptr) return false;
 
 	DwindleLayout::setDivider(node, position);
@@ -223,10 +240,10 @@ bool DwindleLayout::resize(Id id, int dx, int dy) {
 			                      : box.left() + static_cast<int>(std::lround(box.width() * node->ratio));
 		};
 
-		if (auto* node = DwindleLayout::dividerAncestor(leaf, trailing)) {
+		if (auto* node = this->dividerAncestor(leaf, trailing)) {
 			DwindleLayout::setDivider(node, divider(node) + delta);
 			changed = true;
-		} else if (auto* node = DwindleLayout::dividerAncestor(leaf, leading)) {
+		} else if (auto* node = this->dividerAncestor(leaf, leading)) {
 			DwindleLayout::setDivider(node, divider(node) - delta);
 			changed = true;
 		}
@@ -243,8 +260,22 @@ void DwindleLayout::compute(const QRect& area) {
 }
 
 void DwindleLayout::computeNode(Node* node, const QRect& box) const {
+	if (node->isLeaf()) {
+		node->box = this->hidden.contains(node->id) ? QRect() : box;
+		return;
+	}
+
 	node->box = box;
-	if (node->isLeaf()) return;
+
+	// A half with nothing to show gives the other half the whole box; its own split direction
+	// and ratio stay for when it shows something again.
+	auto firstVisible = this->hasVisible(node->first.get());
+	auto secondVisible = this->hasVisible(node->second.get());
+	if (!firstVisible || !secondVisible) {
+		this->computeNode(node->first.get(), firstVisible ? box : QRect());
+		this->computeNode(node->second.get(), secondVisible ? box : QRect());
+		return;
+	}
 
 	if (!this->preserveSplit && !node->splitPinned) node->splitTop = box.height() > box.width();
 
