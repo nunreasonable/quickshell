@@ -406,7 +406,9 @@ void TilingManager::stop() {
 		if (m.layout == nullptr) continue;
 
 		tiled.append(window);
-		if (this->stateOf(m) == State::Tiled) this->restoreFloating(m);
+		// Also for a window that's currently minimized or fullscreen/maximized in its slot:
+		// restoreFloating() itself knows how to put those back without disturbing that state.
+		this->restoreFloating(m);
 	}
 
 	this->managed.clear();
@@ -850,8 +852,30 @@ void TilingManager::place(Managed& m, const QRect& tile) {
 void TilingManager::send(Managed& m, const QRect& frame) {
 	m.before = frame;
 	m.verifying = true;
+	m.deadline = QDateTime::currentMSecsSinceEpoch() + DEADLINE_MS;
 	setFrame(m.window->hwnd(), m.target);
-	this->deadlineTimer.start();
+	this->armDeadline();
+}
+
+// One shared timer for every window's deadline: restarting it (QTimer::start() on an already
+// running timer resets it) for every placement would keep pushing back an older, genuinely
+// stuck window's deadline as long as anything else keeps getting placed. Arming it for the
+// nearest deadline instead means a new placement can only make the timer fire sooner, never
+// later than a window that's already waiting.
+void TilingManager::armDeadline() {
+	auto next = std::numeric_limits<qint64>::max();
+	for (auto& [window, m]: this->managed) {
+		if (m.verifying) next = qMin(next, m.deadline);
+	}
+
+	if (next == std::numeric_limits<qint64>::max()) {
+		this->deadlineTimer.stop();
+		return;
+	}
+
+	auto remaining = next - QDateTime::currentMSecsSinceEpoch();
+	remaining = qBound(qint64(0), remaining, qint64(DEADLINE_MS));
+	this->deadlineTimer.start(static_cast<int>(remaining));
 }
 
 void TilingManager::restoreFloating(Managed& m) {
@@ -859,7 +883,21 @@ void TilingManager::restoreFloating(Managed& m) {
 	auto previous = m.preTiling;
 	m.preTiling = QRect();
 
-	if (previous.isNull() || IsIconic(hwnd) || IsZoomed(hwnd)) return;
+	if (previous.isNull()) return;
+
+	// Minimized or maximized: moving it now would fight whatever just changed that state. Only
+	// update where Windows restores it to, through its own "normal position", so the promise
+	// ("goes back to where it was before tiling") still holds once the user un-minimizes or
+	// un-maximizes it later, instead of popping back at its tile's size.
+	if (IsIconic(hwnd) || IsZoomed(hwnd)) {
+		WINDOWPLACEMENT placement {};
+		placement.length = sizeof(placement);
+		if (GetWindowPlacement(hwnd, &placement)) {
+			placement.rcNormalPosition = toRECT(previous);
+			SetWindowPlacement(hwnd, &placement);
+		}
+		return;
+	}
 
 	QRect raw;
 	QRect frame;
@@ -965,10 +1003,14 @@ void TilingManager::giveUp(Managed& m, const QRect& frame) {
 }
 
 void TilingManager::onDeadline() {
+	auto now = QDateTime::currentMSecsSinceEpoch();
+
 	for (auto& [window, m]: this->managed) {
 		if (!m.verifying || m.layout == nullptr || m.target.isNull() || window == this->dragging) {
 			continue;
 		}
+		// Armed for the nearest deadline, which may be earlier than this window's own.
+		if (now < m.deadline) continue;
 
 		auto* hwnd = window->hwnd();
 		auto frame = currentFrame(hwnd);
@@ -995,6 +1037,8 @@ void TilingManager::onDeadline() {
 		m.override = Override::None;
 		this->markWindow(window);
 	}
+
+	this->armDeadline();
 }
 
 void TilingManager::onMoveSizeStarted(TrackedWindow* window) {
@@ -1242,6 +1286,9 @@ void TilingManager::moveToLayout(Managed& m, Layout* layout, TrackedWindow* targ
 	this->markLayout(from);
 
 	if (target == nullptr || !layout->tree.contains(idOf(target))) target = layout->lastFocused;
+	// Not into a minimized window's slot, same as insertInto(): that would hand it the whole
+	// space of a window that currently takes none.
+	if (target != nullptr && layout->tree.isHidden(idOf(target))) target = nullptr;
 	layout->tree.insert(idOf(m.window), target == nullptr ? 0 : idOf(target));
 	layout->lastFocused = m.window;
 	m.layout = layout;

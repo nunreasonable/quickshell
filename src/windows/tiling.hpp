@@ -130,6 +130,9 @@ private:
 		qint32 corrections = 0;
 		qint64 lastCorrection = 0;
 		bool verifying = false;
+		// Epoch ms: when a pending placement gives up if the window never moves. Per window, so
+		// one window's placement can't push back another's deadline (see armDeadline()).
+		qint64 deadline = 0;
 		bool parked = false; // minimized, maximized or fullscreen in its slot
 		// Raw window rect before it was first tiled, restored when it floats again.
 		QRect preTiling;
@@ -164,6 +167,8 @@ private:
 	// number of times.
 	void place(Managed& m, const QRect& tile);
 	void send(Managed& m, const QRect& frame);
+	// (Re)arms deadlineTimer for the nearest pending deadline, or stops it when none are left.
+	void armDeadline();
 	void restoreFloating(Managed& m);
 
 	void onActiveWindowChanged();
