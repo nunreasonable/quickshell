@@ -545,10 +545,11 @@ void BackdropWindow::updateRegion(const QList<BlurShape>& shapes) {
 
 bool BackdropWindow::setPieces(const QList<BlurShape>& shapes) {
 	// Windows 10's DWM fills an accent window's whole rectangle with blur and ignores its window
-	// region, so each shape gets a window of its own at its rect, cut to its clip. Rounded corners
-	// then show small square patches of blur outside the panel's corners: the price of this path.
-	// A shape inside another one would only blur the same spot again and is skipped; shapes that
-	// only overlap blur the overlap twice.
+	// region, so a rounded shape becomes a stack of rectangles that all stay inside its rounded
+	// outline: a middle band plus a few steps at the top and the bottom, each inset to where the
+	// arc is at its outer edge. Nothing blurs outside the corners; a sliver inside them stays
+	// unblurred, under a panel that is nearly opaque there. A shape inside another one would only
+	// blur the same spot again and is skipped; shapes that only overlap blur the overlap twice.
 	struct Part {
 		QRect rect;
 		// unset when the corners are square, which needs no region
@@ -556,39 +557,76 @@ bool BackdropWindow::setPieces(const QList<BlurShape>& shapes) {
 		int diameter = 0;
 	};
 
-	std::vector<Part> parts;
-	parts.reserve(static_cast<size_t>(shapes.size()));
+	struct Whole {
+		QRect visible;
+		QRect full;
+		QRect clip;
+		int radius = 0;
+	};
+
+	std::vector<Whole> wholes;
+	wholes.reserve(static_cast<size_t>(shapes.size()));
 
 	for (const auto& shape: shapes) {
 		auto rect = nearestRect(shape.rect);
-		auto visible = rect.intersected(nearestRect(shape.clip));
+		auto clip = nearestRect(shape.clip);
+		auto visible = rect.intersected(clip);
 		if (visible.isEmpty()) continue;
 
-		auto diameter = static_cast<int>(std::lround(shape.radius * 2));
-		Part part;
-		part.rect = visible;
-
-		if (diameter >= 2) {
-			part.shape = rect.translated(-visible.topLeft());
-			part.diameter = diameter;
-		}
-
-		parts.push_back(part);
+		wholes.push_back({
+		    .visible = visible,
+		    .full = rect,
+		    .clip = clip,
+		    .radius = static_cast<int>(std::lround(shape.radius)),
+		});
 	}
 
 	std::vector<Part> kept;
 
-	for (size_t i = 0; i < parts.size(); i++) {
-		const auto& rect = parts.at(i).rect;
+	for (size_t i = 0; i < wholes.size(); i++) {
+		const auto& rect = wholes.at(i).visible;
 		auto inside = false;
 
-		for (size_t j = 0; j < parts.size() && !inside; j++) {
+		for (size_t j = 0; j < wholes.size() && !inside; j++) {
 			// of identical rects, the first one stays
-			const auto& other = parts.at(j).rect;
+			const auto& other = wholes.at(j).visible;
 			inside = j != i && other.contains(rect) && (other != rect || j < i);
 		}
 
-		if (!inside) kept.push_back(parts.at(i));
+		if (inside) continue;
+
+		const auto& whole = wholes.at(i);
+		auto add = [&](const QRect& band) {
+			auto part = band.intersected(whole.clip);
+			if (!part.isEmpty()) kept.push_back({.rect = part});
+		};
+
+		auto full = whole.full;
+		auto radius = std::min(whole.radius, std::min(full.width(), full.height()) / 2);
+		if (radius < 2) {
+			add(full);
+			continue;
+		}
+
+		constexpr int STEPS = 3;
+		add(QRect(full.left(), full.top() + radius, full.width(), full.height() - 2 * radius));
+
+		for (auto step = 0; step < STEPS; step++) {
+			auto from = radius * step / STEPS;
+			auto to = radius * (step + 1) / STEPS;
+			if (to <= from) continue;
+
+			// the arc's inset at the step's outer row, the widest inset within the step
+			auto dy = static_cast<double>(radius - from);
+			auto inset = static_cast<int>(
+			    std::ceil(radius - std::sqrt(static_cast<double>(radius) * radius - dy * dy))
+			);
+			auto width = full.width() - 2 * inset;
+			if (width <= 0) continue;
+
+			add(QRect(full.left() + inset, full.top() + from, width, to - from));
+			add(QRect(full.left() + inset, full.bottom() + 1 - to, width, to - from));
+		}
 	}
 
 	while (this->pieces.size() < kept.size()) {
