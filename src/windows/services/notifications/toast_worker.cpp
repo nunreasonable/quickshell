@@ -211,6 +211,20 @@ void ToastMirrorWorker::stop() {
 		this->mEvents = false;
 	}
 
+	// Mirroring is stopping (access revoked, disabled, or the listener itself failed): nothing
+	// will tell the frontend about these toasts leaving the notification center from here on
+	// (the next resync(), if there is one, baselines silently -- see applyAccess). Without this,
+	// toasts mirrored before the stop stay in the server's tracked list forever: ghosts that
+	// never go away, and that can even reappear if the server ever re-emits its tracked list
+	// (e.g. a reload).
+	for (auto id: std::as_const(this->mKnown)) {
+		QMetaObject::invokeMethod(
+		    this->mFrontend,
+		    [frontend = this->mFrontend, id] { emit frontend->toastRemoved(id); },
+		    Qt::QueuedConnection
+		);
+	}
+
 	this->mKnown.clear();
 	this->mActive = false;
 }
