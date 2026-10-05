@@ -1,4 +1,5 @@
 #include <atomic>
+#include <functional>
 #include <thread>
 #include <utility>
 
@@ -17,9 +18,10 @@
 #include "hook.hpp"
 
 // Explorer's ITrayNotify, the interface behind the notification area icon settings. Undocumented;
-// the Windows 8+ layout below has been stable through Windows 11 (any change would come with a
-// new IID, and QueryInterface would just fail). RegisterCallback reports every icon explorer has
-// through Notify before it returns.
+// the Windows 8+ layout below is the same on Windows 10 and 11 (only Windows 7's ITrayNotify had
+// another IID and layout, and any change would come with a new IID: QueryInterface would just
+// fail). RegisterCallback reports every icon explorer has, overflow ones included, through Notify
+// before it returns.
 namespace {
 
 QS_LOGGING_CATEGORY(logTraySeed, "quickshell.windows.systray", QtWarningMsg);
@@ -111,7 +113,7 @@ private:
 	qs::windows::services::systray::TrayIconSink sink;
 };
 
-void seed(const qs::windows::services::systray::TrayIconSink& sink) {
+bool seed(const qs::windows::services::systray::TrayIconSink& sink) {
 	IUnknown* unknown = nullptr;
 	auto hr = CoCreateInstance(
 	    CLSID_TRAY_NOTIFY,
@@ -124,7 +126,7 @@ void seed(const qs::windows::services::systray::TrayIconSink& sink) {
 	if (FAILED(hr) || unknown == nullptr) {
 		qCInfo(logTraySeed) << "No ITrayNotify from explorer, tray icons will appear as apps update"
 		                    << "them:" << Qt::hex << static_cast<quint32>(hr);
-		return;
+		return false;
 	}
 
 	ITrayNotifyWin8* trayNotify = nullptr;
@@ -137,7 +139,7 @@ void seed(const qs::windows::services::systray::TrayIconSink& sink) {
 	if (FAILED(hr) || trayNotify == nullptr) {
 		qCInfo(logTraySeed) << "Explorer's ITrayNotify has an unknown layout:" << Qt::hex
 		                    << static_cast<quint32>(hr);
-		return;
+		return false;
 	}
 
 	auto* callback = new NotificationCallback(sink);
@@ -157,20 +159,27 @@ void seed(const qs::windows::services::systray::TrayIconSink& sink) {
 	CoDisconnectObject(callback, 0);
 	callback->Release();
 	trayNotify->Release();
+
+	return SUCCEEDED(hr);
 }
 
 } // namespace
 
 namespace qs::windows::services::systray {
 
-void seedFromExplorer(TrayIconSink sink) {
+void seedFromExplorer(TrayIconSink sink, std::function<void(bool ok)> done) {
 	// A thread of its own: a busy explorer can take a while to answer COM calls, and the
 	// callbacks need a single threaded apartment.
-	std::thread([sink = std::move(sink)]() {
+	std::thread([sink = std::move(sink), done = std::move(done)]() {
 		SetThreadDescription(GetCurrentThread(), L"qs tray seed");
-		if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) return;
-		seed(sink);
-		CoUninitialize();
+
+		auto ok = false;
+		if (SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) {
+			ok = seed(sink);
+			CoUninitialize();
+		}
+
+		done(ok);
 	}).detach();
 }
 

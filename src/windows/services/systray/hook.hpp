@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <vector>
 
 #include <qt_windows.h>
 
@@ -42,18 +43,41 @@ using TrayIconSink = std::function<void(TrayIconMessage)>;
 // reaction to an explorer restart): that's the only way to learn the callback message of icons
 // registered before us.
 //
+// Tools that look for explorer's taskbar by class get this window too. It carries explorer's
+// window properties, rect and TrayNotifyWnd child, and a title of its own so lookups that also
+// ask for explorer's empty title skip it (shell32's doesn't, checked at start).
+//
 // The window lives on its own thread with its own message loop: apps block in Shell_NotifyIcon
 // until it answers, so it must never wait on the Qt GUI thread. If the process exits or crashes
 // the window goes away with it and FindWindow finds explorer's again.
 class TrayHook {
 public:
-	// The sink is called on the hook thread.
-	static void start(TrayIconSink sink);
+	// Both callbacks are called on the hook thread. missedTraffic is called when explorer's
+	// window was found above ours: whatever apps sent in the meantime went to explorer only.
+	static void start(TrayIconSink sink, std::function<void()> missedTraffic);
 	static void stop();
+
+	// Sends TaskbarCreated to just these windows (icon owners), from the hook thread once ours
+	// is in front again, so their answer comes through the hook. Reaches message-only windows,
+	// which the broadcast doesn't. Callable from any thread.
+	static void announceTo(std::vector<HWND> owners);
 };
 
 // Reads the icons explorer already shows through its ITrayNotify interface, on a short lived
-// thread of its own. Calls the sink there.
-void seedFromExplorer(TrayIconSink sink);
+// thread of its own. Calls the sink there for each icon, then done (whether explorer answered).
+void seedFromExplorer(TrayIconSink sink, std::function<void(bool ok)> done);
+
+// What explorer's own notification area knows about an icon and ITrayNotify leaves out.
+struct ExplorerIconData {
+	HWND hwnd = nullptr;
+	UINT uid = 0;
+	UINT callbackMessage = 0;
+	UINT version = 0;
+};
+
+// Reads the callback message and version of the icons from explorer's tray toolbars (the
+// Windows 10 notification area and its overflow window; Windows 11 before its new tray).
+// Empty where explorer has no such toolbars. Blocks on explorer: call off the GUI thread.
+std::vector<ExplorerIconData> readExplorerToolbars();
 
 } // namespace qs::windows::services::systray

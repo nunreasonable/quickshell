@@ -69,6 +69,11 @@ public:
 /// Windows tray icons have no menu model: apps draw their own context menu when told the icon
 /// was right clicked, which is what @@display() does. @@hasMenu is true and @@menu is always
 /// null, so open the app's menu with @@display() rather than a @@Quickshell.QsMenuAnchor.
+///
+/// Icons of apps that were running before the shell are first known from explorer's list, without
+/// the message their app listens on. The shell asks those apps to add their icons again (as after
+/// an explorer restart) and reads explorer's own notification area where it can; a click that
+/// comes before that is answered is held for a few seconds and delivered then.
 class SystemTrayItem: public QObject {
 	Q_OBJECT;
 	// clang-format off
@@ -107,11 +112,17 @@ public:
 
 	[[nodiscard]] bool matches(HWND hwnd, UINT uid, const QUuid& guid) const;
 	[[nodiscard]] HWND ownerWindow() const { return this->hwnd; }
+	[[nodiscard]] UINT iconId() const { return this->uid; }
+	[[nodiscard]] QUuid iconGuid() const { return this->guid; }
 	[[nodiscard]] bool ownerAlive() const;
 	[[nodiscard]] bool hasCallback() const { return this->callbackMessage != 0; }
 
 	// Applies an NIM_ADD/NIM_MODIFY/NIM_SETVERSION for this icon.
 	void update(const TrayIconMessage& message);
+	// Callback message and version read from explorer's notification area.
+	void applyExplorerData(UINT callbackMessage, UINT version);
+	// Icon and tooltip from explorer's list, where they changed without us seeing it.
+	void refreshFromExplorer(const TrayIconMessage& message);
 	void setIdentity(const QString& id, const QString& title, const QString& exePath);
 	void setCategory(Category::Enum category) { this->bCategory = category; }
 
@@ -120,6 +131,15 @@ public:
 	[[nodiscard]] qs::menu::QsMenuHandle* menu() const { return nullptr; }
 	[[nodiscard]] bool onlyMenu() const { return false; }
 	// NOLINTEND(readability-convert-member-functions-to-static)
+
+	// TrayHost's bookkeeping (GetTickCount64 times).
+	struct Tracking {
+		ULONGLONG hookUpdatedAt = 0;
+		ULONGLONG announcedAt = 0;
+		bool seenByExplorer = false;
+		bool seenThisSnapshot = false;
+		int missedSnapshots = 0;
+	} tracking;
 
 	[[nodiscard]] QBindable<QString> bindableId() { return &this->bId; }
 	[[nodiscard]] QBindable<QString> bindableTitle() { return &this->bTitle; }
@@ -133,6 +153,8 @@ public:
 
 signals:
 	void ready();
+	// A click came while the callback message is unknown; it's held until it is.
+	void callbackNeeded();
 
 	void idChanged();
 	void titleChanged();
@@ -145,8 +167,22 @@ signals:
 	void onlyMenuChanged();
 
 private:
+	enum class Pending : quint8 {
+		None,
+		Activate,
+		DoubleClick,
+		SecondaryActivate,
+		Display,
+	};
+
 	void allowForeground() const;
 	void send(UINT event) const;
+	void sendActivate(bool doubleClick);
+	void sendSecondaryActivate();
+	void sendDisplay();
+	void hold(Pending action);
+	void replayPending();
+	void setTip(const QString& tip);
 	void updateIconSource();
 
 	HWND hwnd;
@@ -155,9 +191,12 @@ private:
 	UINT callbackMessage = 0;
 	UINT version = 0;
 	QString exePath;
+	QString tip;
 	TrayIconImage image;
 	// For telling a second left click apart, like explorer does.
 	ULONGLONG lastActivate = 0;
+	Pending pending = Pending::None;
+	ULONGLONG pendingAt = 0;
 
 	// clang-format off
 	Q_OBJECT_BINDABLE_PROPERTY(SystemTrayItem, QString, bId, &SystemTrayItem::idChanged);

@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -32,6 +33,12 @@ QS_LOGGING_CATEGORY(logTrayHook, "quickshell.windows.systray", QtWarningMsg);
 constexpr const wchar_t* TRAY_CLASS = L"Shell_TrayWnd";
 // Explorer's tray window has this child and a few apps look it up to find the notification area.
 constexpr const wchar_t* NOTIFY_CLASS = L"TrayNotifyWnd";
+// shell32 finds the tray by class alone, but tools that look for explorer's taskbar often ask
+// for its empty title too: with a title of our own they get explorer's window instead of ours.
+// Checked at start (probeTitle) and dropped if Shell_NotifyIcon stops reaching us with it.
+constexpr const wchar_t* HOOK_TITLE = L"Quickshell tray hook";
+// The icon id of that check, on our own window: no app can have it.
+constexpr UINT PROBE_UID = 0x51535459;
 
 // COPYDATASTRUCT::dwData shell32 uses for Shell_NotifyIcon (0 is SHAppBarMessage, 3 is
 // Shell_NotifyIconGetRect: both only forwarded).
@@ -103,28 +110,44 @@ bool processIsElevated() {
 
 class HookWindow {
 public:
-	explicit HookWindow(TrayIconSink sink): sink(std::move(sink)) {}
+	explicit HookWindow(TrayIconSink sink, std::function<void()> missed)
+	    : sink(std::move(sink))
+	    , missed(std::move(missed)) {}
 	~HookWindow() = default;
 	Q_DISABLE_COPY_MOVE(HookWindow);
 
 	bool create();
+	void probeTitle();
 	void announce();
 
 	HWND hwnd = nullptr;
 
 private:
 	static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+	static void CALLBACK onWinEvent(
+	    HWINEVENTHOOK hook,
+	    DWORD event,
+	    HWND hwnd,
+	    LONG idObject,
+	    LONG idChild,
+	    DWORD thread,
+	    DWORD time
+	);
 	LRESULT handle(UINT msg, WPARAM wParam, LPARAM lParam);
 
 	LRESULT onCopyData(WPARAM wParam, LPARAM lParam);
 	void onTaskbarCreated();
+	void announceQueued();
 	std::optional<LRESULT> forward(UINT msg, WPARAM wParam, LPARAM lParam);
 	HWND explorerWindow();
-	void keepFirst();
+	void keepFirst(bool report = true);
 	void syncGeometry();
 	void mirrorProps();
+	void watchExplorer(HWND target);
+	void unwatchExplorer();
 
 	TrayIconSink sink;
+	std::function<void()> missed;
 	HWND notifyHwnd = nullptr;
 	HWND explorer = nullptr;
 	RECT lastRect {};
@@ -134,12 +157,30 @@ private:
 	ULONGLONG propsSyncedAt = 0;
 	// Names (or "#<atom>") of the explorer properties set on this window.
 	std::vector<std::wstring> mirrored;
+	bool probing = false;
+	bool probeSeen = false;
+	DWORD watchedPid = 0;
+	HWINEVENTHOOK foregroundHook = nullptr;
+	HWINEVENTHOOK showHook = nullptr;
 };
 
 std::mutex gMutex;                  // NOLINT
 std::thread gThread;                // NOLINT
 std::atomic<HWND> gHwnd = nullptr;  // NOLINT
 std::atomic<bool> gStopping = false; // NOLINT
+std::atomic<bool> gStarted = false;  // NOLINT
+// Only touched on the hook thread (WinEvent callbacks have no user data).
+HookWindow* gWindow = nullptr; // NOLINT
+
+std::mutex gAnnounceMutex;          // NOLINT
+std::vector<HWND> gAnnounceQueue;   // NOLINT
+
+// Posted to the hook window by announceTo(). Registered, so it can't be taken for one of
+// explorer's private messages (those are forwarded).
+UINT announceMessage() {
+	static const UINT message = RegisterWindowMessageW(L"QuickshellTrayHookAnnounce"); // NOLINT
+	return message;
+}
 
 TrayIconMessage decode(const TrayDataWire& wire) {
 	const auto& nid = wire.nid;
@@ -232,10 +273,35 @@ bool HookWindow::create() {
 	);
 
 	this->syncGeometry();
-	this->keepFirst();
+	// Nothing to have missed yet: the first seed from explorer is on its way.
+	this->keepFirst(false);
 	SetTimer(this->hwnd, RAISE_TIMER, RAISE_INTERVAL_MS, nullptr);
 
 	return true;
+}
+
+// Checks that shell32 still finds this window with HOOK_TITLE set, with a Shell_NotifyIcon call
+// of our own for an icon nobody has (answered here, never passed on). Called from the hook
+// thread itself, so shell32's SendMessage reaches handle() directly.
+void HookWindow::probeTitle() {
+	SetWindowTextW(this->hwnd, HOOK_TITLE);
+
+	NOTIFYICONDATAW nid {};
+	nid.cbSize = sizeof(nid);
+	nid.hWnd = this->hwnd;
+	nid.uID = PROBE_UID;
+	nid.uFlags = NIF_STATE;
+
+	this->probing = true;
+	this->probeSeen = false;
+	Shell_NotifyIconW(NIM_MODIFY, &nid);
+	this->probing = false;
+
+	if (this->probeSeen) return;
+
+	qCInfo(logTrayHook) << "Shell_NotifyIcon didn't reach the tray hook with a window title of its"
+	                    << "own, using explorer's empty one";
+	SetWindowTextW(this->hwnd, L"");
 }
 
 // TaskbarCreated to every top level window but ours, the same set HWND_BROADCAST reaches. Our
@@ -256,6 +322,35 @@ void HookWindow::announce() {
 	qCDebug(logTrayHook) << "Sent TaskbarCreated";
 }
 
+// Targeted TaskbarCreated for icon owners whose callback message is still unknown: the owners
+// of icons explorer had before us, which the broadcast misses when they are message-only
+// windows, and icons added while explorer's window was in front of ours.
+void HookWindow::announceQueued() {
+	std::vector<HWND> owners;
+	{
+		auto lock = std::lock_guard(gAnnounceMutex);
+		owners.swap(gAnnounceQueue);
+	}
+
+	std::ranges::sort(owners);
+	auto [first, last] = std::ranges::unique(owners);
+	owners.erase(first, last);
+	if (owners.empty()) return;
+
+	// Their answer has to come through here.
+	this->keepFirst();
+	this->readdGraceUntil = GetTickCount64() + READD_GRACE_MS;
+
+	auto sent = 0;
+	for (auto* owner: owners) {
+		if (IsWindow(owner) == 0 || isOwnProcessWindow(owner)) continue;
+		SendNotifyMessageW(owner, this->taskbarCreated, 0, 0);
+		sent++;
+	}
+
+	qCDebug(logTrayHook) << "Sent TaskbarCreated to" << sent << "icon owners";
+}
+
 LRESULT CALLBACK HookWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	if (msg == WM_NCCREATE) {
 		auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam); // NOLINT
@@ -267,6 +362,23 @@ LRESULT CALLBACK HookWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 	if (self == nullptr || self->hwnd != hwnd) return DefWindowProcW(hwnd, msg, wParam, lParam);
 
 	return self->handle(msg, wParam, lParam);
+}
+
+void CALLBACK HookWindow::onWinEvent(
+    HWINEVENTHOOK /*hook*/,
+    DWORD /*event*/,
+    HWND hwnd,
+    LONG idObject,
+    LONG idChild,
+    DWORD /*thread*/,
+    DWORD /*time*/
+) {
+	if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF || hwnd == nullptr) return;
+
+	auto* self = gWindow;
+	if (self == nullptr || hwnd != self->explorer) return;
+
+	self->keepFirst();
 }
 
 LRESULT HookWindow::handle(UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -306,6 +418,7 @@ LRESULT HookWindow::handle(UINT msg, WPARAM wParam, LPARAM lParam) {
 	case WM_DESTROY:
 		KillTimer(this->hwnd, RAISE_TIMER);
 		KillTimer(this->hwnd, ANNOUNCE_TIMER);
+		this->unwatchExplorer();
 		RemovePropW(this->hwnd, TRAY_HOOK_PROP);
 		PostQuitMessage(0);
 		return 0;
@@ -314,6 +427,11 @@ LRESULT HookWindow::handle(UINT msg, WPARAM wParam, LPARAM lParam) {
 
 	if (msg == this->taskbarCreated) {
 		this->onTaskbarCreated();
+		return 0;
+	}
+
+	if (msg == announceMessage()) {
+		this->announceQueued();
 		return 0;
 	}
 
@@ -343,6 +461,12 @@ LRESULT HookWindow::onCopyData(WPARAM wParam, LPARAM lParam) {
 
 	// Decoded before forwarding: the app may destroy its HICON as soon as the call returns.
 	auto message = decode(wire);
+
+	// Our probe, or another Quickshell process's that reached this window first: not an icon.
+	if (message.uid == PROBE_UID && isTrayHookWindow(message.hwnd)) {
+		if (this->probing && message.hwnd == this->hwnd) this->probeSeen = true;
+		return FALSE;
+	}
 
 	LRESULT answer = FALSE;
 
@@ -432,7 +556,7 @@ HWND HookWindow::explorerWindow() {
 	return this->explorer;
 }
 
-void HookWindow::keepFirst() {
+void HookWindow::keepFirst(bool report) {
 	auto* first = FindWindowW(TRAY_CLASS, nullptr);
 	if (first == this->hwnd || first == nullptr) return;
 
@@ -450,6 +574,51 @@ void HookWindow::keepFirst() {
 	    0,
 	    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER
 	);
+
+	// Icon changes apps sent meanwhile reached explorer only; the host reads explorer's list
+	// again to catch up.
+	if (report && this->missed) this->missed();
+}
+
+// Explorer raises its taskbar when it's activated or shown (the taskbar was clicked, auto-hide
+// or ii brought it up). Hearing about it right away keeps the time apps' updates go past us
+// short; the raise timer stays as the safety net. Only explorer's own events are asked for.
+void HookWindow::watchExplorer(HWND target) {
+	DWORD pid = 0;
+	if (target != nullptr) GetWindowThreadProcessId(target, &pid);
+	if (pid == this->watchedPid) return;
+
+	this->unwatchExplorer();
+	this->watchedPid = pid;
+	if (pid == 0) return;
+
+	this->foregroundHook = SetWinEventHook(
+	    EVENT_SYSTEM_FOREGROUND,
+	    EVENT_SYSTEM_FOREGROUND,
+	    nullptr,
+	    &HookWindow::onWinEvent,
+	    pid,
+	    0,
+	    WINEVENT_OUTOFCONTEXT
+	);
+
+	this->showHook = SetWinEventHook(
+	    EVENT_OBJECT_SHOW,
+	    EVENT_OBJECT_SHOW,
+	    nullptr,
+	    &HookWindow::onWinEvent,
+	    pid,
+	    0,
+	    WINEVENT_OUTOFCONTEXT
+	);
+}
+
+void HookWindow::unwatchExplorer() {
+	if (this->foregroundHook != nullptr) UnhookWinEvent(this->foregroundHook);
+	if (this->showHook != nullptr) UnhookWinEvent(this->showHook);
+	this->foregroundHook = nullptr;
+	this->showHook = nullptr;
+	this->watchedPid = 0;
 }
 
 // Windows' own code also finds the taskbar with FindWindow(L"Shell_TrayWnd") and then reads
@@ -500,6 +669,7 @@ void HookWindow::mirrorProps() {
 // Apps also use FindWindow(L"Shell_TrayWnd") to find out where the taskbar is.
 void HookWindow::syncGeometry() {
 	auto* target = this->explorerWindow();
+	this->watchExplorer(target);
 	if (target == nullptr) return;
 
 	if (GetTickCount64() - this->propsSyncedAt >= 1000) this->mirrorProps();
@@ -542,24 +712,30 @@ void HookWindow::syncGeometry() {
 	}
 }
 
-void runHook(TrayIconSink sink) {
+void runHook(TrayIconSink sink, std::function<void()> missed) {
 	SetThreadDescription(GetCurrentThread(), L"qs tray hook");
 	// Explorer's rects are physical pixels; ours must be too.
 	SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
-	HookWindow window(std::move(sink));
+	HookWindow window(std::move(sink), std::move(missed));
 	if (!window.create()) return;
 
+	gWindow = &window;
 	gHwnd.store(window.hwnd);
 
 	// stop() came while the window was being created and had nothing to post to.
 	if (gStopping.load()) {
 		DestroyWindow(window.hwnd);
 		gHwnd.store(nullptr);
+		gWindow = nullptr;
 		return;
 	}
 
+	window.probeTitle();
 	window.announce();
+
+	// announceTo() calls that came before the window existed.
+	PostMessageW(window.hwnd, announceMessage(), 0, 0);
 
 	MSG msg;
 	while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
@@ -568,11 +744,12 @@ void runHook(TrayIconSink sink) {
 	}
 
 	gHwnd.store(nullptr);
+	gWindow = nullptr;
 }
 
 } // namespace
 
-void TrayHook::start(TrayIconSink sink) {
+void TrayHook::start(TrayIconSink sink, std::function<void()> missedTraffic) {
 	auto lock = std::lock_guard(gMutex);
 	if (gThread.joinable()) return;
 
@@ -585,7 +762,8 @@ void TrayHook::start(TrayIconSink sink) {
 	}
 
 	gStopping.store(false);
-	gThread = std::thread(runHook, std::move(sink));
+	gStarted.store(true);
+	gThread = std::thread(runHook, std::move(sink), std::move(missedTraffic));
 }
 
 void TrayHook::stop() {
@@ -593,6 +771,7 @@ void TrayHook::stop() {
 	if (!gThread.joinable()) return;
 
 	gStopping.store(true);
+	gStarted.store(false);
 
 	auto* hwnd = gHwnd.load();
 	if (hwnd != nullptr) PostMessageW(hwnd, WM_CLOSE, 0, 0);
@@ -600,6 +779,22 @@ void TrayHook::stop() {
 	// It may be waiting on a hung explorer for a few seconds; the process ends anyway.
 	if (WaitForSingleObject(gThread.native_handle(), 1000) == WAIT_OBJECT_0) gThread.join();
 	else gThread.detach();
+}
+
+void TrayHook::announceTo(std::vector<HWND> owners) {
+	// Without the hook their answer would only go to explorer again.
+	if (owners.empty() || !gStarted.load()) return;
+
+	{
+		auto lock = std::lock_guard(gAnnounceMutex);
+		// Bounded in case the window never came up to take them.
+		if (gAnnounceQueue.size() > 1024) gAnnounceQueue.clear();
+		gAnnounceQueue.insert(gAnnounceQueue.end(), owners.begin(), owners.end());
+	}
+
+	// Not running yet: runHook() looks at the queue once the window exists.
+	auto* hwnd = gHwnd.load();
+	if (hwnd != nullptr) PostMessageW(hwnd, announceMessage(), 0, 0);
 }
 
 } // namespace qs::windows::services::systray
