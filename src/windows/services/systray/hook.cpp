@@ -5,6 +5,7 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -121,6 +122,7 @@ private:
 	HWND explorerWindow();
 	void keepFirst();
 	void syncGeometry();
+	void mirrorProps();
 
 	TrayIconSink sink;
 	HWND notifyHwnd = nullptr;
@@ -129,6 +131,9 @@ private:
 	RECT lastNotifyRect {};
 	UINT taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
 	ULONGLONG readdGraceUntil = 0;
+	ULONGLONG propsSyncedAt = 0;
+	// Names (or "#<atom>") of the explorer properties set on this window.
+	std::vector<std::wstring> mirrored;
 };
 
 std::mutex gMutex;                  // NOLINT
@@ -376,6 +381,7 @@ void HookWindow::onTaskbarCreated() {
 	if (this->explorer == previous || this->explorer == nullptr) return;
 
 	qCInfo(logTrayHook) << "Explorer restarted, asking apps for their tray icons again";
+	this->propsSyncedAt = 0;
 	this->lastRect = {};
 	this->lastNotifyRect = {};
 	this->keepFirst();
@@ -446,10 +452,57 @@ void HookWindow::keepFirst() {
 	);
 }
 
+// Windows' own code also finds the taskbar with FindWindow(L"Shell_TrayWnd") and then reads
+// the window properties explorer puts on it: ITaskbarList (taskbar progress and overlays, which
+// WPF apps use) follows "TaskbandHWND" to the taskbar buttons and failed with E_NOTIMPL on ours,
+// and OLE drag and drop and the DPI of the taskbar are found the same way. So this window carries
+// copies of all of them, kept up to date.
+void HookWindow::mirrorProps() {
+	auto* target = this->explorerWindow();
+	if (target == nullptr) return;
+
+	struct Found {
+		std::vector<std::pair<std::wstring, HANDLE>> props;
+	} found;
+
+	EnumPropsExW(
+	    target,
+	    [](HWND /*hwnd*/, LPWSTR name, HANDLE value, ULONG_PTR param) -> BOOL {
+		    auto* found = reinterpret_cast<Found*>(param); // NOLINT(performance-no-int-to-ptr)
+		    auto key = IS_INTRESOURCE(name)
+		                 ? L"#" + std::to_wstring(reinterpret_cast<ULONG_PTR>(name)) // NOLINT
+		                 : std::wstring(name);
+		    found->props.emplace_back(std::move(key), value);
+		    return TRUE;
+	    },
+	    reinterpret_cast<LPARAM>(&found)
+	);
+
+	auto nameOf = [](const std::wstring& key) {
+		return key.starts_with(L'#') ? MAKEINTATOM(std::stoul(key.substr(1))) : key.c_str();
+	};
+
+	std::vector<std::wstring> current;
+	for (const auto& [key, value]: found.props) {
+		if (key == TRAY_HOOK_PROP) continue;
+		SetPropW(this->hwnd, nameOf(key), value);
+		current.push_back(key);
+	}
+
+	for (const auto& key: this->mirrored) {
+		if (std::ranges::find(current, key) == current.end()) RemovePropW(this->hwnd, nameOf(key));
+	}
+
+	this->mirrored = std::move(current);
+	this->propsSyncedAt = GetTickCount64();
+}
+
 // Apps also use FindWindow(L"Shell_TrayWnd") to find out where the taskbar is.
 void HookWindow::syncGeometry() {
 	auto* target = this->explorerWindow();
 	if (target == nullptr) return;
+
+	if (GetTickCount64() - this->propsSyncedAt >= 1000) this->mirrorProps();
 
 	RECT rect {};
 	if (!GetWindowRect(target, &rect)) return;
