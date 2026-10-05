@@ -1,4 +1,7 @@
 #include "host.hpp"
+#include <algorithm>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include <qt_windows.h>
@@ -29,6 +32,23 @@ QS_LOGGING_CATEGORY(logTrayHost, "quickshell.windows.systray", QtWarningMsg);
 // are hidden or message-only, so no window event announces it.
 constexpr int PRUNE_INTERVAL_MS = 2000;
 constexpr ULONGLONG DELETION_MEMORY_MS = 10000;
+
+// After explorer's window was in front: lets explorer settle and the apps' traffic of that
+// moment reach it.
+constexpr int RESYNC_DELAY_MS = 300;
+// Explorer comes to the front in bursts (taskbar clicks, auto-hide); one read covers them.
+constexpr ULONGLONG SNAPSHOT_MIN_GAP_MS = 2000;
+// An icon missing from explorer's list is only dropped when the next read agrees.
+constexpr int CONFIRM_DELAY_MS = 2000;
+// Apps answer the TaskbarCreated broadcast in this time; what's still without a callback
+// message after it is looked for elsewhere.
+constexpr int RECOVER_DELAY_MS = 1500;
+// An app that doesn't answer TaskbarCreated isn't asked again and again.
+constexpr ULONGLONG ANNOUNCE_COOLDOWN_MS = 15000;
+// ...unless the icon is clicked and this long went by since.
+constexpr ULONGLONG CLICK_ANNOUNCE_GAP_MS = 2000;
+// Brief mode: how often explorer's list is read, which is how fast icon changes show.
+constexpr int BRIEF_POLL_MS = 1500;
 
 struct KnownIcon {
 	QUuid guid;
@@ -138,7 +158,14 @@ TrayHost::TrayHost() {
 	QObject::connect(&this->pruneTimer, &QTimer::timeout, this, &TrayHost::pruneDead);
 	this->pruneTimer.start();
 
-	auto sink = [this](TrayIconMessage message) {
+	this->snapshotTimer.setSingleShot(true);
+	QObject::connect(&this->snapshotTimer, &QTimer::timeout, this, &TrayHost::startSnapshot);
+
+	this->recoverTimer.setSingleShot(true);
+	this->recoverTimer.setInterval(RECOVER_DELAY_MS);
+	QObject::connect(&this->recoverTimer, &QTimer::timeout, this, &TrayHost::recoverCallbacks);
+
+	this->sink = [this](TrayIconMessage message) {
 		QMetaObject::invokeMethod(
 		    this,
 		    [this, message = std::move(message)]() { this->apply(message); },
@@ -146,15 +173,41 @@ TrayHost::TrayHost() {
 		);
 	};
 
+	auto missedTraffic = [this]() {
+		QMetaObject::invokeMethod(
+		    this,
+		    [this]() { this->scheduleSnapshot(RESYNC_DELAY_MS); },
+		    Qt::QueuedConnection
+		);
+	};
+
+	auto mode = qEnvironmentVariable("QS_WINDOWS_TRAY_HOOK");
+
 	// Escape hatch for tools that need FindWindow(L"Shell_TrayWnd") to be explorer's. Without the
 	// hook, icons we seed now would never update or go away (nothing is watching for that), so
 	// skip seeding too: the tray stays empty instead of filling with icons stuck at startup state.
-	if (qEnvironmentVariable("QS_WINDOWS_TRAY_HOOK") == QStringLiteral("0")) {
+	if (mode == QStringLiteral("0")) {
 		qCInfo(logTrayHost) << "QS_WINDOWS_TRAY_HOOK=0: not hooking the system tray";
 		return;
 	}
 
-	TrayHook::start(sink);
+	// The middle way for such tools: the hook only steps in front of explorer's tray for a few
+	// seconds when apps are asked to add their icons again, and icon changes come from reading
+	// explorer's list every BRIEF_POLL_MS (so they show that much later, and an icon's hidden
+	// state isn't followed).
+	auto brief = mode == QStringLiteral("brief");
+	if (brief) {
+		qCInfo(logTrayHost) << "QS_WINDOWS_TRAY_HOOK=brief: the tray hook stays behind explorer's"
+		                    << "tray but for short moments";
+
+		this->pollTimer.setInterval(BRIEF_POLL_MS);
+		QObject::connect(&this->pollTimer, &QTimer::timeout, this, [this]() {
+			if (!this->snapshotRunning) this->startSnapshot();
+		});
+		this->pollTimer.start();
+	}
+
+	TrayHook::start(this->sink, missedTraffic, brief);
 
 	QObject::connect(
 	    QCoreApplication::instance(),
@@ -163,7 +216,7 @@ TrayHost::TrayHost() {
 	    []() { TrayHook::stop(); }
 	);
 
-	seedFromExplorer(sink);
+	this->startSnapshot();
 }
 
 void TrayHost::apply(const TrayIconMessage& message) {
@@ -174,15 +227,29 @@ void TrayHost::apply(const TrayIconMessage& message) {
 	switch (message.message) {
 	case NIM_ADD:
 	case NIM_MODIFY:
+		if (message.seeded) this->snapshotReported++;
+
 		if (item == nullptr) {
 			if (!message.seeded || !this->deletedRecently(message)) this->add(message);
 		} else if (!message.seeded) {
-			// The seed only fills in icons we haven't heard of; whatever the hook saw is newer.
 			item->update(message);
+			item->tracking.hookUpdatedAt = GetTickCount64();
+		} else {
+			item->tracking.seenByExplorer = true;
+			item->tracking.seenThisSnapshot = true;
+			item->tracking.missedSnapshots = 0;
+
+			// Whatever the hook saw since this read began is newer than explorer's list.
+			if (item->tracking.hookUpdatedAt < this->snapshotStartedAt) {
+				item->refreshFromExplorer(message);
+			}
 		}
 		break;
 	case NIM_SETVERSION:
-		if (item != nullptr) item->update(message);
+		if (item != nullptr) {
+			item->update(message);
+			item->tracking.hookUpdatedAt = GetTickCount64();
+		}
 		break;
 	case NIM_DELETE:
 		if (item != nullptr) this->remove(item);
@@ -213,12 +280,28 @@ void TrayHost::add(const TrayIconMessage& message) {
 	item->update(message);
 	item->setIdentity(this->uniqueId(id, message.uid), title, exePath);
 
+	if (message.seeded) {
+		item->tracking.seenByExplorer = true;
+		item->tracking.seenThisSnapshot = true;
+	} else {
+		item->tracking.hookUpdatedAt = GetTickCount64();
+	}
+
+	item->onCallbackNeeded = [this, item]() {
+		auto now = GetTickCount64();
+		if (now - item->tracking.announcedAt >= CLICK_ANNOUNCE_GAP_MS) item->tracking.announcedAt = 0;
+		this->recoverCallbacks();
+	};
+
 	qCDebug(logTrayHost) << "Added tray icon" << item->bindableId().value()
 	                     << (message.seeded ? "from explorer's list" : "")
 	                     << (item->hasCallback() ? "" : "(no callback message yet)");
 
 	this->mItems.append(item);
 	emit this->itemAdded(item);
+
+	// Restarted by every such icon, so a burst (the seed) is handled once.
+	if (!item->hasCallback()) this->recoverTimer.start();
 }
 
 void TrayHost::remove(SystemTrayItem* item) {
@@ -239,6 +322,139 @@ void TrayHost::pruneDead() {
 	this->deletions.removeIf([&](const Deletion& deletion) {
 		return now - deletion.at > DELETION_MEMORY_MS;
 	});
+}
+
+void TrayHost::startSnapshot() {
+	if (this->snapshotRunning) {
+		this->snapshotAgain = true;
+		return;
+	}
+
+	this->snapshotRunning = true;
+	this->snapshotAgain = false;
+	this->snapshotStartedAt = GetTickCount64();
+	this->snapshotReported = 0;
+
+	for (auto* item: this->mItems) {
+		item->tracking.seenThisSnapshot = false;
+	}
+
+	// The icons come through the sink like the hook's, so done() is queued after all of them.
+	seedFromExplorer(this->sink, [this](bool ok) {
+		QMetaObject::invokeMethod(
+		    this,
+		    [this, ok]() { this->onSnapshotDone(ok); },
+		    Qt::QueuedConnection
+		);
+	});
+}
+
+void TrayHost::scheduleSnapshot(int delayMs) {
+	// Not pushed back by later requests, or a busy taskbar would postpone it forever.
+	if (this->snapshotTimer.isActive()) return;
+
+	auto sinceLast = GetTickCount64() - this->snapshotDoneAt;
+	auto gap = sinceLast >= SNAPSHOT_MIN_GAP_MS ? 0 : SNAPSHOT_MIN_GAP_MS - sinceLast;
+
+	this->snapshotTimer.start(std::max(delayMs, static_cast<int>(gap)));
+}
+
+void TrayHost::onSnapshotDone(bool ok) {
+	this->snapshotRunning = false;
+	this->snapshotDoneAt = GetTickCount64();
+
+	auto confirm = false;
+
+	// An empty list is what a just restarted explorer has: nothing to conclude from it.
+	if (ok && this->snapshotReported > 0) {
+		auto items = this->mItems;
+		for (auto* item: items) {
+			auto& tracking = item->tracking;
+
+			// Only icons explorer listed before can go missing from its list: some of its own
+			// may never be in there, and hidden icons may not be either.
+			if (tracking.seenThisSnapshot || !tracking.seenByExplorer
+			    || tracking.hookUpdatedAt >= this->snapshotStartedAt
+			    || item->bindableStatus().value() == Status::Passive)
+			{
+				continue;
+			}
+
+			// Deleted while explorer's window was in front of ours.
+			if (++tracking.missedSnapshots >= 2) {
+				this->deletions.append(
+				    {item->ownerWindow(), item->iconId(), item->iconGuid(), GetTickCount64()}
+				);
+				this->remove(item);
+			} else {
+				confirm = true;
+			}
+		}
+	}
+
+	if (confirm || this->snapshotAgain) this->scheduleSnapshot(CONFIRM_DELAY_MS);
+}
+
+void TrayHost::recoverCallbacks() {
+	auto missing = std::ranges::any_of(this->mItems, [](SystemTrayItem* item) {
+		return !item->hasCallback();
+	});
+
+	if (!missing) return;
+
+	if (this->toolbarReading) {
+		this->recoverAgain = true;
+		return;
+	}
+
+	this->toolbarReading = true;
+
+	// Cross process calls into explorer: off the GUI thread.
+	std::thread([this]() {
+		SetThreadDescription(GetCurrentThread(), L"qs tray toolbars");
+		auto icons = readExplorerToolbars();
+
+		QMetaObject::invokeMethod(
+		    this,
+		    [this, icons = std::move(icons)]() { this->onToolbarData(icons); },
+		    Qt::QueuedConnection
+		);
+	}).detach();
+}
+
+void TrayHost::onToolbarData(const std::vector<ExplorerIconData>& icons) {
+	this->toolbarReading = false;
+
+	for (const auto& icon: icons) {
+		auto* item = this->find(icon.hwnd, icon.uid, QUuid());
+		if (item == nullptr || item->hasCallback()) continue;
+
+		qCDebug(logTrayHost) << "Callback message of" << item->bindableId().value()
+		                     << "from explorer's notification area";
+		item->applyExplorerData(icon.callbackMessage, icon.version);
+	}
+
+	// The rest: ask their apps to add them again, which goes through the hook. Explorer keeps
+	// them where they are (the hook turns the add into an update).
+	auto now = GetTickCount64();
+	std::vector<HWND> owners;
+
+	for (auto* item: this->mItems) {
+		if (item->hasCallback() || now - item->tracking.announcedAt < ANNOUNCE_COOLDOWN_MS) continue;
+		item->tracking.announcedAt = now;
+		owners.push_back(item->ownerWindow());
+	}
+
+	if (!owners.empty()) {
+		qCDebug(logTrayHost) << "Asking" << owners.size()
+		                     << "tray icon owners to add their icons again";
+		TrayHook::announceTo(std::move(owners));
+	}
+
+	if (this->recoverAgain) {
+		this->recoverAgain = false;
+		this->recoverCallbacks();
+	}
 }
 
 SystemTrayItem* TrayHost::find(HWND hwnd, UINT uid, const QUuid& guid) const {
