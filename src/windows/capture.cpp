@@ -32,9 +32,6 @@
 #include <winrt/Windows.Graphics.h>
 #include <winrt/Windows.Security.Authorization.AppCapabilityAccess.h>
 
-// Classic COM interop headers (not projected): the capture item factory and the
-// IDirect3DSurface -> ID3D11Texture2D bridge. Qualified with :: below because their namespaces
-// shadow the winrt:: projections.
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
 
@@ -52,13 +49,10 @@ namespace qs::windows::capture {
 namespace {
 Q_LOGGING_CATEGORY(logCapture, "quickshell.windows.capture", QtWarningMsg);
 
-// All textures in the chain are RGBA8: WGC can deliver that format directly and it is what Qt
-// assumes for a native texture wrapped without an explicit format.
 constexpr DXGI_FORMAT FRAME_FORMAT = DXGI_FORMAT_R8G8B8A8_UNORM;
 constexpr DirectXPixelFormat FRAME_PIXEL_FORMAT = DirectXPixelFormat::R8G8B8A8UIntNormalized;
 constexpr int POOL_BUFFERS = 2;
 
-// Keyed mutex protocol: the producer owns the texture under key 0, the consumer under key 1.
 constexpr UINT64 KEY_PRODUCER = 0;
 constexpr UINT64 KEY_CONSUMER = 1;
 
@@ -131,8 +125,6 @@ SharedFrame::~SharedFrame() {
 	if (this->handle != nullptr) CloseHandle(this->handle);
 }
 
-// --- consumer side ---------------------------------------------------------------------------
-
 SharedFrameReader::~SharedFrameReader() { this->close(); }
 
 void SharedFrameReader::close() {
@@ -160,7 +152,6 @@ bool SharedFrameReader::open(ID3D11Device* device, const std::shared_ptr<SharedF
 	if (SUCCEEDED(hr)) hr = this->opened->QueryInterface(IID_PPV_ARGS(&this->mutex));
 
 	if (FAILED(hr)) {
-		// Usually the two devices sit on different adapters.
 		qCWarning(logCapture) << "Opening the shared frame on the consumer device failed:" << Qt::hex
 		                      << hr;
 		this->close();
@@ -174,26 +165,16 @@ bool SharedFrameReader::open(ID3D11Device* device, const std::shared_ptr<SharedF
 bool SharedFrameReader::copyTo(ID3D11DeviceContext* context, ID3D11Texture2D* dest) {
 	if (this->mutex == nullptr) return false;
 
-	// A freshly published frame sits at the consumer key. One this reader already copied (or
-	// another reader did, before a scene graph rebuild) rests at the producer key with its
-	// content intact, so take it under that key instead of waiting for a frame that may never
-	// come (static window, single shot session). The producer only holds the mutex for its
-	// own copy, so the short waits cover a mid-write; both timing out means retry next frame.
 	auto hr = this->mutex->AcquireSync(KEY_CONSUMER, 2);
 	if (hr != S_OK) hr = this->mutex->AcquireSync(KEY_PRODUCER, 2);
 	if (hr != S_OK) return false;
 
 	context->CopyResource(dest, this->opened);
 	this->mutex->ReleaseSync(KEY_PRODUCER);
-	// Make the release reach the GPU now instead of at the consumer's next present, otherwise
-	// the producer's non blocking acquire keeps failing and frames are dropped.
 	context->Flush();
 	return true;
 }
 
-// --- capture thread ----------------------------------------------------------------------------
-
-///! Runs on the capture thread; owns the apartment, the D3D11 device and the WinRT device wrapper.
 class CaptureWorker: public QObject {
 	Q_OBJECT;
 
@@ -208,7 +189,6 @@ public:
 	[[nodiscard]] const IDirect3DDevice& winrtDevice() const { return this->mWinrtDevice; }
 
 	GraphicsCaptureItem createItem(const CaptureTarget& target);
-	// Applies border/cursor/throttle options. Returns true if MinUpdateInterval took effect.
 	bool configure(const GraphicsCaptureSession& session, const CaptureOptions& options);
 
 	QImage grabMonitor(HMONITOR monitor, int timeoutMs);
@@ -252,8 +232,6 @@ void CaptureWorker::start() {
 		return;
 	}
 
-	// BGRA support is required for WinRT interop; the multithread protection serializes the
-	// immediate context, which frame pool callbacks use from thread pool threads.
 	auto hr = D3D11CreateDevice(
 	    nullptr,
 	    D3D_DRIVER_TYPE_HARDWARE,
@@ -297,8 +275,6 @@ void CaptureWorker::start() {
 		qCWarning(logCapture) << "ApiInformation queries failed:" << hresultString(e);
 	}
 
-	// Without this (one time, per process) IsBorderRequired(false) is refused for unpackaged
-	// apps. Blocking .get() is fine: this is the MTA worker thread.
 	if (this->hasBorderProperty
 	    && ApiInformation::IsTypePresent(L"Windows.Graphics.Capture.GraphicsCaptureAccess"))
 	{
@@ -419,7 +395,6 @@ QImage CaptureWorker::grabMonitor(HMONITOR monitor, int timeoutMs) {
 				D3D11_MAPPED_SUBRESOURCE mapped {};
 				winrt::check_hresult(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
 
-				// Monitors have no transparency; RGBX keeps the PNG encoder from writing alpha.
 				auto image = QImage(content.Width, content.Height, QImage::Format_RGBX8888);
 				auto rowBytes = static_cast<size_t>(content.Width) * 4;
 				for (int y = 0; y < content.Height; ++y) {
@@ -446,7 +421,7 @@ QImage CaptureWorker::grabMonitor(HMONITOR monitor, int timeoutMs) {
 		{
 			std::unique_lock lock(grab->mutex);
 			grab->cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [&] { return grab->done; });
-			grab->done = true; // ignore late frames
+			grab->done = true;
 		}
 
 		pool.FrameArrived(token);
@@ -459,21 +434,13 @@ QImage CaptureWorker::grabMonitor(HMONITOR monitor, int timeoutMs) {
 	return grab->image;
 }
 
-// --- sessions ----------------------------------------------------------------------------------
-
-// State shared by a CaptureSession (capture thread), its frame pool callbacks (thread pool
-// threads), and the CaptureHandle (GUI thread) / consumers reading the latest frame. Kept
-// alive by every callback that may still be in flight, so the session object can die first.
 struct SessionCore {
 	std::mutex mutex;
 
 	CaptureTarget target;
 	CaptureOptions options;
 
-	// GUI thread object the callbacks post notifications to; cleared under the mutex when it
-	// dies so an in flight callback never posts to a dangling pointer.
 	CaptureHandle* handle = nullptr;
-	// Capture thread object the callbacks post "stop" to; cleared the same way.
 	CaptureSession* session = nullptr;
 
 	bool running = false;
@@ -493,13 +460,11 @@ struct SessionCore {
 	SizeInt32 poolSize {};
 
 	std::shared_ptr<SharedFrame> slot;
-	// Size a slot could not be created for; don't retry (and log) every frame for it.
 	QSize slotFailedSize;
 	std::shared_ptr<SharedFrame> latest;
 	quint64 serial = 0;
 };
 
-///! Capture thread side of a CaptureHandle.
 class CaptureSession: public QObject {
 	Q_OBJECT;
 
@@ -629,9 +594,6 @@ void CaptureSession::stop() {
 		c.winrtDevice = nullptr;
 	}
 
-	// Outside the mutex: a FrameArrived callback may be blocked on it, and Close() must not
-	// wait for that callback while we hold what it waits for. Callbacks that run after this
-	// see running == false and return.
 	try {
 		if (pool) pool.FrameArrived(frameToken);
 		if (item) item.Closed(closedToken);
@@ -664,8 +626,6 @@ void CaptureSession::setCursor(bool cursor) {
 void CaptureSession::setLive(bool live) {
 	std::lock_guard lock(this->core->mutex);
 	this->core->options.live = live;
-	// A session started single shot has no MinUpdateInterval; the time based fallback covers
-	// it until the next start().
 	if (live && this->core->running) this->core->throttleFallback = true;
 }
 
@@ -708,7 +668,6 @@ void CaptureSession::onFrameArrived(
 		auto time = frame.SystemRelativeTime();
 		auto published = false;
 
-		// Throttle when the OS can't (pre 24H2): drop frames closer than the interval.
 		auto throttle = c.options.live && c.throttleFallback && c.options.maxFps > 0 && c.hasLastTime
 		             && (time - c.lastTime) < std::chrono::milliseconds(1000 / c.options.maxFps);
 
@@ -717,8 +676,6 @@ void CaptureSession::onFrameArrived(
 			D3D11_TEXTURE2D_DESC desc {};
 			source->GetDesc(&desc);
 
-			// After a resize the content can exceed the (old) pool surface until the pool is
-			// recreated below; such a frame is clipped, so skip it rather than show garbage.
 			auto fits = static_cast<UINT>(content.Width) <= desc.Width
 			         && static_cast<UINT>(content.Height) <= desc.Height;
 
@@ -732,14 +689,10 @@ void CaptureSession::onFrameArrived(
 					}
 				}
 
-				// The consumer still owns the texture (it hasn't copied the previous frame out
-				// yet): drop this one, the next arrives shortly.
 				if (c.slot && c.slot->mutex->AcquireSync(KEY_PRODUCER, 0) == S_OK) {
 					D3D11_BOX box {0, 0, 0, static_cast<UINT>(content.Width), static_cast<UINT>(content.Height), 1};
 					c.context->CopySubresourceRegion(c.slot->texture, 0, 0, 0, 0, source.get(), 0, &box);
 					c.slot->mutex->ReleaseSync(KEY_CONSUMER);
-					// Nothing ever presents on this device, so flush or the copy may sit in the
-					// command buffer indefinitely.
 					c.context->Flush();
 
 					c.latest = c.slot;
@@ -762,30 +715,22 @@ void CaptureSession::onFrameArrived(
 
 		if (c.handle != nullptr) {
 			auto* handle = c.handle;
-			// Snapshot now, under the same lock and from the same read as the auto-stop decision
-			// just below: see the comment on CaptureHandle::onFrame for why this can't be
-			// recomputed later from a separately toggled flag.
 			auto live = c.options.live;
 			QMetaObject::invokeMethod(handle, [handle, live] { handle->onFrame(live); }, Qt::QueuedConnection);
 		}
 
 		if (!c.options.live) {
-			// Single shot: done. Closing the pool from inside its own callback is asking for a
-			// deadlock, so the session does it on the capture thread.
 			c.running = false;
 			if (c.session != nullptr) {
 				QMetaObject::invokeMethod(c.session, &CaptureSession::stop, Qt::QueuedConnection);
 			}
 		}
 	} catch (const winrt::hresult_error& e) {
-		// Typically RO_E_CLOSED when stop() raced this callback.
 		qCDebug(logCapture) << "Frame callback failed:" << hresultString(e);
 	}
 }
 
 void CaptureWorker::shutdown() {
-	// Sessions that are still alive (views outliving aboutToQuit) must release their pools
-	// before the device goes away.
 	for (auto* session: this->sessions) {
 		session->stop();
 	}
@@ -800,8 +745,6 @@ void CaptureWorker::shutdown() {
 		this->apartment = false;
 	}
 }
-
-// --- handle ------------------------------------------------------------------------------------
 
 CaptureHandle::CaptureHandle(
     const CaptureTarget& target,
@@ -824,7 +767,6 @@ CaptureHandle::~CaptureHandle() {
 		this->core->handle = nullptr;
 	}
 
-	// Runs the session's destructor (which stops capture) on the capture thread.
 	this->session->deleteLater();
 }
 
@@ -868,8 +810,6 @@ void CaptureHandle::onSessionStopped(bool error) {
 	emit this->stopped(error);
 }
 
-// --- thread ------------------------------------------------------------------------------------
-
 CaptureThread* CaptureThread::instance() {
 	static auto* instance = new CaptureThread(); // NOLINT
 	return instance;
@@ -883,8 +823,6 @@ CaptureThread::CaptureThread() {
 	QObject::connect(&this->mThread, &QThread::started, this->mWorker, &CaptureWorker::start);
 	QObject::connect(&this->mThread, &QThread::finished, this->mWorker, &CaptureWorker::shutdown);
 
-	// Tear the apartment down while the process is still in one piece: the thread must not be
-	// alive during static destruction.
 	if (auto* app = QCoreApplication::instance()) {
 		QObject::connect(app, &QCoreApplication::aboutToQuit, this, [this] {
 			this->mThread.quit();
@@ -905,13 +843,6 @@ QImage CaptureThread::grabMonitor(HMONITOR monitor, int timeoutMs) {
 	if (!this->mThread.isRunning()) return {};
 	if (QThread::currentThread() == &this->mThread) return this->mWorker->grabMonitor(monitor, timeoutMs);
 
-	// CaptureWorker::grabMonitor's own wait_for only bounds the time *after* it starts running;
-	// it does nothing for a WinRT call ahead of that wait (CreateFreeThreaded, StartCapture, ...)
-	// that hangs, or for a capture thread that is simply backed up with other queued work. A
-	// plain Qt::BlockingQueuedConnection has no deadline of its own, so any of that would block
-	// this (GUI) thread forever. Dispatch without blocking instead and wait on our own condition
-	// variable with the same deadline (plus a little slack for the inner wait to actually wind
-	// down); a result that arrives after we have given up is simply dropped via the shared_ptr.
 	struct Result {
 		std::mutex mutex;
 		std::condition_variable cv;

@@ -30,8 +30,6 @@ class WlrLayershell;
 
 namespace qs::windows {
 
-// Same values as qs::wayland::layershell::WlrLayer and WlrKeyboardFocus. The Quickshell.Wayland
-// stand-in module (wayland/wlr_layershell.hpp) exposes these in QML and maps them 1:1.
 enum class PanelLayer : quint8 {
 	Background = 0,
 	Bottom = 1,
@@ -49,16 +47,12 @@ class WinPanelWindow;
 class WinPanelStack;
 class PanelBlur;
 
-// Backing window of a WinPanelWindow. Forwards native messages and the creation of the HWND
-// to whichever panel currently owns it (the owner changes across reloads).
 class WinProxiedWindow: public ProxiedWindow {
 	Q_OBJECT;
 
 public:
 	using ProxiedWindow::ProxiedWindow;
 
-	// Unlike proxy(), this is a guarded pointer: a disowned window waiting for deleteLater
-	// still receives native messages after its old panel is gone.
 	void setPanel(WinPanelWindow* panel);
 
 signals:
@@ -123,7 +117,6 @@ public:
 	[[nodiscard]] bool focusable() const;
 	void setFocusable(bool focusable);
 
-	// Windows specific state, exposed to QML through the WlrLayershell attached object.
 	[[nodiscard]] PanelLayer layer() const { return this->bLayer; }
 	void setLayer(PanelLayer layer) { this->bLayer = layer; }
 
@@ -133,15 +126,11 @@ public:
 	[[nodiscard]] PanelKeyboardFocus keyboardFocus() const { return this->bKeyboardFocus; }
 	void setKeyboardFocus(PanelKeyboardFocus focus) { this->bKeyboardFocus = focus; }
 
-	// The WlrLayershell attached object, owned by the Quickshell.Wayland stand-in module.
 	[[nodiscard]] QObject* layershellAttached() const { return this->mLayershellAttached; }
 	void setLayershellAttached(QObject* attached) { this->mLayershellAttached = attached; }
 
-	// Called by WinProxiedWindow for every native message of the backing window.
 	bool handleNativeMessage(MSG* msg, qintptr* result);
 
-	// Inside the desktop, behind the icons or above them (see DesktopHost), instead of a top
-	// level window.
 	[[nodiscard]] bool isEmbedded() const { return this->mEmbedParent != nullptr; }
 
 signals:
@@ -199,14 +188,9 @@ private:
 	bool focusGrabPending = false;
 	bool pinnedToAllDesktops = false;
 
-	// Desktop embedding. The rect is where the panel goes, in physical screen coordinates: Qt
-	// still takes the window for a top level one and places it in screen coordinates, which
-	// handleNativeMessage turns into the parent's client coordinates.
 	HWND mEmbedParent = nullptr;
 	HWND mEmbedInsertAfter = nullptr;
 	HWND embedRefusedBy = nullptr;
-	// Next to the icons view and above it. The input mask is then the window region (physical
-	// window coordinates), lifted while a mouse button is held on the window.
 	bool mEmbedAboveIcons = false;
 	QRegion mInputMask;
 	bool mHasInputMask = false;
@@ -218,7 +202,6 @@ private:
 	QRect mEmbedRect;
 	bool placingEmbedded = false;
 	bool screenRestorePending = false;
-	// Set when explorer destroyed the window along with its desktop.
 	HWND destroyedHwnd = nullptr;
 	bool visibleWhenDestroyed = false;
 

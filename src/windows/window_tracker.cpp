@@ -25,8 +25,6 @@
 #include "util.hpp"
 #include "virtual_desktops.hpp"
 
-// last: pulls in the rpc headers, which define macros like `small`.
-// initguid.h first so PKEY_AppUserModel_ID gets defined in this translation unit.
 #include <initguid.h>
 
 #include <appmodel.h>
@@ -45,12 +43,6 @@ namespace qs::windows {
 namespace {
 Q_LOGGING_CATEGORY(logTracker, "quickshell.windows.tracker", QtWarningMsg);
 
-// WinEvents arrive on a thread of their own, never on the gui thread. The ranges below include
-// EVENT_OBJECT_LOCATIONCHANGE, which Windows also raises for the mouse cursor on every move and
-// for the text caret on every keystroke, system wide. Out of context hooks hand each event to
-// the hooking thread's message queue, and with that thread busy rendering the whole desktop's
-// mouse and keyboard input lagged. This thread drops everything but whole window events on the
-// spot and passes the rest to the gui thread in batches.
 constexpr auto EVENT_WINDOW_CLASS = L"QuickshellWindowTrackerEvents";
 constexpr UINT WM_QS_WINEVENTS = WM_APP + 1;
 
@@ -102,10 +94,7 @@ void eventThreadMain(HANDLE readyEvent) {
 		if (handle != nullptr) hooks.push_back(handle);
 	};
 
-	// The ranges stay tight. EVENT_OBJECT_CREATE is left out on purpose: nothing is known about
-	// a window before it is shown, and creations are by far the most frequent events.
 	hook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND);
-	// Once per drag, not per mouse move: for tiling's drag and drop.
 	hook(EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND);
 	hook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND);
 	hook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE);
@@ -115,7 +104,6 @@ void eventThreadMain(HANDLE readyEvent) {
 	gEventHookCount.store(static_cast<int>(hooks.size()));
 	SetEvent(readyEvent);
 
-	// Process lifetime: the tracker is never destroyed.
 	while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
 		TranslateMessage(&msg);
 		DispatchMessageW(&msg);
@@ -142,10 +130,9 @@ QString windowClass(HWND hwnd) {
 	return QString::fromWCharArray(buffer, length);
 }
 
-// Shell owned windows that pass the style checks but are never applications.
 bool isShellClass(const QString& cls) {
 	static const auto classes = QSet<QString> {
-	    QStringLiteral("Windows.UI.Core.CoreWindow"), // hosted inside ApplicationFrameWindow
+	    QStringLiteral("Windows.UI.Core.CoreWindow"),
 	    QStringLiteral("Progman"),
 	    QStringLiteral("WorkerW"),
 	    QStringLiteral("Shell_TrayWnd"),
@@ -158,7 +145,6 @@ bool isShellClass(const QString& cls) {
 	return classes.contains(cls);
 }
 
-// Explicit AppUserModelID of the window (UWP frames and apps that set one).
 QString appUserModelIdOf(HWND hwnd) {
 	IPropertyStore* store = nullptr;
 	if (FAILED(SHGetPropertyStoreForWindow(hwnd, IID_PPV_ARGS(&store))) || store == nullptr) {
@@ -178,7 +164,6 @@ QString appUserModelIdOf(HWND hwnd) {
 	return id;
 }
 
-// AppUserModelID of a packaged (MSIX / Store) process, e.g. Windows Terminal.
 QString appUserModelIdOf(HANDLE process) {
 	UINT32 length = 0;
 	if (GetApplicationUserModelId(process, &length, nullptr) != ERROR_INSUFFICIENT_BUFFER) return {};
@@ -203,8 +188,6 @@ bool covers(const RECT& rect, const QRect& area) {
 
 } // namespace
 
-// --- TrackedWindow -----------------------------------------------------------------------------
-
 TrackedWindow::TrackedWindow(WindowTracker* tracker, HWND hwnd)
     : QObject(tracker)
     , tracker(tracker)
@@ -228,7 +211,6 @@ void TrackedWindow::refreshIdentity() {
 	this->uwpFrame = windowClass(this->mHwnd) == QString::fromWCharArray(UWP_FRAME_CLASS);
 
 	if (this->uwpFrame) {
-		// ApplicationFrameHost.exe owns the frame; the app itself owns the hosted core window.
 		auto* core = FindWindowExW(this->mHwnd, nullptr, UWP_CORE_CLASS, nullptr);
 		if (core != nullptr) GetWindowThreadProcessId(core, &pid);
 	}
@@ -257,7 +239,6 @@ void TrackedWindow::refreshIdentity() {
 }
 
 void TrackedWindow::refreshTitle() {
-	// For another process' window this reads the cached caption, so it can't block on a hung app.
 	auto length = GetWindowTextLengthW(this->mHwnd);
 	QString title;
 
@@ -281,14 +262,11 @@ void TrackedWindow::refreshState() {
 	RECT raw {};
 	GetWindowRect(this->mHwnd, &raw);
 
-	// The frame bounds exclude the invisible resize borders, so they match what the user sees.
 	RECT frame {};
 	if (FAILED(DwmGetWindowAttribute(this->mHwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &frame, sizeof(frame)))) {
 		frame = raw;
 	}
 
-	// A maximized window also covers the monitor when nothing reserves space, but that is not
-	// fullscreen in the sense shells care about (hiding bars and wallpapers).
 	auto fullscreen = !minimized && !maximized && rects.valid && covers(raw, rects.monitor);
 
 	Qt::beginPropertyUpdateGroup();
@@ -303,7 +281,6 @@ void TrackedWindow::refreshState() {
 		if (!minimized) {
 			this->bRect = mapper.toLogical(toQRect(frame));
 		} else if (this->bRect.value().isNull()) {
-			// Minimized windows sit at -32000; use where the window would be restored to.
 			WINDOWPLACEMENT placement {};
 			placement.length = sizeof(placement);
 			if (GetWindowPlacement(this->mHwnd, &placement)) {
@@ -330,13 +307,11 @@ void TrackedWindow::activate() {
 
 	if (IsIconic(this->mHwnd)) ShowWindowAsync(this->mHwnd, SW_RESTORE);
 
-	// Like the taskbar: a window blocked by its modal dialog gets the dialog focused instead.
 	auto* target = GetLastActivePopup(this->mHwnd);
 	if (target == nullptr || !IsWindowVisible(target)) target = this->mHwnd;
 
 	auto raise = [target]() { forceForegroundWindow(target); };
 
-	// Shortcut injected switches animate; the foreground request has to wait for them.
 	if (switched && !desktops->accessorLoaded()) {
 		QTimer::singleShot(400, this, raise);
 	} else {
@@ -425,7 +400,6 @@ void TrackedWindow::moveTo(const QPoint& logical) {
 	auto mapper = ScreenMapper(screen->geometry(), rects.monitor, screen->devicePixelRatio());
 	auto physical = mapper.toPhysical(logical);
 
-	// Position the visible frame, not the window rect that includes the invisible borders.
 	RECT raw {};
 	RECT frame {};
 	GetWindowRect(this->mHwnd, &raw);
@@ -444,8 +418,6 @@ void TrackedWindow::moveTo(const QPoint& logical) {
 	);
 }
 
-// --- WindowTracker -----------------------------------------------------------------------------
-
 WindowTracker* WindowTracker::instance() {
 	static auto* instance = new WindowTracker(); // NOLINT
 	return instance;
@@ -458,9 +430,6 @@ WindowTracker::WindowTracker() {
 	this->flushTimer.setInterval(0);
 	QObject::connect(&this->flushTimer, &QTimer::timeout, this, &WindowTracker::flush);
 
-	// Windows destroyed while their thread exits (apps that end with ExitProcess, crashes, kills)
-	// never send EVENT_OBJECT_DESTROY, so dead handles are also looked for on every foreground
-	// change and every few seconds. IsWindow is a handle table lookup, so this costs nothing.
 	this->sweepTimer.setInterval(2000);
 	QObject::connect(&this->sweepTimer, &QTimer::timeout, this, [this]() {
 		if (this->sweepDestroyed()) {
@@ -484,7 +453,6 @@ WindowTracker::WindowTracker() {
 	    &WindowTracker::onDesktopsChanged
 	);
 
-	// Windows shown on every desktop follow the current one.
 	QObject::connect(this->mDesktops, &VirtualDesktops::currentChanged, this, [this]() {
 		this->foregroundDirty = true;
 		this->schedule();
@@ -529,7 +497,6 @@ void WindowTracker::startEventThread() {
 	auto* ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 	if (ready == nullptr) return;
 
-	// Never joined: like the tracker, it lives as long as the process.
 	std::thread(&eventThreadMain, ready).detach();
 	WaitForSingleObject(ready, INFINITE);
 	CloseHandle(ready);
@@ -540,7 +507,6 @@ void WindowTracker::startEventThread() {
 }
 
 void WindowTracker::drainEvents() {
-	// Cleared before taking the batch, so an event queued meanwhile posts another wakeup.
 	gEventWakePending.store(false);
 
 	std::vector<std::pair<DWORD, HWND>> events;
@@ -580,8 +546,6 @@ void WindowTracker::onEvent(DWORD event, HWND hwnd) {
 		break;
 	case EVENT_OBJECT_CLOAKED:
 	case EVENT_OBJECT_UNCLOAKED:
-		// Desktop switches cloak and uncloak; so do moves between desktops and UWP apps
-		// suspending. Only the desktop query can tell them apart.
 		this->desktopsDirty = true;
 		this->foregroundDirty = true;
 		if (tracked) {
@@ -628,7 +592,6 @@ void WindowTracker::flush() {
 		if (!this->byHwnd.contains(hwnd) && this->isEligible(hwnd)) this->addWindow(hwnd);
 	}
 
-	// Handlers may dirty windows again (e.g. a desktop list change); those wait for the next flush.
 	auto dirty = std::move(this->dirty);
 	this->dirty.clear();
 
@@ -647,7 +610,6 @@ void WindowTracker::flush() {
 		if (d.title) window->refreshTitle();
 		if (d.state) window->refreshState();
 		if (d.desktop) window->refreshDesktop();
-		// The hosted app's core window only exists once a UWP frame is uncloaked.
 		if (d.desktop && window->uwpFrame) window->refreshIdentity();
 		Qt::endPropertyUpdateGroup();
 	}
@@ -688,7 +650,6 @@ bool WindowTracker::isEligible(HWND hwnd) const {
 	if (isOwnProcessWindow(hwnd)) return false;
 
 	if (!appWindow) {
-		// Alt+Tab lists one window per owner chain: the root owner's last active popup.
 		HWND walk = nullptr;
 		auto* next = GetAncestor(hwnd, GA_ROOTOWNER);
 
@@ -707,8 +668,6 @@ bool WindowTracker::isEligible(HWND hwnd) const {
 	DWORD cloaked = 0;
 	DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
 
-	// Cloaked on the current desktop means hidden (a suspended UWP app for instance); cloaked
-	// elsewhere means it lives on another desktop and still counts.
 	if (cloaked != 0 && this->mDesktops->isWindowOnCurrent(hwnd)) return false;
 
 	return true;
@@ -751,8 +710,6 @@ void WindowTracker::updateActive() {
 		return;
 	}
 
-	// Shell surfaces don't take application focus on compositors; keep the last active window
-	// while one of ours is in the foreground.
 	if (isOwnProcessWindow(foreground)) return;
 
 	auto* window = this->byHwnd.value(foreground);
@@ -827,7 +784,6 @@ void WindowTracker::onScreensChanged() {
 }
 
 void WindowTracker::onDesktopsChanged() {
-	// Desktop indices shift when one in the middle is removed.
 	for (auto* window: this->mWindows) this->dirty[window->hwnd()].desktop = true;
 	this->schedule();
 }

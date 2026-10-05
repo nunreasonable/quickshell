@@ -14,7 +14,6 @@ struct IVirtualDesktopManager;
 
 namespace qs::windows {
 
-// Blocks in RegNotifyChangeKeyValue on its own thread so the GUI thread never has to.
 class RegistryWatcher: public QThread {
 	Q_OBJECT;
 
@@ -36,19 +35,13 @@ private:
 	HANDLE stopEvent = nullptr;
 };
 
-///! Virtual desktops as the shell exposes them.
-/// The ordered desktop list, the current desktop and the desktop names come from the registry,
-/// which explorer keeps up to date; per window membership from the public IVirtualDesktopManager.
-/// Switching desktops and moving other processes' windows has no public API, so
-/// VirtualDesktopAccessor.dll (Ciantic, MIT; see docs) is loaded from next to the executable when
-/// present, falling back to injecting the Ctrl+Win shortcuts.
 class VirtualDesktops: public QObject {
 	Q_OBJECT;
 
 public:
 	struct Desktop {
 		GUID id {};
-		QString name; // user given name, empty when unnamed
+		QString name;
 	};
 
 	static VirtualDesktops* instance();
@@ -59,22 +52,17 @@ public:
 	[[nodiscard]] qsizetype indexOf(const GUID& id) const;
 	[[nodiscard]] bool accessorLoaded() const { return this->accessor.loaded; }
 
-	// Desktop of a window: GUID_NULL when unknown or when the window is shown on every desktop.
 	[[nodiscard]] GUID windowDesktopId(HWND hwnd) const;
 	[[nodiscard]] qsizetype windowDesktopIndex(HWND hwnd) const;
 	[[nodiscard]] bool isWindowOnCurrent(HWND hwnd) const;
 
 	bool switchTo(qsizetype index);
-	// Creates desktops until there are at least `count`.
 	bool ensureCount(qsizetype count);
-	// Removes a desktop, moving its windows to `fallback`. Needs the accessor dll.
 	bool removeDesktop(qsizetype index, qsizetype fallback);
 	bool moveWindow(HWND hwnd, qsizetype index);
 	bool pinWindow(HWND hwnd, bool pinned);
 	[[nodiscard]] bool isWindowPinned(HWND hwnd) const;
 
-	// Re-reads the registry now. Cheap, so it is also called on events that usually follow a
-	// desktop switch (foreground changes, cloaking) in case the registry notification is late.
 	void refresh();
 
 	static QString guidToString(const GUID& guid);

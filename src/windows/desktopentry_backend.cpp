@@ -27,9 +27,6 @@ namespace qs::windows {
 namespace {
 Q_LOGGING_CATEGORY(logAppsFolder, "quickshell.windows.appsfolder", QtWarningMsg);
 
-// RAII COM apartment for the lifetime of a worker-thread scan or launch. Never construct this
-// on the Qt GUI thread: Qt already initializes it as STA there, and per docs/AGENTS.md,
-// apartment (re-)init must happen on its own worker thread.
 struct ComApartment {
 	explicit ComApartment(DWORD coinit): hr(CoInitializeEx(nullptr, coinit)) {}
 
@@ -83,9 +80,6 @@ void WindowsDesktopEntryBackend::install() {
 QStringList WindowsDesktopEntryBackend::watchPaths() {
 	auto paths = QStringList();
 
-	// Start-menu shortcuts live here (machine-wide and per-user); the Apps folder itself picks
-	// up both these and packaged apps, but it has no directory to watch, so a change to either
-	// of these is used as the trigger to rescan it.
 	auto programData = qEnvironmentVariable("ProgramData");
 	if (!programData.isEmpty()) {
 		paths << programData + QStringLiteral("/Microsoft/Windows/Start Menu/Programs");
@@ -156,7 +150,6 @@ QList<ParsedDesktopEntryData> WindowsDesktopEntryBackend::scan() {
 		auto fsHr = current->GetDisplayName(SIGDN_FILESYSPATH, &rawFsPath);
 		auto fsPath = SUCCEEDED(fsHr) ? takeComString(rawFsPath) : QString();
 
-		// Packaged (UWP) apps have no filesystem path through the Apps folder; Win32 ones do.
 		auto packaged = fsPath.isEmpty();
 
 		QString id;
@@ -203,9 +196,6 @@ QList<ParsedDesktopEntryData> WindowsDesktopEntryBackend::scan() {
 namespace {
 
 void launchToken(const QString& token, const QString& workingDirectory) {
-	// Shell activation (both of the paths below) wants an STA, which Qt already sets up for
-	// its own GUI thread; this always runs on a throwaway worker thread instead so a slow
-	// cold start doesn't stall the GUI.
 	auto com = ComApartment(COINIT_APARTMENTTHREADED);
 
 	ComPtr<IApplicationActivationManager> activationManager;
@@ -229,8 +219,6 @@ void launchToken(const QString& token, const QString& workingDirectory) {
 		                       << Qt::hex << hr;
 	}
 
-	// Works for both Win32 and packaged apps alike (the task description's own suggestion):
-	// the shell resolves the same "AppsFolder\<token>" path ActivateApplication would.
 	auto shellPath = APPS_FOLDER_PREFIX + token;
 	auto wpath = shellPath.toStdWString();
 	auto wdir = workingDirectory.toStdWString();

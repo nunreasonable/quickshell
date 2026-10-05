@@ -43,18 +43,14 @@ constexpr UINT WM_QS_HOOK_BASE = WM_APP + 16;
 constexpr auto USER_FILE = "illogical-impulse/keybinds.json";
 constexpr auto DEFAULT_FILE = "defaults/windows/keybinds.json";
 
-// The poll that turns RegisterHotKey presses into releases (WM_HOTKEY has no release).
 constexpr int RELEASE_POLL_MS = 15;
 
-// The keyboard layout of the window being typed in: the language Windows switches per window.
 HKL activeKeyboardLayout() {
 	auto* foreground = GetForegroundWindow();
 	auto thread = foreground == nullptr ? 0 : GetWindowThreadProcessId(foreground, nullptr);
 	return GetKeyboardLayout(thread);
 }
 
-// Punctuation binds name the character, like Hyprland's keysyms, so they follow the layout:
-// on ABNT2 "/" is its own key (VK_ABNT_C1), not the US layout's VK_OEM_2.
 QChar punctuationChar(const QString& name) {
 	static const QHash<QString, QChar> chars = {
 	    {"slash", '/'},       {"period", '.'},         {"comma", ','},
@@ -66,9 +62,6 @@ QChar punctuationChar(const QString& name) {
 	return chars.value(name.toLower());
 }
 
-// The key that types `ch` in `layout`, preferring one that needs no modifier at all: VkKeyScanEx
-// alone returns the first match by key code, which on ABNT2 is AltGr+Q rather than the
-// dedicated "/" key. Numpad keys are skipped; their characters don't depend on the layout.
 uint8_t layoutVkForChar(QChar ch, HKL layout, bool& needsShift) {
 	needsShift = false;
 
@@ -80,7 +73,6 @@ uint8_t layoutVkForChar(QChar ch, HKL layout, bool& needsShift) {
 	}
 
 	auto scan = VkKeyScanExW(ch.unicode(), layout);
-	// Behind AltGr (Ctrl+Alt) it can't share a combo with Super.
 	if (scan == -1 || LOBYTE(scan) == 0 || (HIBYTE(scan) & 6) != 0) return 0;
 
 	needsShift = (HIBYTE(scan) & 1) != 0;
@@ -133,8 +125,6 @@ QString actionName(Bind::Action action) {
 	}
 }
 
-// Calls `name(string)` on a QML or C++ object, whatever the parameter's declared type is: the
-// Hyprland module is a QML shim (untyped `var`) today and a C++ module (QString) later.
 bool invokeWithString(QObject* object, const char* name, const QString& argument) {
 	const auto* meta = object->metaObject();
 
@@ -157,9 +147,6 @@ bool invokeWithString(QObject* object, const char* name, const QString& argument
 	return false;
 }
 
-// Tries to start one already-expanded exec command; false if the program couldn't be
-// found/started.
-// Whether `program` (a path, or a name looked up on PATH) is a console subsystem executable.
 bool isConsoleProgram(const QString& program) {
 	auto path = QFileInfo(program).isFile() ? program : QStandardPaths::findExecutable(program);
 	if (path.isEmpty()) return false;
@@ -171,7 +158,6 @@ bool isConsoleProgram(const QString& program) {
 	if (dos.length() < 0x40 || !dos.startsWith("MZ")) return false;
 	auto peOffset = qFromLittleEndian<quint32>(dos.constData() + 0x3c);
 
-	// PE signature (4), COFF header (20), then Subsystem at offset 68 of the optional header.
 	if (!file.seek(peOffset)) return false;
 	auto header = file.read(4 + 20 + 70);
 	if (header.length() < 4 + 20 + 70 || !header.startsWith(QByteArray("PE\0\0", 4))) return false;
@@ -184,8 +170,6 @@ bool tryStartDetached(const QString& command) {
 	auto parts = QProcess::splitCommand(command);
 	if (parts.isEmpty()) return false;
 
-	// Bare names next to our own executable (qs.exe, qsw.exe) run from there, everything else
-	// is looked up on PATH.
 	auto program = parts.takeFirst();
 	if (!program.contains('/') && !program.contains('\\')) {
 		auto local = QDir(QCoreApplication::applicationDirPath()).filePath(program);
@@ -197,11 +181,6 @@ bool tryStartDetached(const QString& command) {
 	process.setArguments(parts);
 	process.setWorkingDirectory(QDir::homePath());
 
-	// Console programs (powershell.exe, the fallback when Windows Terminal is missing) get a
-	// console window of their own, like when started from Explorer. Qt would start them without
-	// one, since the shell has no console: invisible. They also mustn't get the shell's own
-	// standard handles, which are no console at all: PowerShell reads end of input there and
-	// quits. `conhost.exe --headless <command>` runs a console program hidden on purpose.
 	if (isConsoleProgram(program)) {
 		process.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
 			args->flags &= ~static_cast<DWORD>(CREATE_NO_WINDOW);
@@ -232,14 +211,12 @@ uint8_t keyNameToVk(const QString& name) {
 		if (c >= '0' && c <= '9') return static_cast<uint8_t>(c);
 	}
 
-	// F1..F24
 	if (key.length() >= 2 && key.at(0) == 'f') {
 		auto ok = false;
 		auto n = key.mid(1).toInt(&ok);
 		if (ok && n >= 1 && n <= 24) return static_cast<uint8_t>(VK_F1 + n - 1);
 	}
 
-	// numpad digits: kp_0, numpad0
 	for (const auto* prefix: {"kp_", "numpad"}) {
 		if (key.startsWith(prefix)) {
 			auto ok = false;
@@ -248,7 +225,6 @@ uint8_t keyNameToVk(const QString& name) {
 		}
 	}
 
-	// raw virtual key codes: 0xNN or vk:0xNN
 	if (key.startsWith("vk:")) key = key.mid(3);
 	if (key.startsWith("0x")) {
 		auto ok = false;
@@ -256,7 +232,6 @@ uint8_t keyNameToVk(const QString& name) {
 		if (ok && vk > 0 && vk < 0xFF) return static_cast<uint8_t>(vk);
 	}
 
-	// Punctuation uses the US layout's virtual keys, like Hyprland's keysym names on a US layout.
 	static const QHash<QString, uint8_t> keys = {
 	    {"return", VK_RETURN},
 	    {"enter", VK_RETURN},
@@ -354,7 +329,6 @@ bool parseKeys(const QString& text, KeyCombo& combo, QString& error) {
 		if (auto ch = punctuationChar(token); !ch.isNull()) {
 			auto needsShift = false;
 
-			// Not typeable without AltGr: keep the US key.
 			if (auto layoutVk = layoutVkForChar(ch, activeKeyboardLayout(), needsShift); layoutVk != 0) {
 				vk = layoutVk;
 
@@ -398,13 +372,10 @@ bool parseKeys(const QString& text, KeyCombo& combo, QString& error) {
 	return true;
 }
 
-// HotkeyManager
-
 HotkeyManager* HotkeyManager::instance() {
 	static QPointer<HotkeyManager> manager; // NOLINT
 
 	if (manager.isNull()) {
-		// owned by the application so the hook thread is stopped before process teardown
 		manager = new HotkeyManager(QCoreApplication::instance());
 	}
 
@@ -418,7 +389,6 @@ HotkeyManager::HotkeyManager(QObject* parent): QObject(parent) {
 	wndClass.lpszClassName = MESSAGE_WINDOW_CLASS;
 	RegisterClassW(&wndClass);
 
-	// Message-only window on the gui thread: receives WM_HOTKEY and the hook's events.
 	this->messageWindow = CreateWindowExW(
 	    0,
 	    MESSAGE_WINDOW_CLASS,
@@ -443,8 +413,6 @@ HotkeyManager::HotkeyManager(QObject* parent): QObject(parent) {
 	this->reloadTimer.setInterval(200);
 	QObject::connect(&this->reloadTimer, &QTimer::timeout, this, &HotkeyManager::loadFile);
 
-	// Punctuation keys move with the layout (see punctuationChar); WM_INPUTLANGCHANGE only goes
-	// to the window being typed in, so the active layout is checked now and then.
 	this->lastLayout = activeKeyboardLayout();
 	this->layoutTimer.setInterval(2000);
 	QObject::connect(&this->layoutTimer, &QTimer::timeout, this, [this] {
@@ -508,7 +476,6 @@ void HotkeyManager::loadFile() {
 	if (path.isEmpty() || !file.open(QFile::ReadOnly)) path.clear();
 	else data = file.readAll();
 
-	// Watched directories also report unrelated files, and editors touch files without changes.
 	if (!this->parsed || path != this->mConfigPath || data != this->loadedData) {
 		if (path.isEmpty()) {
 			qCWarning(logHotkeys) << "No keybinds file found (looked for" << this->userFilePath() << "and"
@@ -529,8 +496,6 @@ void HotkeyManager::loadFile() {
 }
 
 void HotkeyManager::updateWatches() {
-	// Editors save by replacing the file, which drops it from the watcher; also watch the
-	// directory so the user file can appear, be replaced or disappear.
 	auto userPath = this->userFilePath();
 	auto userDir = QFileInfo(userPath).absolutePath();
 
@@ -538,7 +503,6 @@ void HotkeyManager::updateWatches() {
 	if (!this->mConfigPath.isEmpty()) wanted.append(this->mConfigPath);
 	if (QFileInfo::exists(userDir)) wanted.append(userDir);
 	else if (!userPath.isEmpty()) {
-		// %LOCALAPPDATA% itself until illogical-impulse\ exists
 		wanted.append(QFileInfo(userDir).absolutePath());
 	}
 
@@ -589,7 +553,6 @@ void HotkeyManager::parse(const QByteArray& data, const QString& path) {
 			bind.name = object.value("name").toString();
 			bind.appid = object.value("appid").toString("quickshell");
 
-			// Hyprland's "appid:name" form
 			if (auto colon = bind.name.indexOf(':'); colon != -1) {
 				bind.appid = bind.name.left(colon);
 				bind.name = bind.name.mid(colon + 1);
@@ -661,7 +624,6 @@ void HotkeyManager::unregisterAll() {
 
 	this->triggers.clear();
 
-	// Events still queued from the old triggers carry the old serial and get dropped.
 	this->serial++;
 	KeyboardHook::setSnapshot(nullptr);
 }
@@ -669,7 +631,6 @@ void HotkeyManager::unregisterAll() {
 void HotkeyManager::registerAll() {
 	if (this->messageWindow == nullptr) return;
 
-	// Binds sharing keys fire together, like Hyprland binds on the same keys.
 	for (auto i = 0; i < this->binds.size(); i++) {
 		auto& bind = this->binds[i];
 		if (bind.action == Bind::Action::Native) continue;
@@ -711,7 +672,6 @@ void HotkeyManager::registerAll() {
 			if (RegisterHotKey(this->messageWindow, id, modifiers, trigger.combo.vk)) {
 				trigger.mechanism = Bind::Mechanism::Hotkey;
 			} else {
-				// taken by another application (or the shell): the hook still gets it first
 				qCInfo(logHotkeys) << "RegisterHotKey failed for" << this->binds.at(trigger.binds.first()).keys
 				                   << "(error" << GetLastError() << "), using the keyboard hook";
 				useHook = true;
@@ -839,7 +799,6 @@ void HotkeyManager::onHotkey(int id) {
 	auto& trigger = this->triggers[index];
 	if (trigger.mechanism != Bind::Mechanism::Hotkey) return;
 
-	// Without MOD_NOREPEAT, auto-repeat sends more WM_HOTKEYs while the key is held.
 	if (trigger.down) {
 		this->fire(index, Phase::Repeat);
 		return;
@@ -884,7 +843,6 @@ void HotkeyManager::onHookEvent(HookEvent event, quint32 triggerId, quint32 seri
 }
 
 void HotkeyManager::fire(qsizetype trigger, Phase phase) {
-	// copied: an action may reload the binds
 	auto indexes = this->triggers.at(trigger).binds;
 	auto binds = QList<Bind>();
 	for (auto index: indexes) binds.append(this->binds.at(index));
@@ -939,7 +897,6 @@ void HotkeyManager::emitGlobal(const QString& appid, const QString& name, bool p
 
 	auto delivered = false;
 
-	// copied: handlers may create or destroy shortcuts
 	auto shortcuts = this->shortcuts;
 	for (const auto& shortcut: shortcuts) {
 		if (shortcut.isNull()) continue;
@@ -956,7 +913,6 @@ void HotkeyManager::emitGlobal(const QString& appid, const QString& name, bool p
 }
 
 void HotkeyManager::releaseAllGlobals() {
-	// A reload while a key is held would otherwise leave its shortcut pressed forever.
 	auto pressed = this->pressedGlobals;
 	for (const auto& [appid, name]: pressed) this->emitGlobal(appid, name, false);
 
@@ -970,7 +926,6 @@ void HotkeyManager::runDispatch(const Bind& bind) {
 		return;
 	}
 
-	// Resolved at call time so both the QML shim and a native module work.
 	auto* hyprland = generation->engine->singletonInstance<QObject*>("Quickshell.Hyprland", "Hyprland");
 
 	if (hyprland == nullptr) {
@@ -984,16 +939,12 @@ void HotkeyManager::runDispatch(const Bind& bind) {
 }
 
 void HotkeyManager::runExec(const Bind& bind) const {
-	// A command containing " || " is a list of alternatives, tried in order until one starts
-	// (like Linux's launch_first_available.sh), for programs not on every Windows version -
-	// e.g. "wt.exe || powershell.exe" since Windows Terminal isn't preinstalled on Windows 10.
 	auto alternatives = bind.argument.split(QStringLiteral(" || "));
 
 	for (const auto& alternative: alternatives) {
 		auto command = alternative;
 		command.replace("%SHELL%", this->shellDir, Qt::CaseInsensitive);
 
-		// remaining %VAR%s from the environment
 		auto source = command.toStdWString();
 		auto size = ExpandEnvironmentStringsW(source.c_str(), nullptr, 0);
 		if (size > 0) {
@@ -1052,12 +1003,9 @@ void HotkeyManager::runReload() {
 	auto* generation = EngineGeneration::currentGeneration();
 	if (generation == nullptr || generation->wrapper == nullptr) return;
 
-	// not from inside the event that may be handled by an object of this generation
 	auto* wrapper = generation->wrapper;
 	QTimer::singleShot(0, wrapper, [wrapper]() { wrapper->reloadGraph(true); });
 }
-
-// Hotkeys
 
 Hotkeys::Hotkeys(QObject* parent): QObject(parent) {
 	QObject::connect(HotkeyManager::instance(), &HotkeyManager::bindsChanged, this, &Hotkeys::bindsChanged);
@@ -1066,9 +1014,6 @@ Hotkeys::Hotkeys(QObject* parent): QObject(parent) {
 Hotkeys* Hotkeys::create(QQmlEngine* engine, QJSEngine* /*jsEngine*/) {
 	auto* hotkeys = new Hotkeys(nullptr);
 
-	// Binds belong to the shell itself, like a compositor's. Windows a config opens as separate
-	// instances from other entry files (`qs -p <config>/settings.qml`) share its QML and would
-	// otherwise register every bind a second time, firing each action twice while they run.
 	auto entry = QFileInfo(InstanceInfo::CURRENT.configPath).fileName();
 	if (!entry.isEmpty() && entry.compare("shell.qml", Qt::CaseInsensitive) != 0) {
 		qCInfo(logHotkeys) << "Not loading binds in" << entry << "(only a config's shell.qml does)";

@@ -13,7 +13,6 @@ namespace qs::windows::tiling {
 
 namespace {
 
-// Hyprland clamps its split ratio to 0.1..1.9 of an even 1.0, i.e. 5%..95% of the box.
 constexpr double MIN_RATIO = 0.05;
 constexpr double MAX_RATIO = 0.95;
 
@@ -44,8 +43,6 @@ void DwindleLayout::collect(const Node* node, QList<Id>& out) {
 DwindleLayout::Node* DwindleLayout::find(Id id) const {
 	if (this->root == nullptr) return nullptr;
 
-	// Trees stay small (a handful of windows per monitor), so a walk beats keeping an index
-	// in sync through every restructuring.
 	QList<Node*> stack {this->root.get()};
 	while (!stack.isEmpty()) {
 		auto* node = stack.takeLast();
@@ -83,7 +80,6 @@ void DwindleLayout::insert(Id id, Id target, const QPoint* cursor) {
 	auto* split = this->find(target);
 	if (split == nullptr) split = this->lastLeaf();
 
-	// The target leaf becomes the split; its window moves into a new leaf below it.
 	auto old = std::make_unique<Node>();
 	old->id = split->id;
 	old->box = split->box;
@@ -125,7 +121,6 @@ void DwindleLayout::remove(Id id) {
 	auto sibling = parent->first.get() == node ? std::move(parent->second) : std::move(parent->first);
 	sibling->parent = parent->parent;
 
-	// Assigning over the parent's slot destroys the parent and, with it, the removed leaf.
 	if (parent->parent == nullptr) {
 		this->root = std::move(sibling);
 	} else {
@@ -192,15 +187,11 @@ DwindleLayout::Node* DwindleLayout::dividerAncestor(Node* leaf, Edge edge) const
 	for (Node *child = leaf, *node = leaf->parent; node != nullptr;
 	     child = node, node = node->parent)
 	{
-		// A side by side split has a vertical divider (left/right edges of its children).
 		if (node->splitTop == vertical) continue;
 
-		// The divider is on the trailing edge of the first child and the leading edge of the
-		// second.
 		auto childFirst = node->first.get() == child;
 		if (childFirst != trailing) continue;
 
-		// With everything on the other side hidden this leaf's side takes the whole box.
 		if (this->hasVisible(childFirst ? node->second.get() : node->first.get())) return node;
 	}
 
@@ -269,8 +260,6 @@ void DwindleLayout::computeNode(Node* node, const QRect& box) const {
 
 	node->box = box;
 
-	// A half with nothing to show gives the other half the whole box; its own split direction
-	// and ratio stay for when it shows something again.
 	auto firstVisible = this->hasVisible(node->first.get());
 	auto secondVisible = this->hasVisible(node->second.get());
 	if (!firstVisible || !secondVisible) {
@@ -281,8 +270,6 @@ void DwindleLayout::computeNode(Node* node, const QRect& box) const {
 
 	if (!this->preserveSplit && !node->splitPinned) node->splitTop = box.height() > box.width();
 
-	// Integer split along one axis; the second child gets the remainder so the two boxes always
-	// share their edge exactly.
 	if (node->splitTop) {
 		auto firstHeight = static_cast<int>(std::lround(box.height() * node->ratio));
 		this->computeNode(node->first.get(), QRect(box.left(), box.top(), box.width(), firstHeight));

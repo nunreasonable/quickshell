@@ -16,19 +16,13 @@ namespace qs::windows {
 
 namespace {
 
-// Coverage at or above this is opaque: whatever is behind can't show through.
 constexpr qreal OPAQUE_ALPHA = 0.995;
 constexpr qreal INVISIBLE_ALPHA = 0.001;
-// Physical pixels the blur stays inside a rectangle's edge, so the rectangle's anti-aliased edge
-// (and ii's 1px borders) are drawn over the plain backdrop instead of leaving a blurred halo.
 constexpr qreal EDGE_INSET = 1.0;
-// Bounds the per frame walk. Panels have a few hundred items, and the walk stops at the first
-// blurred or opaque rectangle of each branch anyway.
 constexpr int ITEM_BUDGET = 4000;
 constexpr int MAX_DEPTH = 96;
 constexpr qsizetype MAX_SHAPES = 48;
 
-// The fill's opacity. Gradients count with their most opaque stop.
 qreal fillAlpha(const QQuickRectangle* rectangle) {
 	auto gradient = rectangle->gradient();
 
@@ -41,16 +35,12 @@ qreal fillAlpha(const QQuickRectangle* rectangle) {
 			return alpha;
 		}
 	} else if (gradient.isNumber() || gradient.isString()) {
-		// a QGradient preset, which are opaque
 		return 1;
 	}
 
 	return rectangle->color().alphaF();
 }
 
-// Per corner radii (Qt 6.7+) fall back to `radius` when unset. Blur takes the roundest corner:
-// a sharper corner then keeps a sliver of plain backdrop instead of blur leaking past a rounder
-// one.
 qreal cornerRadius(const QQuickRectangle* rectangle) {
 	return std::max(
 	    {rectangle->topLeftRadius(),
@@ -67,7 +57,6 @@ public:
 
 	BlurShapeResult run(QQuickWindow* window) {
 		if (window == nullptr || window->contentItem() == nullptr) return {};
-		// a fully click-through window is decoration (ii empties the masks of closed panels)
 		if (this->query.hasMask && this->query.mask.isEmpty()) return {};
 
 		auto windowRect = QRectF(0, 0, window->width(), window->height());
@@ -85,7 +74,6 @@ public:
 		if (!this->query.ignoreAlpha.has_value()) {
 			wholeSurface();
 		} else if (base > *this->query.ignoreAlpha) {
-			// the window's own background color is the surface
 			wholeSurface();
 		} else {
 			this->threshold = *this->query.ignoreAlpha;
@@ -118,11 +106,9 @@ private:
 		}
 
 		if (rectangle != nullptr) {
-			// What shows through here: the fill over the rectangles it is drawn on.
 			auto alpha = std::clamp(fillAlpha(rectangle) * opacity, 0.0, 1.0);
 			auto combined = 1.0 - (1.0 - coverage) * (1.0 - alpha);
 
-			// Opaque: blur behind it would be invisible, and so would blur behind its children.
 			if (combined >= OPAQUE_ALPHA) return;
 
 			if (combined > this->threshold) {
@@ -140,13 +126,11 @@ private:
 		}
 	}
 
-	// rect, radius and clip in logical window coordinates
 	void add(const QRectF& rect, qreal radius, const QRectF& clip) {
 		if (this->shapes.size() >= MAX_SHAPES) return;
 
 		auto visible = rect.intersected(clip);
 		if (visible.isEmpty()) return;
-		// Only shapes touching the input mask: ii's masks are the visible surfaces of its panels.
 		if (this->query.hasMask && !this->query.mask.intersects(visible.toAlignedRect())) return;
 
 		auto dpr = this->query.dpr;
@@ -176,7 +160,6 @@ private:
 } // namespace
 
 bool BlurShape::fuzzyEquals(const BlurShape& other) const {
-	// (`near` is a windef.h macro)
 	auto same = [](qreal a, qreal b) { return std::abs(a - b) < 0.01; };
 	auto sameRect = [&](const QRectF& a, const QRectF& b) {
 		return same(a.x(), b.x()) && same(a.y(), b.y()) && same(a.width(), b.width())

@@ -23,16 +23,11 @@ QS_LOGGING_CATEGORY(logDesktop, "quickshell.windows.desktop", QtWarningMsg);
 
 constexpr const wchar_t* LISTENER_CLASS = L"QuickshellDesktopListener";
 
-// Undocumented, used by every wallpaper engine since Windows 8: Progman creates the WorkerW
-// that draws the wallpaper behind the icons. Some Windows 10 builds only react to one of the
-// two parameter sets.
 constexpr UINT SPAWN_WORKERW = 0x052C;
 constexpr UINT SPAWN_TIMEOUT_MS = 1000;
 
-// Explorer rebuilds the desktop a moment after the display change or the new wallpaper.
 constexpr int SETTLE_MS = 500;
 
-// Windows 11 24H2 moved the WorkerW into Progman.
 constexpr DWORD BUILD_24H2 = 26100;
 
 DesktopHost* gHost = nullptr; // NOLINT
@@ -55,8 +50,6 @@ struct Lookup {
 	const char* layout = "";
 };
 
-// The top level window holding the icons view on Windows 10 and 11 before 24H2: Progman
-// itself, or a WorkerW (after the wallpaper WorkerW was spawned, or with a slideshow).
 HWND findTopLevelIconsHost(HWND progman) {
 	struct Search {
 		DWORD pid = 0;
@@ -77,8 +70,6 @@ HWND findTopLevelIconsHost(HWND progman) {
 	return search.iconsHost;
 }
 
-// SHELLDLL_DefView, wherever explorer keeps it: inside Progman (24H2 and later, or before the
-// wallpaper WorkerW exists) or inside a top level WorkerW.
 HWND findIconsView(HWND progman) {
 	auto* icons = FindWindowExW(progman, nullptr, L"SHELLDLL_DefView", nullptr);
 
@@ -87,25 +78,19 @@ HWND findIconsView(HWND progman) {
 		if (host != nullptr) icons = FindWindowExW(host, nullptr, L"SHELLDLL_DefView", nullptr);
 	}
 
-	// A hidden parent would hide the panels with it.
 	return icons != nullptr && IsWindowVisible(icons) ? icons : nullptr;
 }
 
-// Windows 11 24H2 and later: Progman > { SHELLDLL_DefView, WorkerW }.
 Lookup findChildWorkerW(HWND progman) {
 	auto* workerw = FindWindowExW(progman, nullptr, L"WorkerW", nullptr);
-	// A hidden parent would hide the panels with it.
 	if (workerw == nullptr || !IsWindowVisible(workerw)) return {};
 	return {.parent = workerw, .layout = "WorkerW inside Progman"};
 }
 
-// Windows 10 and 11 before 24H2: a top level WorkerW right behind the top level window that
-// holds the icons view (Progman itself, or another WorkerW with a slideshow).
 Lookup findTopLevelWorkerW(HWND progman) {
 	auto* iconsHost = findTopLevelIconsHost(progman);
 	if (iconsHost == nullptr) return {};
 
-	// the next WorkerW down the z order
 	auto pid = processOf(progman);
 	auto* workerw = FindWindowExW(nullptr, iconsHost, L"WorkerW", nullptr);
 	if (workerw == nullptr || processOf(workerw) != pid || !IsWindowVisible(workerw)) {
@@ -116,7 +101,6 @@ Lookup findTopLevelWorkerW(HWND progman) {
 	return {.parent = workerw, .layout = "WorkerW behind the icons"};
 }
 
-// No WorkerW: Progman draws the wallpaper itself, and its icons view is a child of it.
 Lookup findProgman(HWND progman) {
 	auto* icons = FindWindowExW(progman, nullptr, L"SHELLDLL_DefView", nullptr);
 	if (icons == nullptr) return {};
@@ -124,8 +108,6 @@ Lookup findProgman(HWND progman) {
 }
 
 Lookup findWorkerW(HWND progman) {
-	// Both layouts are looked for on every build: insider and servicing builds moved between
-	// them. The build only says which one is likelier.
 	auto childLayout = windowsBuild() >= BUILD_24H2;
 	auto found = childLayout ? findChildWorkerW(progman) : findTopLevelWorkerW(progman);
 	if (found.parent == nullptr) {
@@ -169,8 +151,6 @@ void DesktopHost::setEnabled(bool enabled) {
 HWND DesktopHost::parentWindow() {
 	if (!this->mEnabled) return nullptr;
 
-	// Explorer died since: the next refresh is likely queued already, but the caller is about
-	// to use the handle now.
 	if (!this->lookedUp || (this->mParent != nullptr && !IsWindow(this->mParent))) {
 		this->refresh();
 	}
@@ -222,7 +202,6 @@ void DesktopHost::refresh() {
 	{
 		emit this->parentChanged();
 	} else if (this->mParent != nullptr) {
-		// Same window, possibly another size (display change).
 		emit this->parentMoved();
 	}
 
@@ -254,7 +233,6 @@ void DesktopHost::lookup() {
 		if (found.parent == nullptr) found = findProgman(progman);
 	}
 
-	// After the WorkerW was spawned: that moves the icons view on Windows 10.
 	auto* iconsView = progman == nullptr ? nullptr : findIconsView(progman);
 
 	if ((first || iconsView != this->mIconsView) && iconsView == nullptr && found.parent != nullptr) {
@@ -286,9 +264,8 @@ void DesktopHost::ensureListener() {
 	cls.lpfnWndProc = &DesktopHost::listenerProc;
 	cls.hInstance = module;
 	cls.lpszClassName = LISTENER_CLASS;
-	RegisterClassW(&cls); // fails harmlessly if already registered
+	RegisterClassW(&cls);
 
-	// Hidden but top level: message-only windows get no broadcasts.
 	this->listener = CreateWindowExW(
 	    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
 	    LISTENER_CLASS,
@@ -310,7 +287,6 @@ void DesktopHost::ensureListener() {
 		return;
 	}
 
-	// An elevated shell still hears a restarted (unelevated) explorer.
 	ChangeWindowMessageFilterEx(
 	    this->listener,
 	    WinAppBar::taskbarCreatedMessage(),
@@ -322,7 +298,6 @@ void DesktopHost::ensureListener() {
 LRESULT CALLBACK DesktopHost::listenerProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	if (gHost != nullptr) {
 		if (msg == WinAppBar::taskbarCreatedMessage()) {
-			// Explorer restarted: its desktop windows are new ones.
 			gHost->scheduleRefresh();
 		} else if (msg == WM_DISPLAYCHANGE) {
 			gHost->scheduleRefresh(SETTLE_MS);
@@ -335,7 +310,6 @@ LRESULT CALLBACK DesktopHost::listenerProc(HWND hwnd, UINT msg, WPARAM wparam, L
 }
 
 void DesktopHost::installHook() {
-	// Without a parent, explorer's desktop thread is still watched for a WorkerW to show up.
 	auto* target = this->mParent != nullptr ? this->mParent : FindWindowW(L"Progman", nullptr);
 	DWORD pid = 0;
 	auto thread = target == nullptr ? 0 : GetWindowThreadProcessId(target, &pid);
@@ -344,9 +318,6 @@ void DesktopHost::installHook() {
 	this->removeHook();
 	if (thread == 0) return;
 
-	// Out of context: the callback runs on this (the gui) thread, from its message loop.
-	// Restricted to explorer's desktop thread, which also owns the parent's siblings and the
-	// icons view. Creation and reordering are for the windows next to the icons view.
 	this->hook = SetWinEventHook(
 	    EVENT_OBJECT_CREATE,
 	    EVENT_OBJECT_REORDER,
@@ -357,7 +328,6 @@ void DesktopHost::installHook() {
 	    WINEVENT_OUTOFCONTEXT
 	);
 
-	// Up to the icons view moving to another window.
 	this->moveHook = SetWinEventHook(
 	    EVENT_OBJECT_LOCATIONCHANGE,
 	    EVENT_OBJECT_PARENTCHANGE,
@@ -398,7 +368,6 @@ void CALLBACK DesktopHost::eventProc(
 	}
 
 	auto scheduleMoved = [host] {
-		// Comes in bursts while explorer resizes the desktop.
 		if (host->movePending) return;
 		host->movePending = true;
 
@@ -411,26 +380,22 @@ void CALLBACK DesktopHost::eventProc(
 	if (hwnd == host->mParent) {
 		switch (event) {
 		case EVENT_OBJECT_LOCATIONCHANGE: scheduleMoved(); break;
-		// Gone or hidden: the panels inside are too. Look again once explorer is done.
 		case EVENT_OBJECT_DESTROY:
 		case EVENT_OBJECT_HIDE: host->scheduleRefresh(SETTLE_MS); break;
 		default: break;
 		}
 
-		// Progman without a WorkerW holds both.
 		if (hwnd != host->mIconsHost) return;
 	}
 
 	if (event == EVENT_OBJECT_SHOW && (host->mParent == nullptr || host->mInsertAfter != nullptr)
 	    && hasClass(hwnd, L"WorkerW"))
 	{
-		// Nowhere or in Progman for lack of a WorkerW, and explorer just showed one.
 		host->scheduleRefresh(SETTLE_MS);
 		return;
 	}
 
 	if (host->mIconsView == nullptr) {
-		// Desktop panels found a place but the icons view was missing or hidden.
 		if (event == EVENT_OBJECT_SHOW && host->mParent != nullptr
 		    && hasClass(hwnd, L"SHELLDLL_DefView"))
 		{
@@ -441,7 +406,6 @@ void CALLBACK DesktopHost::eventProc(
 	}
 
 	if (hwnd == host->mIconsView) {
-		// Gone, hidden or moved to another window: look for it again.
 		if (event == EVENT_OBJECT_DESTROY || event == EVENT_OBJECT_HIDE
 		    || event == EVENT_OBJECT_PARENTCHANGE)
 		{
@@ -453,12 +417,9 @@ void CALLBACK DesktopHost::eventProc(
 
 	if (hwnd == host->mIconsHost) {
 		switch (event) {
-		// The panels above the icons went or are hidden with it.
 		case EVENT_OBJECT_DESTROY:
 		case EVENT_OBJECT_HIDE: host->scheduleRefresh(SETTLE_MS); return;
-		// The panels inside are placed relative to it.
 		case EVENT_OBJECT_LOCATIONCHANGE: scheduleMoved(); return;
-		// Reordering is reported on the container.
 		case EVENT_OBJECT_REORDER: break;
 		default: return;
 		}
@@ -468,13 +429,11 @@ void CALLBACK DesktopHost::eventProc(
 		return;
 	}
 
-	// The icons view may have been moved out, in case that wasn't reported by itself.
 	if (GetAncestor(host->mIconsView, GA_PARENT) != host->mIconsHost) {
 		host->scheduleRefresh(SETTLE_MS);
 		return;
 	}
 
-	// Panels only restack when something else is above them, so their own moves end here.
 	if (!host->restackPending) {
 		host->restackPending = true;
 
@@ -484,8 +443,6 @@ void CALLBACK DesktopHost::eventProc(
 		});
 	}
 }
-
-// DesktopLayer
 
 DesktopLayer::DesktopLayer(QObject* parent): QObject(parent) {
 	auto* host = DesktopHost::instance();

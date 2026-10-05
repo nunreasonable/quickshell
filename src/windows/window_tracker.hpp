@@ -21,18 +21,13 @@ namespace qs::windows {
 class WindowTracker;
 class VirtualDesktops;
 
-///! A window another application would list in Alt+Tab.
-/// Owned by the WindowTracker. `closed` is emitted right before the object is destroyed.
-/// Coordinates are logical (Qt screen coordinates); the virtual desktop is an index into
-/// @@VirtualDesktops, -1 while unknown or when the window is shown on every desktop.
 class TrackedWindow: public QObject {
 	Q_OBJECT;
 
 public:
 	[[nodiscard]] HWND hwnd() const { return this->mHwnd; }
 	[[nodiscard]] quint64 address() const;
-	[[nodiscard]] QString addressHex() const; // lowercase, no 0x prefix
-	// Owner window if it is tracked too (dialogs with WS_EX_APPWINDOW), otherwise null.
+	[[nodiscard]] QString addressHex() const;
 	[[nodiscard]] TrackedWindow* owner() const;
 
 	// clang-format off
@@ -62,16 +57,13 @@ public:
 	[[nodiscard]] qint32 desktop() const { return this->bDesktop.value(); }
 	[[nodiscard]] bool isUwpFrame() const { return this->uwpFrame; }
 
-	// Restores a minimized window, switches to its desktop and brings it to the foreground.
 	void activate();
 	void close();
 	void setMinimized(bool minimized);
 	void setMaximized(bool maximized);
-	// Best effort: strips the frame and covers the screen; only undoes what it did itself.
 	void setFullscreen(bool fullscreen);
 	void fullscreenOn(QScreen* screen);
 	bool moveToDesktop(qsizetype index);
-	// Moves the window so its frame's top left corner is at a logical position.
 	void moveTo(const QPoint& logical);
 
 signals:
@@ -102,7 +94,6 @@ private:
 	HWND mHwnd;
 	bool uwpFrame = false;
 
-	// Saved by setFullscreen(true) so setFullscreen(false) can put things back.
 	struct {
 		bool active = false;
 		LONG_PTR style = 0;
@@ -124,18 +115,12 @@ private:
 	// clang-format on
 };
 
-///! Process wide tracker of other applications' windows.
-/// Fed by SetWinEventHook on the GUI thread; events are coalesced and applied in one flush per
-/// event loop iteration, after which `flushed` fires. Eligibility follows the Alt+Tab rules
-/// (visible, top level, owner chain, no tool windows) plus: windows cloaked because they live
-/// on another virtual desktop stay tracked, UWP frames resolve to the hosted app.
 class WindowTracker: public QObject {
 	Q_OBJECT;
 
 public:
 	static WindowTracker* instance();
 
-	// Gui thread, from the event thread's wakeup: handles the window events queued since the last.
 	void drainEvents();
 
 	[[nodiscard]] const QList<TrackedWindow*>& windows() const { return this->mWindows; }
@@ -144,20 +129,15 @@ public:
 	[[nodiscard]] VirtualDesktops* desktops() const { return this->mDesktops; }
 
 	[[nodiscard]] QScreen* screenFor(HMONITOR monitor) const;
-	// Index of a screen in QGuiApplication::screens(), -1 if gone.
 	[[nodiscard]] static qsizetype screenIndex(QScreen* screen);
 
-	// Enumerates every window again. Done once at startup; events keep the list current.
 	void rescan();
 
 signals:
 	void windowAdded(TrackedWindow* window);
-	// Emitted after the window left the list and before it is deleted.
 	void windowRemoved(TrackedWindow* window);
 	void activeWindowChanged();
 	void flushed();
-	// The user started / finished dragging the window's caption or a border (the modal move/size
-	// loop). Emitted as the events arrive, before the window's state is refreshed.
 	void moveSizeStarted(TrackedWindow* window);
 	void moveSizeEnded(TrackedWindow* window);
 
