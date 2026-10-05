@@ -127,15 +127,6 @@ public:
 
 private:
 	static LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-	static void CALLBACK onWinEvent(
-	    HWINEVENTHOOK hook,
-	    DWORD event,
-	    HWND hwnd,
-	    LONG idObject,
-	    LONG idChild,
-	    DWORD thread,
-	    DWORD time
-	);
 	LRESULT handle(UINT msg, WPARAM wParam, LPARAM lParam);
 
 	LRESULT onCopyData(WPARAM wParam, LPARAM lParam);
@@ -147,8 +138,6 @@ private:
 	void stepBack(HWND first);
 	void syncGeometry();
 	void mirrorProps();
-	void watchExplorer(HWND target);
-	void unwatchExplorer();
 
 	TrayIconSink sink;
 	std::function<void()> missed;
@@ -163,9 +152,6 @@ private:
 	std::vector<std::wstring> mirrored;
 	bool probing = false;
 	bool probeSeen = false;
-	DWORD watchedPid = 0;
-	HWINEVENTHOOK foregroundHook = nullptr;
-	HWINEVENTHOOK showHook = nullptr;
 };
 
 std::mutex gMutex;                  // NOLINT
@@ -185,13 +171,26 @@ void stayInFront(ULONGLONG ms) {
 
 bool wantFront() { return !gBrief.load() || GetTickCount64() < gFrontUntil.load(); }
 // Only touched on the hook thread (WinEvent callbacks have no user data).
-HookWindow* gWindow = nullptr; // NOLINT
 
 std::mutex gAnnounceMutex;          // NOLINT
 std::vector<HWND> gAnnounceQueue;   // NOLINT
 
 // Posted to the hook window by announceTo(). Registered, so it can't be taken for one of
 // explorer's private messages (those are forwarded).
+DWORD explorerProcessId() {
+	auto* taskbar = explorerTaskbarWindow();
+	DWORD pid = 0;
+	if (taskbar != nullptr) GetWindowThreadProcessId(taskbar, &pid);
+	return pid;
+}
+
+bool ownedBy(HWND window, DWORD pid) {
+	if (pid == 0) return false;
+	DWORD owner = 0;
+	GetWindowThreadProcessId(window, &owner);
+	return owner == pid;
+}
+
 UINT announceMessage() {
 	static const UINT message = RegisterWindowMessageW(L"QuickshellTrayHookAnnounce"); // NOLINT
 	return message;
@@ -327,14 +326,20 @@ void HookWindow::announce() {
 	stayInFront(BRIEF_FRONT_MS);
 	this->keepFirst(false);
 
+	struct Broadcast {
+		UINT message;
+		DWORD explorer;
+	} broadcast {.message = this->taskbarCreated, .explorer = explorerProcessId()};
+
 	EnumWindows(
-	    [](HWND window, LPARAM message) -> BOOL {
-		    if (!isOwnProcessWindow(window)) {
-			    SendNotifyMessageW(window, static_cast<UINT>(message), 0, 0);
+	    [](HWND window, LPARAM param) -> BOOL {
+		    auto* broadcast = reinterpret_cast<Broadcast*>(param); // NOLINT
+		    if (!isOwnProcessWindow(window) && !ownedBy(window, broadcast->explorer)) {
+			    SendNotifyMessageW(window, broadcast->message, 0, 0);
 		    }
 		    return TRUE;
 	    },
-	    static_cast<LPARAM>(this->taskbarCreated)
+	    reinterpret_cast<LPARAM>(&broadcast)
 	);
 
 	qCDebug(logTrayHook) << "Sent TaskbarCreated";
@@ -360,9 +365,10 @@ void HookWindow::announceQueued() {
 	this->keepFirst();
 	this->readdGraceUntil = GetTickCount64() + READD_GRACE_MS;
 
+	auto explorer = explorerProcessId();
 	auto sent = 0;
 	for (auto* owner: owners) {
-		if (IsWindow(owner) == 0 || isOwnProcessWindow(owner)) continue;
+		if (IsWindow(owner) == 0 || isOwnProcessWindow(owner) || ownedBy(owner, explorer)) continue;
 		SendNotifyMessageW(owner, this->taskbarCreated, 0, 0);
 		sent++;
 	}
@@ -381,23 +387,6 @@ LRESULT CALLBACK HookWindow::wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 	if (self == nullptr || self->hwnd != hwnd) return DefWindowProcW(hwnd, msg, wParam, lParam);
 
 	return self->handle(msg, wParam, lParam);
-}
-
-void CALLBACK HookWindow::onWinEvent(
-    HWINEVENTHOOK /*hook*/,
-    DWORD /*event*/,
-    HWND hwnd,
-    LONG idObject,
-    LONG idChild,
-    DWORD /*thread*/,
-    DWORD /*time*/
-) {
-	if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF || hwnd == nullptr) return;
-
-	auto* self = gWindow;
-	if (self == nullptr || hwnd != self->explorer) return;
-
-	self->keepFirst();
 }
 
 LRESULT HookWindow::handle(UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -437,7 +426,6 @@ LRESULT HookWindow::handle(UINT msg, WPARAM wParam, LPARAM lParam) {
 	case WM_DESTROY:
 		KillTimer(this->hwnd, RAISE_TIMER);
 		KillTimer(this->hwnd, ANNOUNCE_TIMER);
-		this->unwatchExplorer();
 		RemovePropW(this->hwnd, TRAY_HOOK_PROP);
 		PostQuitMessage(0);
 		return 0;
@@ -630,44 +618,6 @@ void HookWindow::stepBack(HWND first) {
 // Explorer raises its taskbar when it's activated or shown (the taskbar was clicked, auto-hide
 // or ii brought it up). Hearing about it right away keeps the time apps' updates go past us
 // short; the raise timer stays as the safety net. Only explorer's own events are asked for.
-void HookWindow::watchExplorer(HWND target) {
-	DWORD pid = 0;
-	if (target != nullptr) GetWindowThreadProcessId(target, &pid);
-	if (pid == this->watchedPid) return;
-
-	this->unwatchExplorer();
-	this->watchedPid = pid;
-	if (pid == 0) return;
-
-	this->foregroundHook = SetWinEventHook(
-	    EVENT_SYSTEM_FOREGROUND,
-	    EVENT_SYSTEM_FOREGROUND,
-	    nullptr,
-	    &HookWindow::onWinEvent,
-	    pid,
-	    0,
-	    WINEVENT_OUTOFCONTEXT
-	);
-
-	this->showHook = SetWinEventHook(
-	    EVENT_OBJECT_SHOW,
-	    EVENT_OBJECT_SHOW,
-	    nullptr,
-	    &HookWindow::onWinEvent,
-	    pid,
-	    0,
-	    WINEVENT_OUTOFCONTEXT
-	);
-}
-
-void HookWindow::unwatchExplorer() {
-	if (this->foregroundHook != nullptr) UnhookWinEvent(this->foregroundHook);
-	if (this->showHook != nullptr) UnhookWinEvent(this->showHook);
-	this->foregroundHook = nullptr;
-	this->showHook = nullptr;
-	this->watchedPid = 0;
-}
-
 // Windows' own code also finds the taskbar with FindWindow(L"Shell_TrayWnd") and then reads
 // the window properties explorer puts on it: ITaskbarList (taskbar progress and overlays, which
 // WPF apps use) follows "TaskbandHWND" to the taskbar buttons and failed with E_NOTIMPL on ours,
@@ -716,7 +666,6 @@ void HookWindow::mirrorProps() {
 // Apps also use FindWindow(L"Shell_TrayWnd") to find out where the taskbar is.
 void HookWindow::syncGeometry() {
 	auto* target = this->explorerWindow();
-	this->watchExplorer(target);
 	if (target == nullptr) return;
 
 	if (GetTickCount64() - this->propsSyncedAt >= 1000) this->mirrorProps();
@@ -771,14 +720,12 @@ void runHook(TrayIconSink sink, std::function<void()> missed) {
 	HookWindow window(std::move(sink), std::move(missed));
 	if (!window.create()) return;
 
-	gWindow = &window;
 	gHwnd.store(window.hwnd);
 
 	// stop() came while the window was being created and had nothing to post to.
 	if (gStopping.load()) {
 		DestroyWindow(window.hwnd);
 		gHwnd.store(nullptr);
-		gWindow = nullptr;
 		return;
 	}
 
@@ -795,7 +742,6 @@ void runHook(TrayIconSink sink, std::function<void()> missed) {
 	}
 
 	gHwnd.store(nullptr);
-	gWindow = nullptr;
 }
 
 } // namespace
