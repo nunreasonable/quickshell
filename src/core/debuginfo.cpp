@@ -217,6 +217,9 @@ QString envInfo() {
 		for (const auto& prefix: ENV_PREFIXES) {
 			if (strncmp(prefix.data(), *envp, prefix.length()) == 0) goto print;
 		}
+
+		// Exact variable, not a prefix; only meaningful on Linux desktops.
+		if (std::string_view(*envp).starts_with("XDG_CURRENT_DESKTOP=")) goto print;
 		continue;
 
 	print:

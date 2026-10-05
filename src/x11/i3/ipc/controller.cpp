@@ -31,6 +31,14 @@ QS_LOGGING_CATEGORY(logI3Ipc, "quickshell.I3.ipc", QtWarningMsg);
 QS_LOGGING_CATEGORY(logI3IpcEvents, "quickshell.I3.ipc.events", QtWarningMsg);
 } // namespace
 
+QBindable<I3Monitor*> I3IpcController::bindableFocusedMonitor() const {
+	return &this->bFocusedMonitor;
+}
+
+QBindable<I3Workspace*> I3IpcController::bindableFocusedWorkspace() const {
+	return &this->bFocusedWorkspace;
+}
+
 I3IpcController::I3IpcController(): I3Ipc({"workspace", "output"}) {
 	// bind focused workspace to focused monitor's active workspace
 	this->bFocusedWorkspace.setBinding([this]() -> I3Workspace* {
@@ -224,13 +232,13 @@ void I3IpcController::handleRunCommand(I3IpcEvent* event) {
 
 		if (!success) {
 			const QString error = obj["error"].toString();
-			qCWarning(logI3Ipc) << "Error occured while running command:" << error;
+			qCWarning(logI3Ipc) << "Error occurred while running command:" << error;
 		}
 	}
 }
 
 void I3IpcController::handleWorkspaceEvent(I3IpcEvent* event) {
-	// If a workspace doesn't exist, and is being switch to, no focus change event is emited,
+	// If a workspace doesn't exist, and is being switch to, no focus change event is emitted,
 	// only the init one, which does not contain the previously focused workspace
 	auto change = event->mData["change"];
 
@@ -276,7 +284,7 @@ void I3IpcController::handleWorkspaceEvent(I3IpcEvent* event) {
 
 		if (newWorkspace->bindableMonitor().value()) {
 			auto* monitor = newWorkspace->bindableMonitor().value();
-			monitor->setFocusedWorkspace(newWorkspace);
+			monitor->setActiveWorkspace(newWorkspace);
 			this->bFocusedMonitor = monitor;
 		}
 	} else if (change == "empty") {
@@ -286,13 +294,7 @@ void I3IpcController::handleWorkspaceEvent(I3IpcEvent* event) {
 
 		if (oldWorkspace != nullptr) {
 			qCInfo(logI3Ipc) << "Deleting" << oldWorkspace->bindableId().value() << name;
-
-			if (this->bFocusedWorkspace == oldWorkspace) {
-				this->bFocusedMonitor->setFocusedWorkspace(nullptr);
-			}
-
 			this->workspaces()->removeObject(oldWorkspace);
-
 			delete oldWorkspace;
 		} else {
 			qCInfo(logI3Ipc) << "Workspace" << name << "has already been deleted";

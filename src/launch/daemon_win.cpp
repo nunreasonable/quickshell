@@ -8,8 +8,6 @@
 #include <cstdio>
 #include <vector>
 
-#include <qcoreapplication.h>
-#include <qdir.h>
 #include <qlogging.h>
 #include <qstring.h>
 #include <qtenvironmentvariables.h>
@@ -86,7 +84,30 @@ bool spawnDaemon(int argc, char** argv, int* exitCode) {
 	// Only the write end is inherited by the daemon.
 	SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
 
-	auto exe = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+	// No QCoreApplication exists yet at this point (runCommand creates it after daemonizing),
+	// so applicationFilePath() can't be used. Long paths need more than MAX_PATH.
+	auto exeBuf = std::vector<wchar_t>(MAX_PATH);
+	for (;;) {
+		auto len = GetModuleFileNameW(nullptr, exeBuf.data(), static_cast<DWORD>(exeBuf.size()));
+		if (len == 0) {
+			auto error = GetLastError();
+			qCritical().nospace() << "Failed to get executable path for daemon with error code "
+			                      << error << ": " << qt_error_string(static_cast<int>(error));
+			CloseHandle(readEnd);
+			CloseHandle(writeEnd);
+			*exitCode = -1;
+			return true;
+		}
+
+		if (len < exeBuf.size()) {
+			exeBuf.resize(len);
+			break;
+		}
+
+		exeBuf.resize(exeBuf.size() * 2);
+	}
+
+	auto exe = QString::fromWCharArray(exeBuf.data(), static_cast<qsizetype>(exeBuf.size()));
 	auto commandLine = quoteArgument(exe);
 
 	for (auto i = 1; i < argc; ++i) {

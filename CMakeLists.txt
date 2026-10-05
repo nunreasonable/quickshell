@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(quickshell VERSION "0.2.1" LANGUAGES CXX C)
+project(quickshell VERSION "0.3.1" LANGUAGES CXX C)
 
 set(UNRELEASED_FEATURES)
 
@@ -129,8 +129,9 @@ else()
 	add_compile_options(-Wall -Wextra -Wno-vla-cxx-extension)
 endif()
 
-# pipewire defines this, breaking PCH
+# pipewire defines these, breaking PCH
 add_compile_definitions(_REENTRANT)
+add_compile_options(-fno-strict-overflow)
 
 if (FRAME_POINTERS)
 	add_compile_options(-fno-omit-frame-pointer)

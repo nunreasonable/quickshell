@@ -1,4 +1,7 @@
 #pragma once
+#include <tuple>
+
+#include <qcontainerfwd.h>
 #include <qdatetime.h>
 #include <qdir.h>
 #include <qpair.h>
@@ -32,7 +35,7 @@ public:
 	static QString resolveRunLink(const QString& path);
 	static bool
 	checkLock(const QString& path, InstanceLockInfo* info = nullptr, bool allowDead = false);
-	static QPair<QVector<InstanceLockInfo>, QVector<InstanceLockInfo>>
+	static std::tuple<QVector<InstanceLockInfo>, QVector<InstanceLockInfo>, QVector<InstanceLockInfo>>
 	collectInstances(const QString& path, const QString& display);
 
 	QDir* baseRunDir();

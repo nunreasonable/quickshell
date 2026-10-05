@@ -18,13 +18,16 @@
 #include <qscreen.h>
 #include <qtenvironmentvariables.h>
 #include <qtmetamacros.h>
+#include <qtversion.h>
 #include <qtypes.h>
 #include <qvariant.h>
+#include <qversionnumber.h>
 #include <qwindowdefs.h>
 
 #include "../io/processcore.hpp"
 #include "generation.hpp"
 #include "iconimageprovider.hpp"
+#include "instanceinfo.hpp"
 #include "paths.hpp"
 #include "qmlscreen.hpp"
 #include "rootwrapper.hpp"
@@ -84,6 +87,8 @@ QuickshellTracked::QuickshellTracked() {
 	}
 }
 
+// FIXME: Some callers can potentially pass a freed QScreen here which is why we don't init a new one.
+// The QuickshellTracked::init() in launch.cpp makes sure our screenAdded handler runs first for now.
 QuickshellScreenInfo* QuickshellTracked::screenInfo(QScreen* screen) const {
 	for (auto* info: this->screens) {
 		if (info->screen == screen) return info;
@@ -92,13 +97,19 @@ QuickshellScreenInfo* QuickshellTracked::screenInfo(QScreen* screen) const {
 	return nullptr;
 }
 
+namespace {
+static QuickshellTracked* qsTrackedInstance = nullptr; // NOLINT
+}
+
+void QuickshellTracked::init() {
+	if (qsTrackedInstance) qFatal() << "Tried to reinitialize QuickshellTracked";
+	qsTrackedInstance = new QuickshellTracked();
+	QJSEngine::setObjectOwnership(qsTrackedInstance, QJSEngine::CppOwnership);
+}
+
 QuickshellTracked* QuickshellTracked::instance() {
-	static QuickshellTracked* instance = nullptr; // NOLINT
-	if (instance == nullptr) {
-		QJSEngine::setObjectOwnership(instance, QJSEngine::CppOwnership);
-		instance = new QuickshellTracked();
-	}
-	return instance;
+	if (!qsTrackedInstance) qFatal() << "Tried to get QuickshellTracked instance before init";
+	return qsTrackedInstance;
 }
 
 void QuickshellTracked::updateScreens() {
@@ -150,6 +161,22 @@ QuickshellGlobal::QuickshellGlobal(QObject* parent): QObject(parent) {
 
 qint32 QuickshellGlobal::processId() const { // NOLINT
 	return static_cast<qint32>(QCoreApplication::applicationPid());
+}
+
+QString QuickshellGlobal::instanceId() const { // NOLINT
+	return InstanceInfo::CURRENT.instanceId;
+}
+
+QString QuickshellGlobal::shellId() const { // NOLINT
+	return InstanceInfo::CURRENT.shellId;
+}
+
+QString QuickshellGlobal::appId() const { // NOLINT
+	return InstanceInfo::CURRENT.appId;
+}
+
+QDateTime QuickshellGlobal::launchTime() const { // NOLINT
+	return InstanceInfo::CURRENT.launchTime;
 }
 
 qsizetype QuickshellGlobal::screensCount(QQmlListProperty<QuickshellScreenInfo>* /*unused*/) {
@@ -323,6 +350,12 @@ bool QuickshellGlobal::hasVersion(qint32 major, qint32 minor, const QStringList&
 
 bool QuickshellGlobal::hasVersion(qint32 major, qint32 minor) {
 	return QuickshellGlobal::hasVersion(major, minor, QStringList());
+}
+
+bool QuickshellGlobal::hasQtVersion(int major, int minor) {
+	auto qtVersion = QVersionNumber::fromString(qVersion());
+	auto requiredVersion = QVersionNumber(major, minor);
+	return qtVersion >= requiredVersion;
 }
 
 QuickshellGlobal* QuickshellGlobal::create(QQmlEngine* engine, QJSEngine* /*unused*/) {

@@ -10,6 +10,7 @@
 #include <qlatin1stringview.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
+#include <qmutex.h>
 #include <qobject.h>
 #include <qtmetamacros.h>
 
@@ -54,20 +55,6 @@ size_t qHash(const LogMessage& message);
 
 class ThreadLogging;
 
-class LoggingThreadProxy: public QObject {
-	Q_OBJECT;
-
-public:
-	explicit LoggingThreadProxy() = default;
-
-public slots:
-	void initInThread();
-	void initFs();
-
-private:
-	ThreadLogging* logging = nullptr;
-};
-
 namespace qt_logging_registry {
 class QLoggingRule;
 }
@@ -103,6 +90,7 @@ public:
 	    const QString& prefix = ""
 	);
 
+	static void initThreadLogging();
 	static void initFs();
 	static LogManager* instance();
 
@@ -135,7 +123,8 @@ private:
 	QHash<QLatin1StringView, CategoryFilter> allFilters;
 
 	QTextStream stdoutStream;
-	LoggingThreadProxy threadProxy;
+	QMutex stdoutMutex;
+	ThreadLogging* threadLogging = nullptr;
 
 	friend void initLogCategoryLevel(const char* name, QtMsgType defaultLevel);
 };

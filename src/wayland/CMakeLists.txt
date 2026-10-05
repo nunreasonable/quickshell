@@ -105,7 +105,7 @@ if (WAYLAND_SESSION_LOCK)
 endif()
 
 if (WAYLAND_TOPLEVEL_MANAGEMENT)
-	add_subdirectory(toplevel_management)
+	add_subdirectory(toplevel)
 	list(APPEND WAYLAND_MODULES Quickshell.Wayland._ToplevelManagement)
 endif()
 
@@ -119,6 +119,9 @@ endif()
 if (HYPRLAND)
 	add_subdirectory(hyprland)
 endif()
+
+add_subdirectory(background_effect)
+list(APPEND WAYLAND_MODULES Quickshell.Wayland._BackgroundEffect)
 
 add_subdirectory(idle_inhibit)
 list(APPEND WAYLAND_MODULES Quickshell.Wayland._IdleInhibitor)

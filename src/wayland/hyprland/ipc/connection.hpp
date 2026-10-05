@@ -15,7 +15,7 @@
 #include "../../../core/model.hpp"
 #include "../../../core/qmlscreen.hpp"
 #include "../../../core/streamreader.hpp"
-#include "../../../wayland/toplevel_management/handle.hpp"
+#include "../../../wayland/toplevel/wlr_toplevel.hpp"
 
 namespace qs::hyprland::ipc {
 
@@ -25,9 +25,9 @@ class HyprlandToplevel;
 
 } // namespace qs::hyprland::ipc
 
-Q_DECLARE_OPAQUE_POINTER(qs::hyprland::ipc::HyprlandWorkspace*);
-Q_DECLARE_OPAQUE_POINTER(qs::hyprland::ipc::HyprlandMonitor*);
-Q_DECLARE_OPAQUE_POINTER(qs::hyprland::ipc::HyprlandToplevel*);
+Q_MOC_INCLUDE("hyprland_toplevel.hpp")
+Q_MOC_INCLUDE("monitor.hpp")
+Q_MOC_INCLUDE("workspace.hpp")
 
 namespace qs::hyprland::ipc {
 
@@ -81,17 +81,11 @@ public:
 
 	[[nodiscard]] HyprlandMonitor* monitorFor(QuickshellScreenInfo* screen);
 
-	[[nodiscard]] QBindable<HyprlandMonitor*> bindableFocusedMonitor() const {
-		return &this->bFocusedMonitor;
-	}
+	[[nodiscard]] QBindable<bool> bindableUsingLua() const { return &this->bUsingLua; }
 
-	[[nodiscard]] QBindable<HyprlandWorkspace*> bindableFocusedWorkspace() const {
-		return &this->bFocusedWorkspace;
-	}
-
-	[[nodiscard]] QBindable<HyprlandToplevel*> bindableActiveToplevel() const {
-		return &this->bActiveToplevel;
-	}
+	[[nodiscard]] QBindable<HyprlandMonitor*> bindableFocusedMonitor() const;
+	[[nodiscard]] QBindable<HyprlandWorkspace*> bindableFocusedWorkspace() const;
+	[[nodiscard]] QBindable<HyprlandToplevel*> bindableActiveToplevel() const;
 
 	void setFocusedMonitor(HyprlandMonitor* monitor);
 
@@ -100,7 +94,11 @@ public:
 	[[nodiscard]] ObjectModel<HyprlandToplevel>* toplevels();
 
 	// No byId because these preemptively create objects. The given id is set if created.
-	HyprlandWorkspace* findWorkspaceByName(const QString& name, bool createIfMissing, qint32 id = -1);
+	HyprlandWorkspace* findWorkspaceByName(
+	    const QString& name,
+	    bool createIfMissing,
+	    const QString& address = QString()
+	);
 	HyprlandMonitor* findMonitorByName(const QString& name, bool createIfMissing, qint32 id = -1);
 	HyprlandToplevel* findToplevelByAddress(quint64 address, bool createIfMissing);
 
@@ -116,6 +114,7 @@ signals:
 	void connected();
 	void rawEvent(HyprlandIpcEvent* event);
 
+	void usingLuaChanged();
 	void focusedMonitorChanged();
 	void focusedWorkspaceChanged();
 	void activeToplevelChanged();
@@ -125,10 +124,7 @@ private slots:
 	void eventSocketStateChanged(QLocalSocket::LocalSocketState state);
 	void eventSocketReady();
 
-	void toplevelAddressed(
-	    qs::wayland::toplevel_management::impl::ToplevelHandle* handle,
-	    quint64 address
-	);
+	void toplevelAddressed(qs::wayland::toplevel::wlr::ToplevelHandle* handle, quint64 address);
 
 	void onFocusedMonitorDestroyed();
 
@@ -154,6 +150,8 @@ private:
 	ObjectModel<HyprlandToplevel> mToplevels {this};
 
 	HyprlandIpcEvent event {this};
+
+	Q_OBJECT_BINDABLE_PROPERTY(HyprlandIpc, bool, bUsingLua, &HyprlandIpc::usingLuaChanged);
 
 	Q_OBJECT_BINDABLE_PROPERTY(
 	    HyprlandIpc,

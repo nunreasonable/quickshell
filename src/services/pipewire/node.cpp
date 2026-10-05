@@ -193,7 +193,7 @@ void PwNode::initProps(const spa_dict* props) {
 				qCCritical(
 				    logNode
 				) << this
-				  << "has a device.id property that does not corrospond to a device object. Id:" << id;
+				  << "has a device.id property that does not correspond to a device object. Id:" << id;
 			}
 		}
 	}
@@ -486,8 +486,8 @@ void PwNodeBoundAudio::setVolumes(const QVector<float>& volumes) {
 			                << "via device";
 			this->waitingVolumes = realVolumes;
 		} else {
+			auto significantChange = this->mServerVolumes.isEmpty() || this->volumeStep == -1;
 			if (this->volumeStep != -1) {
-				auto significantChange = this->mServerVolumes.isEmpty();
 				for (auto i = 0; i < this->mServerVolumes.length(); i++) {
 					auto serverVolume = this->mServerVolumes.value(i);
 					auto targetVolume = realVolumes.value(i);
@@ -496,25 +496,25 @@ void PwNodeBoundAudio::setVolumes(const QVector<float>& volumes) {
 						break;
 					}
 				}
+			}
 
-				if (significantChange) {
-					qCInfo(logNode) << "Changing volumes of" << this->node << "to" << realVolumes
-					                << "via device";
-					if (!this->node->device->setVolumes(this->node->routeDevice, realVolumes)) {
-						return;
-					}
-
-					this->mDeviceVolumes = realVolumes;
-					this->node->device->waitForDevice();
-				} else {
-					// Insignificant changes won't cause an info event on the device, leaving qs hung in the
-					// "waiting for acknowledgement" state forever.
-					qCInfo(logNode).nospace()
-					    << "Ignoring volume change for " << this->node << " to " << realVolumes << " from "
-					    << this->mServerVolumes
-					    << " as it is a device node and the change is too small (min step: "
-					    << this->volumeStep << ").";
+			if (significantChange) {
+				qCInfo(logNode) << "Changing volumes of" << this->node << "to" << realVolumes
+				                << "via device";
+				if (!this->node->device->setVolumes(this->node->routeDevice, realVolumes)) {
+					return;
 				}
+
+				this->mDeviceVolumes = realVolumes;
+				this->node->device->waitForDevice();
+			} else {
+				// Insignificant changes won't cause an info event on the device, leaving qs hung in the
+				// "waiting for acknowledgement" state forever.
+				qCInfo(logNode).nospace()
+				    << "Ignoring volume change for " << this->node << " to " << realVolumes << " from "
+				    << this->mServerVolumes
+				    << " as it is a device node and the change is too small (min step: " << this->volumeStep
+				    << ").";
 			}
 		}
 	} else {
@@ -580,7 +580,7 @@ PwVolumeProps PwVolumeProps::parseSpaPod(const spa_pod* param) {
 		const auto* volumes = reinterpret_cast<const spa_pod_array*>(&volumesProp->value);
 		spa_pod* iter = nullptr;
 		SPA_POD_ARRAY_FOREACH(volumes, iter) {
-			// Cubing behavior found in MPD source, and appears to corrospond to everyone else's measurements correctly.
+			// Cubing behavior found in MPD source, and appears to correspond to everyone else's measurements correctly.
 			auto linear = *reinterpret_cast<float*>(iter);
 			auto visual = std::cbrt(linear);
 			props.volumes.push_back(visual);
@@ -593,6 +593,45 @@ PwVolumeProps PwVolumeProps::parseSpaPod(const spa_pod* param) {
 		SPA_POD_ARRAY_FOREACH(channels, iter) {
 			props.channels.push_back(*reinterpret_cast<PwAudioChannel::Enum*>(iter));
 		}
+	}
+
+	if (props.channels.isEmpty()) {
+		// See spa/param/audio/layout.h and pw utils.
+		using C = PwAudioChannel;
+		// clang-format off
+		switch (props.volumes.length()) {
+		case 1: props.channels = {C::Mono}; break;
+		case 2: props.channels = {C::FrontLeft, C::FrontRight}; break;
+		case 3: props.channels = {C::FrontLeft, C::FrontRight, C::LowFrequencyEffects}; break;
+		case 4: props.channels = {C::FrontLeft, C::FrontRight, C::RearLeft, C::RearRight}; break;
+		case 5:
+			props.channels = {C::FrontLeft, C::FrontRight, C::FrontCenter, C::SideLeft, C::SideRight};
+			break;
+		case 6:
+			props.channels = {
+					C::FrontLeft, C::FrontRight, C::FrontCenter,
+					C::LowFrequencyEffects,
+					C::SideLeft, C::SideRight
+			};
+			break;
+		case 7:
+			props.channels = {
+					C::FrontLeft, C::FrontRight, C::FrontCenter,
+					C::RearLeft, C::RearRight,
+					C::SideLeft, C::SideRight
+			};
+			break;
+		case 8:
+			props.channels = {
+					C::FrontLeft, C::FrontRight, C::FrontCenter,
+					C::LowFrequencyEffects,
+					C::RearLeft, C::RearRight,
+					C::SideLeft, C::SideRight
+			};
+			break;
+		default: break;
+		}
+		// clang-format on
 	}
 
 	if (muteProp) {

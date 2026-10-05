@@ -14,6 +14,7 @@
 #include <qlist.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
+#include <qmutex.h>
 #include <qnamespace.h>
 #include <qobject.h>
 #include <qobjectdefs.h>
@@ -262,6 +263,7 @@ void LogManager::messageHandler(
 	}
 
 	if (display) {
+		auto locker = QMutexLocker(&self->stdoutMutex);
 		LogMessage::formatMessage(
 		    self->stdoutStream,
 		    message,
@@ -297,9 +299,21 @@ void LogManager::filterCategory(QLoggingCategory* category) {
 		filter.warn = filter.info || instance->mDefaultLevel == QtWarningMsg || defaultLevel == QtWarningMsg;
 		filter.critical = filter.warn || instance->mDefaultLevel == QtCriticalMsg || defaultLevel == QtCriticalMsg;
 		// clang-format on
-	} else if (instance->lastCategoryFilter) {
-		instance->lastCategoryFilter(category);
-		filter = CategoryFilter(category);
+	} else {
+		if (instance->lastCategoryFilter) {
+			instance->lastCategoryFilter(category);
+			filter = CategoryFilter(category);
+		}
+
+		// Hides virtual/override property warnings.
+		// Getting rid of this is blocked by https://qt-project.atlassian.net/browse/QTBUG-145977
+		// for internal Quickshell types, and may still be desired for shells that want to maintain
+		// compatibility with Qt versions prior to 6.11.
+		if (categoryName == QLatin1StringView("qt.qml.propertyCache.append")
+		    && !qEnvironmentVariableIsSet("QS_NO_FILTER_QT_LOGS"))
+		{
+			filter.warn = false;
+		}
 	}
 
 	for (const auto& rule: *instance->rules) {
@@ -332,6 +346,10 @@ void LogManager::init(
     const QString& rules,
     const QString& prefix
 ) {
+	static bool alreadyInitialized = false;
+	if (alreadyInitialized) return;
+	alreadyInitialized = true;
+
 	auto* instance = LogManager::instance();
 	instance->colorLogs = color;
 	instance->timestampLogs = timestamp;
@@ -350,22 +368,32 @@ void LogManager::init(
 		instance->rules->append(parser.rules());
 	}
 
-	qInstallMessageHandler(&LogManager::messageHandler);
-
 	instance->lastCategoryFilter = QLoggingCategory::installFilter(&LogManager::filterCategory);
 
-	qCDebug(logLogging) << "Creating offthread logger...";
-	auto* thread = new QThread();
-	instance->threadProxy.moveToThread(thread);
-	thread->start();
+	if (instance->lastCategoryFilter == &LogManager::filterCategory) {
+		qCFatal(logLogging) << "Quickshell's log filter has been installed twice. This is a bug.";
+		instance->lastCategoryFilter = nullptr;
+	}
 
-	QMetaObject::invokeMethod(
-	    &instance->threadProxy,
-	    &LoggingThreadProxy::initInThread,
-	    Qt::BlockingQueuedConnection
-	);
+	qInstallMessageHandler(&LogManager::messageHandler);
+
+	instance->threadLogging = new ThreadLogging(instance);
+	instance->threadLogging->init();
 
 	qCDebug(logLogging) << "Logger initialized.";
+}
+
+void LogManager::initThreadLogging() {
+	auto* instance = LogManager::instance();
+
+	qCDebug(logLogging) << "Moving logger to dedicated thread...";
+
+	auto* thread = new QThread();
+	instance->threadLogging->setParent(nullptr);
+	instance->threadLogging->moveToThread(thread);
+	thread->start();
+
+	qCDebug(logLogging) << "Logger thread initialized.";
 }
 
 void initLogCategoryLevel(const char* name, QtMsgType defaultLevel) {
@@ -374,8 +402,8 @@ void initLogCategoryLevel(const char* name, QtMsgType defaultLevel) {
 
 void LogManager::initFs() {
 	QMetaObject::invokeMethod(
-	    &LogManager::instance()->threadProxy,
-	    "initFs",
+	    LogManager::instance()->threadLogging,
+	    &ThreadLogging::initFs,
 	    Qt::BlockingQueuedConnection
 	);
 }
@@ -387,13 +415,6 @@ bool LogManager::isSparse() const { return this->sparse; }
 CategoryFilter LogManager::getFilter(QLatin1StringView category) {
 	return this->allFilters.value(category);
 }
-
-void LoggingThreadProxy::initInThread() {
-	this->logging = new ThreadLogging(this);
-	this->logging->init();
-}
-
-void LoggingThreadProxy::initFs() { this->logging->initFs(); }
 
 void ThreadLogging::init() {
 #ifdef _WIN32
@@ -604,7 +625,7 @@ void ThreadLogging::initFs() {
 	    Qt::QueuedConnection
 	);
 
-	qCDebug(logLogging) << "Switched threaded logger to queued eventloop connection.";
+	qCDebug(logLogging) << "Switched threaded logger to queued event loop connection.";
 }
 
 void ThreadLogging::onMessage(const LogMessage& msg, bool showInSparse) {

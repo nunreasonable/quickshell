@@ -25,6 +25,7 @@
 #include "../core/logging.hpp"
 #include "../core/logging_p.hpp"
 #include "../core/paths.hpp"
+#include "../core/plugin.hpp"
 #include "../core/ringbuf.hpp"
 #include "interface.hpp"
 
@@ -230,11 +231,16 @@ void qsCheckCrash(int argc, char** argv) {
 	);
 
 	auto app = QApplication(argc, argv);
-	QApplication::setDesktopFileName("org.quickshell");
+	auto desktopId =
+	    info.instance.appId.isEmpty() ? QStringLiteral("org.quickshell") : info.instance.appId;
+	QApplication::setDesktopFileName(desktopId);
 
 	auto crashDir = QsPaths::crashDir(info.instance.instanceId);
 
 	qCInfo(logCrashReporter) << "Starting crash reporter...";
+
+	// Required platform compatibility hooks
+	QsEnginePlugin::preinitPluginsOnly();
 
 	recordCrashInfo(crashDir, info.instance);
 

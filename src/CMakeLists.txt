@@ -43,6 +43,10 @@ if (X11)
 	add_subdirectory(x11)
 endif()
 
+if (I3)
+	add_subdirectory(x11/i3)
+endif()
+
 if (WINDOWS_BACKEND)
 	add_subdirectory(windows)
 endif()
