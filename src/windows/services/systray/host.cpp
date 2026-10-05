@@ -146,19 +146,22 @@ TrayHost::TrayHost() {
 		);
 	};
 
-	// Escape hatch for tools that need FindWindow(L"Shell_TrayWnd") to be explorer's.
+	// Escape hatch for tools that need FindWindow(L"Shell_TrayWnd") to be explorer's. Without the
+	// hook, icons we seed now would never update or go away (nothing is watching for that), so
+	// skip seeding too: the tray stays empty instead of filling with icons stuck at startup state.
 	if (qEnvironmentVariable("QS_WINDOWS_TRAY_HOOK") == QStringLiteral("0")) {
 		qCInfo(logTrayHost) << "QS_WINDOWS_TRAY_HOOK=0: not hooking the system tray";
-	} else {
-		TrayHook::start(sink);
-
-		QObject::connect(
-		    QCoreApplication::instance(),
-		    &QCoreApplication::aboutToQuit,
-		    this,
-		    []() { TrayHook::stop(); }
-		);
+		return;
 	}
+
+	TrayHook::start(sink);
+
+	QObject::connect(
+	    QCoreApplication::instance(),
+	    &QCoreApplication::aboutToQuit,
+	    this,
+	    []() { TrayHook::stop(); }
+	);
 
 	seedFromExplorer(sink);
 }
