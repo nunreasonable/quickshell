@@ -498,6 +498,14 @@ void runHook(TrayIconSink sink) {
 	if (!window.create()) return;
 
 	gHwnd.store(window.hwnd);
+
+	// stop() came while the window was being created and had nothing to post to.
+	if (gStopping.load()) {
+		DestroyWindow(window.hwnd);
+		gHwnd.store(nullptr);
+		return;
+	}
+
 	window.announce();
 
 	MSG msg;
