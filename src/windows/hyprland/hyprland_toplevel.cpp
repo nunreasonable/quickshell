@@ -15,7 +15,7 @@
 #include "monitor.hpp"
 #include "workspace.hpp"
 
-using namespace qs::wayland::toplevel_management;
+using namespace qs::wayland::toplevel;
 using namespace qs::windows;
 
 namespace qs::hyprland::ipc {

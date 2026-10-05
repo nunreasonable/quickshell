@@ -29,7 +29,7 @@ class HyprlandToplevel: public QObject {
 	/// Null on an attached object until the window is known to the Hyprland module.
 	Q_PROPERTY(HyprlandToplevel* handle READ hyprlandHandle NOTIFY hyprlandHandleChanged);
 	/// The @@Quickshell.Wayland.Toplevel of the same window.
-	Q_PROPERTY(qs::wayland::toplevel_management::Toplevel* wayland READ waylandHandle NOTIFY waylandHandleChanged);
+	Q_PROPERTY(qs::wayland::toplevel::Toplevel* wayland READ waylandHandle NOTIFY waylandHandleChanged);
 	/// The title of the toplevel
 	Q_PROPERTY(QString title READ default NOTIFY titleChanged BINDABLE bindableTitle);
 	/// Whether the toplevel is the foreground window
@@ -49,7 +49,7 @@ public:
 	/// Created by HyprlandIpc for a tracked window.
 	explicit HyprlandToplevel(HyprlandIpc* ipc, qs::windows::TrackedWindow* window);
 	/// When attached from a Toplevel
-	explicit HyprlandToplevel(HyprlandIpc* ipc, qs::wayland::toplevel_management::Toplevel* toplevel);
+	explicit HyprlandToplevel(HyprlandIpc* ipc, qs::wayland::toplevel::Toplevel* toplevel);
 
 	static HyprlandToplevel* qmlAttachedProperties(QObject* object);
 
@@ -58,7 +58,7 @@ public:
 	[[nodiscard]] qs::windows::TrackedWindow* window() const { return this->mWindow; }
 
 	[[nodiscard]] HyprlandToplevel* hyprlandHandle();
-	[[nodiscard]] qs::wayland::toplevel_management::Toplevel* waylandHandle();
+	[[nodiscard]] qs::wayland::toplevel::Toplevel* waylandHandle();
 
 	[[nodiscard]] QBindable<QString> bindableTitle() { return &this->bTitle; }
 	[[nodiscard]] QBindable<bool> bindableActivated() { return &this->bActivated; }
@@ -100,7 +100,7 @@ private:
 
 	// Set for toplevels owned by HyprlandIpc; attached objects go through mHyprlandHandle.
 	qs::windows::TrackedWindow* mWindow = nullptr;
-	qs::wayland::toplevel_management::Toplevel* mWaylandHandle = nullptr;
+	qs::wayland::toplevel::Toplevel* mWaylandHandle = nullptr;
 	HyprlandToplevel* mHyprlandHandle = nullptr;
 	HyprlandWorkspace* memberOf = nullptr;
 

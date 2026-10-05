@@ -17,7 +17,7 @@
 // Windows stand-ins for the wayland toplevel management types, with the same API, backed by the
 // process wide window tracker. Same namespace as the wayland module so attached objects and
 // documentation line up.
-namespace qs::wayland::toplevel_management {
+namespace qs::wayland::toplevel {
 
 class ToplevelManager;
 
@@ -29,7 +29,7 @@ class Toplevel: public QObject {
 	Q_PROPERTY(QString appId READ appId NOTIFY appIdChanged);
 	Q_PROPERTY(QString title READ title NOTIFY titleChanged);
 	/// Owner window if it is also tracked (dialogs with WS_EX_APPWINDOW), otherwise null.
-	Q_PROPERTY(qs::wayland::toplevel_management::Toplevel* parent READ parent NOTIFY parentChanged);
+	Q_PROPERTY(qs::wayland::toplevel::Toplevel* parent READ parent NOTIFY parentChanged);
 	/// If the window is currently the foreground window.
 	///
 	/// Activation can be requested with the @@activate() function.
@@ -136,11 +136,11 @@ class ToplevelManagerQml: public QObject {
 	Q_OBJECT;
 	// clang-format off
 	/// All toplevel windows.
-	QSDOC_TYPE_OVERRIDE(ObjectModel<qs::wayland::toplevel_management::Toplevel>*);
+	QSDOC_TYPE_OVERRIDE(ObjectModel<qs::wayland::toplevel::Toplevel>*);
 	Q_PROPERTY(UntypedObjectModel* toplevels READ toplevels CONSTANT);
 	/// The foreground window or null. Stays on the last application window while one of this
 	/// process' own windows has the foreground.
-	Q_PROPERTY(qs::wayland::toplevel_management::Toplevel* activeToplevel READ activeToplevel NOTIFY activeToplevelChanged);
+	Q_PROPERTY(qs::wayland::toplevel::Toplevel* activeToplevel READ activeToplevel NOTIFY activeToplevelChanged);
 	// clang-format on
 	QML_NAMED_ELEMENT(ToplevelManager);
 	QML_SINGLETON;
@@ -155,4 +155,4 @@ signals:
 	void activeToplevelChanged();
 };
 
-} // namespace qs::wayland::toplevel_management
+} // namespace qs::wayland::toplevel

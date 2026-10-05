@@ -12,7 +12,7 @@
 
 using namespace qs::windows;
 
-namespace qs::wayland::toplevel_management {
+namespace qs::wayland::toplevel {
 
 Toplevel::Toplevel(TrackedWindow* window, QObject* parent): QObject(parent), mWindow(window) {
 	// clang-format off
@@ -137,4 +137,4 @@ Toplevel* ToplevelManagerQml::activeToplevel() {
 	return ToplevelManager::instance()->activeToplevel();
 }
 
-} // namespace qs::wayland::toplevel_management
+} // namespace qs::wayland::toplevel

@@ -212,7 +212,7 @@ void ScreencopyView::createContext() {
 
 	if (auto* screen = qobject_cast<QuickshellScreenInfo*>(this->mCaptureSource)) {
 		if (screen->screen != nullptr) target.monitor = qs::windows::monitorForScreen(screen->screen);
-	} else if (auto* toplevel = qobject_cast<toplevel_management::Toplevel*>(this->mCaptureSource)) {
+	} else if (auto* toplevel = qobject_cast<toplevel::Toplevel*>(this->mCaptureSource)) {
 		if (toplevel->window() != nullptr) target.window = toplevel->window()->hwnd();
 		this->toplevel = toplevel;
 	}
@@ -237,7 +237,7 @@ void ScreencopyView::createContext() {
 		// Minimized windows can't be captured; pause until restored.
 		QObject::connect(
 		    this->toplevel,
-		    &toplevel_management::Toplevel::minimizedChanged,
+		    &toplevel::Toplevel::minimizedChanged,
 		    this,
 		    &ScreencopyView::syncSession
 		);

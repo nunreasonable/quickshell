@@ -113,7 +113,7 @@ private:
 	// clang-format on
 
 	QObject* mCaptureSource = nullptr;
-	toplevel_management::Toplevel* toplevel = nullptr;
+	toplevel::Toplevel* toplevel = nullptr;
 	bool mPaintCursors = false;
 	bool mLive = false;
 	bool completed = false;
