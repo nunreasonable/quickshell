@@ -169,20 +169,32 @@ void RecordingJob::run() {
 	QString error;
 	auto ok = false;
 
+	auto apartment = false;
 	try {
 		winrt::init_apartment(winrt::apartment_type::multi_threaded);
+		apartment = true;
+	} catch (const winrt::hresult_error& e) {
+		error = hrMessage("COM initialization failed", e.code().value);
+	}
 
+	if (apartment) {
 		auto hr = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
+
 		if (SUCCEEDED(hr)) {
-			ok = this->record(&error);
+			try {
+				ok = this->record(&error);
+			} catch (const winrt::hresult_error& e) {
+				// Unexpected; the expected failures come back through `error`.
+				ok = false;
+				error = hrMessage(QString::fromWCharArray(e.message().c_str()), e.code().value);
+			}
+
 			MFShutdown();
 		} else {
 			error = hrMessage("Media Foundation failed to start", hr);
 		}
 
 		winrt::uninit_apartment();
-	} catch (const winrt::hresult_error& e) {
-		error = hrMessage("COM initialization failed", e.code().value);
 	}
 
 	if (!ok) {

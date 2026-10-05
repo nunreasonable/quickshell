@@ -269,7 +269,9 @@ bool Mp4Writer::writeVideo(ID3D11Texture2D* frame, qint64 time, qint64 duration,
 		hr = sample->GetBufferByIndex(0, buffer.put());
 		if (FAILED(hr)) return fail("encoder surface has no buffer", hr);
 
-		auto dxgiBuffer = buffer.as<IMFDXGIBuffer>();
+		auto dxgiBuffer = buffer.try_as<IMFDXGIBuffer>();
+		if (!dxgiBuffer) return fail("encoder surface is not a texture", E_NOINTERFACE);
+
 		winrt::com_ptr<ID3D11Texture2D> texture;
 		UINT subresource = 0;
 		hr = dxgiBuffer->GetResource(IID_PPV_ARGS(texture.put()));
