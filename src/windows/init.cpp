@@ -16,8 +16,6 @@
 
 namespace {
 
-// Fonts shipped next to the executable (<exe dir>/fonts, recursively). Shell configurations
-// usually depend on icon and UI fonts that are not installed system wide on Windows.
 void loadBundledFonts() {
 	auto dir = QDir(QCoreApplication::applicationDirPath() + "/fonts");
 	if (!dir.exists()) return;
@@ -36,14 +34,10 @@ void loadBundledFonts() {
 		}
 	}
 
-	// Family names fontconfig resolves through its aliases on Linux but Windows doesn't know.
 	QFont::insertSubstitution("JetBrains Mono NF", "JetBrainsMono Nerd Font");
 	QFont::insertSubstitution("JetBrains Mono", "JetBrainsMono Nerd Font");
 }
 
-// Icons shipped next to the executable (<exe dir>/icons). Windows has no freedesktop icon
-// theme, so names configs look up through Quickshell.iconPath (their own logo, distro logos,
-// generic fallbacks like image-missing) are found there.
 void addBundledIconPath() {
 	auto dir = QCoreApplication::applicationDirPath() + "/icons";
 	if (!QDir(dir).exists()) return;
@@ -53,8 +47,6 @@ void addBundledIconPath() {
 	QIcon::setFallbackSearchPaths(paths);
 }
 
-// Windows backend plugin. Registered after _Window so module overlays apply in the right order,
-// exactly like the wayland and x11 plugins.
 class WindowsPlugin: public QsEnginePlugin {
 	QString name() override { return "windows"; }
 	QList<QString> dependencies() override { return {"window"}; }
@@ -64,9 +56,6 @@ class WindowsPlugin: public QsEnginePlugin {
 	void init() override {
 		loadBundledFonts();
 		addBundledIconPath();
-		// Before anything can touch DesktopEntries / DesktopEntryManager::instance(): it
-		// decides how to perform its initial scan (sync Linux .desktop walk vs. async backend
-		// scan) at construction time.
 		qs::windows::WindowsDesktopEntryBackend::install();
 	}
 
@@ -78,8 +67,6 @@ class WindowsPlugin: public QsEnginePlugin {
 		    "PanelWindow"
 		);
 
-		// Same trick as the wayland and x11 backends: the overlay module replaces the
-		// uncreatable PanelWindow of Quickshell._Window.
 		qmlRegisterModuleImport(
 		    "Quickshell",
 		    QQmlModuleImportModuleAny,

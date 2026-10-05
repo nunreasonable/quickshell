@@ -23,21 +23,15 @@ namespace {
 
 QS_LOGGING_CATEGORY(logTaskbar, "quickshell.windows.taskbar", QtWarningMsg);
 
-// Read by restoreForCrash(), from an exception filter.
 std::atomic<bool> gConcealing = false;      // NOLINT
 std::atomic<bool> gTurnedOnAutoHide = false; // NOLINT
 
-// Physical pixels at the bottom of a monitor that bring the taskbar up, like auto-hide's own.
 constexpr int TRIGGER_PX = 2;
-// After the cursor left: long enough for auto-hide to slide the taskbar out first.
 constexpr qint64 HIDE_DELAY_MS = 700;
 constexpr int CHECK_REVEALED_MS = 250;
-// While concealed, only to catch explorer showing its windows again (restart, display change).
 constexpr int CHECK_CONCEALED_MS = 2000;
 
 bool isTaskbarWindow(HWND hwnd) {
-	// The system tray hook has the class but no taskbar: showing it would put an empty
-	// window over the real one.
 	if (isTrayHookWindow(hwnd)) return false;
 
 	wchar_t cls[32] {};
@@ -77,8 +71,6 @@ bool edgeIsHorizontal(TaskbarEdge edge) {
 	return edge == TaskbarEdge::Top || edge == TaskbarEdge::Bottom;
 }
 
-// The primary taskbar can report its own edge directly; the shell only answers this for the
-// main taskbar (ABM_GETTASKBARPOS), not secondary ones on other monitors.
 bool primaryBarEdge(HWND hwnd, TaskbarEdge& edge, int& thickness) {
 	APPBARDATA data {};
 	data.cbSize = sizeof(data);
@@ -99,13 +91,7 @@ bool primaryBarEdge(HWND hwnd, TaskbarEdge& edge, int& thickness) {
 	return true;
 }
 
-// Geometric fallback for bars the shell won't report an edge for (secondary monitors). Robust to
-// auto-hide: a hidden bar is slid almost entirely off its monitor, with only a ~TRIGGER_PX sliver
-// left inside - but GetWindowRect still reports the bar's full, un-shrunk size (only its position
-// moves), so the thin/wide axis and the touching edge are both still correct.
 TaskbarEdge inferBarEdge(const QRect& window, const QRect& monitor) {
-	// Horizontal (top/bottom) bars span the monitor's width; vertical (left/right) ones span its
-	// height, hidden or not.
 	if (window.width() >= window.height()) {
 		auto toTop = window.top() - monitor.top();
 		auto toBottom = monitor.bottom() - window.bottom();
@@ -123,7 +109,6 @@ TaskbarManager* TaskbarManager::instance() {
 	static QPointer<TaskbarManager> manager; // NOLINT
 
 	if (manager.isNull()) {
-		// owned by the application: put back on exit even if no QML object is left
 		manager = new TaskbarManager(QCoreApplication::instance());
 	}
 
@@ -162,7 +147,6 @@ void TaskbarManager::enable() {
 	if (this->enabled) return;
 	this->enabled = true;
 
-	// Hidden taskbar windows still reserve their screen space unless auto-hide is on.
 	if ((appBarState() & ABS_AUTOHIDE) == 0) {
 		setAutoHide(true);
 		gTurnedOnAutoHide.store(true);
@@ -219,8 +203,6 @@ void TaskbarManager::findBars() {
 		    GetWindowRect(hwnd, &rect);
 		    auto window = physicalRect(rect);
 
-		    // Windows 11 always sits at the bottom; Windows 10 (and drag-and-drop on any version)
-		    // allows any edge, and secondary monitors' bars may differ from the primary one.
 		    TaskbarEdge edge = TaskbarEdge::Bottom;
 		    int thickness = 0;
 		    auto* primary = explorerTaskbarWindow();
@@ -303,8 +285,6 @@ bool TaskbarManager::overBar(QPoint position) const {
 	return false;
 }
 
-// Start, search, the tray overflow, the calendar and quick settings: while one is open, the
-// taskbar they belong to stays.
 bool TaskbarManager::taskbarPopupActive() {
 	auto* foreground = GetForegroundWindow();
 	if (foreground == nullptr) return false;
@@ -326,23 +306,17 @@ bool TaskbarManager::taskbarPopupActive() {
 
 	if (name == "shellexperiencehost.exe" || name == "startmenuexperiencehost.exe"
 	    || name == "searchhost.exe" || name == "shellhost.exe"
-	    // Windows 10's own search popup: searchapp.exe from the 2004 update onward,
-	    // searchui.exe (the older, Cortana based one) before that.
 	    || name == "searchapp.exe" || name == "searchui.exe")
 	{
 		return true;
 	}
 
-	// explorer.exe also runs File Explorer windows; only its menus, tray popups and jump lists
-	// count. The clock/volume/network flyouts and Action Center are ShellExperienceHost.exe
-	// CoreWindows on Windows 10 too, so they're already covered above by process name alone.
 	if (name == "explorer.exe") {
 		wchar_t cls[64] {};
 		GetClassNameW(foreground, cls, 64);
 		return wcscmp(cls, L"#32768") == 0 || wcscmp(cls, L"NotifyIconOverflowWindow") == 0
 		    || wcscmp(cls, L"TopLevelWindowForOverflowXamlIsland") == 0
 		    || wcscmp(cls, L"Xaml_WindowedPopupClass") == 0
-		    // Jump list / taskband context menu host, Windows 7 through 10.
 		    || wcscmp(cls, L"DV2ControlHost") == 0;
 	}
 
@@ -386,10 +360,9 @@ void TaskbarManager::onCheck() {
 
 	auto stale = this->bars.isEmpty();
 	for (const auto& bar: this->bars) stale = stale || !IsWindow(bar.hwnd);
-	if (stale) this->findBars(); // explorer restarted
+	if (stale) this->findBars();
 
 	if (!this->revealed) {
-		// Explorer shows its taskbars again on its own now and then.
 		for (const auto& bar: this->bars) {
 			if (IsWindowVisible(bar.hwnd)) ShowWindow(bar.hwnd, SW_HIDE);
 		}

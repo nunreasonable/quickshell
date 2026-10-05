@@ -8,7 +8,6 @@
 #include <qtypes.h>
 #include <qwindow.h>
 
-// last: pulls in the rpc headers, which define macros like `small`
 #include <dwmapi.h>
 
 namespace qs::windows {
@@ -43,7 +42,6 @@ QPoint ScreenMapper::toLogical(const QPoint& physical) const {
 }
 
 QRect ScreenMapper::toLogical(const QRect& physical) const {
-	// map both corners instead of the size so adjacent rects stay adjacent after rounding
 	auto topLeft = this->toLogical(physical.topLeft());
 	auto bottomRight = this->toLogical(physical.topLeft() + QPoint(physical.width(), physical.height()));
 	return QRect(topLeft, QSize(bottomRight.x() - topLeft.x(), bottomRight.y() - topLeft.y()));
@@ -120,7 +118,6 @@ bool forceForegroundWindow(HWND hwnd) {
 	AttachThreadInput(ownThread, foregroundThread, FALSE);
 
 	if (ok) {
-		// SetForegroundWindow alone does not always move keyboard focus to the window
 		SetFocus(hwnd);
 	}
 
@@ -166,10 +163,6 @@ void applyPanelDwmAttributes(HWND hwnd) {
 }
 
 void markNonRude(HWND hwnd) {
-	// Explorer takes a visible window covering a monitor for a fullscreen ("rude") app: it lowers
-	// the taskbar under it and reports ABN_FULLSCREENAPP to every AppBar. A full screen panel
-	// (a wallpaper, an overview) alone on a desktop would hide the taskbar and our own bars.
-	// Shell surfaces opt out with this property.
 	SetPropW(hwnd, L"NonRudeHWND", reinterpret_cast<HANDLE>(TRUE)); // NOLINT
 }
 

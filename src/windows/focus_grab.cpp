@@ -23,13 +23,10 @@ namespace {
 
 Q_LOGGING_CATEGORY(logFocusGrab, "quickshell.windows.focusgrab", QtWarningMsg);
 
-// GetTickCount based times wrap after 49 days.
 bool notBefore(DWORD time, DWORD reference) { return static_cast<LONG>(time - reference) >= 0; }
 
 constexpr DWORD FOREGROUND_GRACE_MS = 500;
 
-// Watches clicks and foreground changes while any grab is active and clears the grabs they
-// break. Both callbacks run on the gui thread.
 class FocusGrabTracker: public QObject {
 public:
 	static FocusGrabTracker* instance() {
@@ -89,18 +86,15 @@ private:
 		auto* hit = WindowFromPoint(POINT {.x = position.x(), .y = position.y()});
 		auto* root = hit == nullptr ? nullptr : GetAncestor(hit, GA_ROOT);
 
-		// A click-through part of a masked window hands the click to whatever is below it.
 		if (root != nullptr && (GetWindowLongPtrW(root, GWL_EXSTYLE) & WS_EX_TRANSPARENT) != 0) {
 			root = nullptr;
 		}
 
 		qCDebug(logFocusGrab) << "Button pressed at" << position << "on" << root;
 
-		// copied: clearing a grab removes it and its handlers may start others
 		auto grabs = this->grabs;
 		for (const auto& grab: grabs) {
 			if (grab.isNull() || !grab->isActive()) continue;
-			// a press that started the grab (handled before the grab existed) doesn't end it
 			if (!notBefore(time, grab->activatedAt())) continue;
 			if (!grab->containsWindow(root)) grab->clear();
 		}
@@ -114,9 +108,6 @@ private:
 		auto grabs = this->grabs;
 		for (const auto& grab: grabs) {
 			if (grab.isNull() || !grab->isActive()) continue;
-			// Right after a grab starts, foreground changes are fallout of handing it keyboard focus
-			// (the activation dance, or Windows giving the foreground back to the previous app when
-			// that fails), not the user leaving. Clicks outside still clear it during this time.
 			if (!notBefore(time, grab->activatedAt() + FOREGROUND_GRACE_MS)) {
 				qCDebug(logFocusGrab) << "Ignoring foreground change during the grab's grace period";
 				continue;
@@ -174,7 +165,6 @@ void FocusGrab::setWindows(QObjectList windows) {
 		auto* proxy = ProxyWindowBase::forObject(*it);
 
 		if (proxy == nullptr) {
-			// nulls from optional entries, or objects that aren't windows
 			it = windows.erase(it);
 			continue;
 		}
@@ -223,7 +213,6 @@ bool FocusGrab::containsWindow(HWND hwnd) const {
 	QList<HWND> listed;
 	for (auto* window: this->visibleWindows()) listed.append(hwndOf(window));
 
-	// Popups and menus are separate top level windows owned by the window they belong to.
 	for (auto* current = hwnd; current != nullptr; current = GetWindow(current, GW_OWNER)) {
 		if (listed.contains(current)) return true;
 	}
@@ -240,7 +229,6 @@ void FocusGrab::onWindowsChanged() {
 	auto windows = this->visibleWindows();
 
 	if (windows.isEmpty()) {
-		// like the compositor, which clears a grab whose surfaces are all gone
 		this->clear();
 		return;
 	}
@@ -261,7 +249,6 @@ void FocusGrab::onWindowsChanged() {
 void FocusGrab::tryActivate() {
 	if (!this->complete || !this->targetActive || this->grabActive) return;
 
-	// The grab starts once there is something to grab for, like hyprland_focus_grab_v1.
 	auto windows = this->visibleWindows();
 	if (windows.isEmpty()) return;
 
@@ -292,8 +279,6 @@ void FocusGrab::clear() {
 	this->knownWindows.clear();
 	FocusGrabTracker::instance()->remove(this);
 
-	// Same order as Quickshell's HyprlandFocusGrab: `active` already reads false in onCleared,
-	// then the requested state follows.
 	emit this->cleared();
 	this->targetActive = false;
 	emit this->activeChanged();

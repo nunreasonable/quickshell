@@ -40,8 +40,6 @@ struct ComApartment {
 	HRESULT hr;
 };
 
-// "C:/..." or "C:\..." - an absolute Windows path, as opposed to an "appicon:<id>" key or a
-// freedesktop-style theme icon name.
 bool looksLikeWindowsPath(const QString& s) {
 	return s.length() > 2 && s[0].isLetter() && s[1] == u':' && (s[2] == u'/' || s[2] == u'\\');
 }
@@ -56,7 +54,6 @@ bool isPlainImage(const QString& path) {
 	return false;
 }
 
-// IShellItemImageFactory::GetImage returns a premultiplied-alpha top-down 32bpp DIB.
 QImage hbitmapToImage(HBITMAP bitmap) {
 	auto bm = BITMAP {};
 	if (GetObjectW(bitmap, sizeof(bm), &bm) == 0) return QImage();
@@ -68,7 +65,7 @@ QImage hbitmapToImage(HBITMAP bitmap) {
 	auto bmi = BITMAPINFO {};
 	bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
 	bmi.bmiHeader.biWidth = width;
-	bmi.bmiHeader.biHeight = -height; // negative: top-down, so row 0 is the top row
+	bmi.bmiHeader.biHeight = -height;
 	bmi.bmiHeader.biPlanes = 1;
 	bmi.bmiHeader.biBitCount = 32;
 	bmi.bmiHeader.biCompression = BI_RGB;
@@ -82,8 +79,6 @@ QImage hbitmapToImage(HBITMAP bitmap) {
 
 	if (ok == 0) return QImage();
 
-	// Un-premultiply for general use (QPixmap::fromImage keeps the format, and most consumers
-	// here - QML Image, QPixmap(path) fallbacks - expect straight alpha).
 	return image.convertToFormat(QImage::Format_ARGB32);
 }
 
@@ -118,8 +113,6 @@ QPixmap renderParsingName(const QString& parsingName, const QSize& size) {
 	return renderShellItemIcon(item.Get(), size);
 }
 
-// Icon extraction hits the shell (and often disk); real-size requests repeat a lot across
-// redraws/hovers, so cache per key+size for the process lifetime.
 QMutex cacheMutex;
 QCache<QString, QPixmap> cache(256); // NOLINT
 
@@ -139,9 +132,6 @@ QPixmap iconForKey(const QString& key, const QSize& size) {
 		if (token.isEmpty()) return QPixmap();
 		parsingName = QStringLiteral("shell:AppsFolder\\") + token;
 	} else if (looksLikeWindowsPath(key)) {
-		// Plain images (notification app icons cached as PNG, for one) should show themselves,
-		// not the shell's icon for their file type: returning null lets the caller's
-		// QIcon::fromTheme() load the absolute path directly.
 		if (isPlainImage(key)) return QPixmap();
 		parsingName = key;
 		parsingName.replace(u'/', u'\\');

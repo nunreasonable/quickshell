@@ -1,17 +1,3 @@
-# Windows backend: PanelWindow on top of Win32 (AppBars for exclusive zones, DWM attributes,
-# a low level mouse hook for input masks, blur behind panels from layer rules through a
-# Windows.UI.Composition host backdrop), global shortcuts (RegisterHotKey + a low level
-# keyboard hook) and focus grabs, the window / virtual desktop tracker, the
-# Windows.Graphics.Capture engine (capture.cpp) behind ScreencopyView and Screenshot, the screen
-# recorder (recorder/: WGC + Media Foundation + WASAPI loopback) behind ScreenRecorder, stand-in
-# Quickshell.Wayland and Quickshell.Hyprland modules built on it, small native singletons
-# (system/) ii's services call into instead of spawning Linux CLIs, and native service modules
-# (services/) with the URIs of the Linux ones: Pipewire on Core Audio, UPower, Mpris on GSMTC,
-# Notifications (the shell's own plus a mirror of the Windows notification center), plus
-# Quickshell.Bluetooth on WinRT (bluetooth/). Wallpaper panels can live inside explorer's desktop
-# window, behind the icons (desktop_host.cpp). Optional dwindle tiling of application windows
-# sits on top of the window tracker (tiling*.cpp).
-
 qt_add_library(quickshell-windows STATIC
 	util.cpp
 	appbar.cpp
@@ -72,9 +58,6 @@ qs_add_module_deps_light(quickshell-windows Quickshell)
 
 install_qml_module(quickshell-windows)
 
-# qmltyperegistrar emits "#if __has_include(<foo.hpp>)" using just the header's basename, so
-# system/ and image/ (where the native singletons' headers live) need their own spot on the
-# include path.
 target_include_directories(quickshell-windows PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/system
 	${CMAKE_CURRENT_SOURCE_DIR}/image
@@ -94,7 +77,6 @@ add_library(quickshell-windows-init OBJECT init.cpp)
 
 target_link_libraries(quickshell-windows PRIVATE
 	Qt::Quick
-	# blur.cpp reads Rectangle fills (QQuickRectangle)
 	Qt::QuickPrivate
 	quickshell-windows-services
 	user32
@@ -103,26 +85,21 @@ target_link_libraries(quickshell-windows PRIVATE
 	gdi32
 	advapi32
 	powrprof
-	winmm # PlaySound (Session.playSystemSound)
+	winmm
 	dxva2
 	pdh
 	wbemuuid
 	ole32
 	oleaut32
 	uuid
-	# capture.cpp: WinRT activation for Windows.Graphics.Capture and the D3D11 device it runs on.
 	windowsapp
 	runtimeobject
 	d3d11
 	dxgi
-	# network*.cpp
 	wlanapi
 	iphlpapi
-	# blur.cpp: CreateDispatcherQueueController for Windows.UI.Composition
 	CoreMessaging
-	# system/terminal_colors_math.cpp: HCT
 	material-color
-	# recorder/: Media Foundation (sink writer, H.264/AAC encoders), delay loaded below
 	mfplat
 	mfreadwrite
 	mfuuid
@@ -134,8 +111,6 @@ qs_module_pch(quickshell-windows SET large)
 
 target_link_libraries(quickshell PRIVATE quickshell-windowsplugin quickshell-windows-init)
 
-# Windows N editions ship without Media Foundation unless the Media Feature Pack is installed;
-# delay loading keeps the executables starting there (the recorder checks for the DLLs first).
 foreach(exe quickshell quickshell-gui)
 	if (TARGET ${exe})
 		target_link_options(${exe} PRIVATE /DELAYLOAD:mfplat.dll /DELAYLOAD:mfreadwrite.dll)

@@ -24,8 +24,6 @@ constexpr UINT WM_QS_CURSOR_MOVED = WM_APP + 1;
 constexpr UINT WM_QS_BUTTON_PRESSED = WM_APP + 2;
 constexpr auto MESSAGE_WINDOW_CLASS = L"QuickshellInputMaskTracker";
 
-// Shared with the hook thread. The hook only writes the position and wakes the gui thread
-// once per batch of moves; the gui thread drains it.
 std::atomic<LONG> cursorX = 0;       // NOLINT
 std::atomic<LONG> cursorY = 0;       // NOLINT
 std::atomic<bool> wakePending = false; // NOLINT
@@ -43,7 +41,7 @@ std::atomic<DWORD> worstLateMs = 0;       // NOLINT
 } // namespace
 
 void noteHookDelay(bool keyboard, DWORD eventTime) {
-	auto delay = GetTickCount() - eventTime; // both wrap together
+	auto delay = GetTickCount() - eventTime;
 	if (delay < LATE_INPUT_MS || delay > 60000) return;
 
 	(keyboard ? lateKeyEvents : lateMouseEvents).fetch_add(1, std::memory_order_relaxed);
@@ -56,7 +54,6 @@ InputMaskTracker* InputMaskTracker::instance() {
 	static QPointer<InputMaskTracker> tracker; // NOLINT
 
 	if (tracker.isNull()) {
-		// owned by the application so the hook thread is stopped before process teardown
 		tracker = new InputMaskTracker(QCoreApplication::instance());
 	}
 
@@ -70,8 +67,6 @@ InputMaskTracker::InputMaskTracker(QObject* parent): QObject(parent) {
 	wndClass.lpszClassName = MESSAGE_WINDOW_CLASS;
 	RegisterClassW(&wndClass);
 
-	// Message-only window on the gui thread: Qt's event dispatcher runs a plain message loop,
-	// so it dispatches to this window's procedure like any other.
 	this->messageWindow = CreateWindowExW(
 	    0,
 	    MESSAGE_WINDOW_CLASS,
@@ -186,7 +181,6 @@ void InputMaskTracker::onButtonPressed(QPoint position, quint32 time) {
 }
 
 void InputMaskTracker::onCursorMoved() {
-	// clear before reading so a position written in between triggers another wakeup
 	wakePending.store(false);
 	POINT cursor {.x = cursorX.load(), .y = cursorY.load()};
 	this->evaluate(cursor);
@@ -211,7 +205,6 @@ void InputMaskTracker::evaluate(POINT cursor) {
 		}
 
 		if (it->region.isEmpty()) {
-			// re-applied every time since Qt rewrites the extended style when flags change
 			setExStyleBits(hwnd, WS_EX_TRANSPARENT, true);
 			++it;
 			continue;
@@ -219,7 +212,6 @@ void InputMaskTracker::evaluate(POINT cursor) {
 
 		RECT rect {};
 		if (GetWindowRect(hwnd, &rect) && PtInRect(&rect, cursor)) {
-			// GetWindowRect and the hook are physical pixels, the region is logical window pixels
 			auto dpr = window->devicePixelRatio();
 			auto local = QPoint(
 			    static_cast<int>(std::floor((cursor.x - rect.left) / dpr)),
@@ -291,13 +283,10 @@ void InputMaskTracker::stopHook() {
 }
 
 void InputMaskTracker::hookThreadMain(HANDLE readyEvent) {
-	// Force creation of the thread's message queue before signaling, otherwise an early
-	// PostThreadMessage(WM_QUIT) from stopHook() fails and the join never returns.
 	MSG msg {};
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 	hookThreadId.store(GetCurrentThreadId());
 
-	// Every mouse event in the system waits for this thread; don't let busy threads delay it.
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
 	auto* hook =
@@ -308,7 +297,6 @@ void InputMaskTracker::hookThreadMain(HANDLE readyEvent) {
 
 	if (hook == nullptr) return;
 
-	// Low level hooks are only called while the installing thread pumps messages.
 	while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
 		TranslateMessage(&msg);
 		DispatchMessageW(&msg);
@@ -324,7 +312,6 @@ LRESULT CALLBACK InputMaskTracker::mouseHookProc(int code, WPARAM wParam, LPARAM
 		cursorX.store(info->pt.x);
 		cursorY.store(info->pt.y);
 
-		// Never block here. Coalesce wakeups so a fast mouse does not flood the gui queue.
 		if (!wakePending.exchange(true)) {
 			auto* target = hookTarget.load();
 			if (target != nullptr) PostMessageW(target, WM_QS_CURSOR_MOVED, 0, 0);
@@ -334,7 +321,6 @@ LRESULT CALLBACK InputMaskTracker::mouseHookProc(int code, WPARAM wParam, LPARAM
 		auto button = wParam == WM_LBUTTONDOWN || wParam == WM_RBUTTONDOWN || wParam == WM_MBUTTONDOWN
 		           || wParam == WM_XBUTTONDOWN;
 
-		// Posted after the move, so the masks are up to date when the press is handled.
 		if (button && buttonWatchers.load() > 0) {
 			if (auto* target = hookTarget.load()) {
 				PostMessageW(

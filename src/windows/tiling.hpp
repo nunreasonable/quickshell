@@ -29,17 +29,6 @@ class TrackedWindow;
 class WindowTracker;
 class VirtualDesktops;
 
-// Optional tiling of other applications' windows, process wide so a config reload keeps the
-// layout. One dwindle tree per (virtual desktop, screen): Windows' own virtual desktops stay
-// the workspaces. Everything is event driven, from the window tracker (shows, hides, moves,
-// state changes, the move/size loop) and screen changes (work area, DPI); placements are
-// coalesced and checked once the window reports its new position, so windows that refuse a
-// size are floated instead of fought.
-//
-// Placement is in physical pixels of the visible frame (DWMWA_EXTENDED_FRAME_BOUNDS), so the
-// invisible resize borders and per monitor DPI don't leave gaps. Moves go out one window at a
-// time with SWP_ASYNCWINDOWPOS: BeginDeferWindowPos would batch them, but EndDeferWindowPos
-// waits on every window's thread and a single hung application would freeze the shell.
 class TilingManager: public QObject {
 	Q_OBJECT;
 
@@ -47,7 +36,6 @@ public:
 	using Edge = tiling::Edge;
 
 	static TilingManager* instance();
-	// The manager while tiling is on, otherwise null (never creates it).
 	static TilingManager* active();
 
 	[[nodiscard]] bool enabled() const { return this->mEnabled; }
@@ -61,27 +49,19 @@ public:
 	[[nodiscard]] QStringList excluded() const { return this->mExcluded; }
 	void setExcluded(const QStringList& excluded);
 
-	// Re-evaluates every window (rules, states) and places all tiled windows again, also the
-	// ones whose size was accepted as close enough before.
 	void relayout();
 
-	// True while the window is part of a layout (tiled, or maximized/fullscreen in its slot).
 	[[nodiscard]] bool isTiled(TrackedWindow* window) const;
 
-	// Dispatcher entry points. They return false when the window isn't tiled, so the caller can
-	// fall back to its non tiling behavior.
 	bool focusDirection(Edge direction);
 	bool moveDirection(Edge direction);
 	bool swapDirection(Edge direction);
 	bool toggleSplit(TrackedWindow* window);
 	bool swapSplit(TrackedWindow* window);
 	bool splitRatio(TrackedWindow* window, double value, bool exact);
-	// Logical pixels. Tiled windows change their split ratios.
 	bool resizeTiled(TrackedWindow* window, qint32 dx, qint32 dy);
-	// Floating = true / false, or toggled when `toggle` is set. False if nothing was done.
 	bool setFloating(TrackedWindow* window, bool floating, bool toggle);
 
-	// Plain window operations, also used without tiling. Logical pixels.
 	static void resizeFloating(TrackedWindow* window, qint32 dx, qint32 dy, bool exact);
 	static void center(TrackedWindow* window);
 
@@ -91,7 +71,6 @@ signals:
 	void gapsOutChanged();
 	void preserveSplitChanged();
 	void excludedChanged();
-	// A window joined or left a layout.
 	void windowTilingChanged(TrackedWindow* window);
 
 private:
@@ -107,9 +86,9 @@ private:
 	};
 
 	enum class State : quint8 {
-		Out,       // not tiled: floating, on every desktop...
-		Hidden,    // minimized: keeps its slot, which takes no space meanwhile
-		Suspended, // keeps its slot but isn't placed: maximized or fullscreen
+		Out,
+		Hidden,
+		Suspended,
 		Tiled,
 	};
 
@@ -119,22 +98,16 @@ private:
 		TrackedWindow* window = nullptr;
 		Layout* layout = nullptr;
 		Override override = Override::None;
-		bool elevated = false;  // UIPI: can't be moved by us
-		bool autoFloat = false; // refused its tile; until toggled back
-		// Physical frame rect last asked for, and where the window was before that.
+		bool elevated = false;
+		bool autoFloat = false;
 		QRect target;
 		QRect before;
-		// Target the window settled close to (terminals snapping to their cell grid); not
-		// corrected again until the target changes.
 		QRect accepted;
 		qint32 corrections = 0;
 		qint64 lastCorrection = 0;
 		bool verifying = false;
-		// Epoch ms: when a pending placement gives up if the window never moves. Per window, so
-		// one window's placement can't push back another's deadline (see armDeadline()).
 		qint64 deadline = 0;
-		bool parked = false; // minimized, maximized or fullscreen in its slot
-		// Raw window rect before it was first tiled, restored when it floats again.
+		bool parked = false;
 		QRect preTiling;
 		quint64 focusStamp = 0;
 	};
@@ -163,11 +136,8 @@ private:
 	void dropEmptyLayouts();
 	void apply(Layout* layout);
 	[[nodiscard]] QRect tileRect(const Layout* layout, TrackedWindow* window) const;
-	// Puts the window on its tile, or checks that it got there and corrects it a bounded
-	// number of times.
 	void place(Managed& m, const QRect& tile);
 	void send(Managed& m, const QRect& frame);
-	// (Re)arms deadlineTimer for the nearest pending deadline, or stops it when none are left.
 	void armDeadline();
 	void restoreFloating(Managed& m);
 
@@ -196,10 +166,9 @@ private:
 	qint32 mGapsOut = 5;
 	bool mPreserveSplit = true;
 	QStringList mExcluded;
-	QList<QRegularExpression> excludedPatterns; // process, app id or class
+	QList<QRegularExpression> excludedPatterns;
 	QList<QRegularExpression> excludedTitles;
 
-	// Node based so references stay valid while windows come and go.
 	std::unordered_map<TrackedWindow*, Managed> managed;
 	std::map<QString, std::unique_ptr<Layout>> layouts;
 	QSet<TrackedWindow*> dirtyWindows;
@@ -215,51 +184,21 @@ private:
 	QList<QMetaObject::Connection> connections;
 };
 
-///! Optional tiling of application windows (Windows only).
-/// Lays out every normal application window on a virtual desktop and monitor with Hyprland's
-/// dwindle layout, inside the monitor's work area (the taskbar and AppBars such as the bar
-/// stay clear). Windows' own virtual desktops stay the workspaces. Off by default.
-///
-/// Dialogs, owned and tool windows, non resizable and always on top windows, windows shown on
-/// every desktop (pinned), windows of elevated processes (which can't be moved from a normal
-/// one), windows of @@excluded apps and windows that refuse the size of their tile float.
-/// Maximized and fullscreen windows keep their place and come back to it when restored.
-/// Minimized windows leave the layout (the others take their space) and come back to their
-/// old place too. Rules are checked when a window appears or changes state, and on
-/// @@relayout().
-///
-/// Dragging a tiled window onto another swaps them (onto another monitor moves it there),
-/// dragging a border changes the split. The Hyprland dispatchers movefocus, movewindow,
-/// swapwindow, togglefloating, togglesplit, resizeactive and layoutmsg (togglesplit, swapsplit,
-/// splitratio) act on the layout while tiling is on.
-///
-/// Turning tiling off puts each tiled window back where it was before it was first tiled.
-/// Only one process tiles at a time: in a second Quickshell process @@enabled stays false.
 class Tiling: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
 	QML_SINGLETON;
 	// clang-format off
-	/// Tile windows. Default false.
 	Q_PROPERTY(bool enabled READ enabled WRITE setEnabled NOTIFY enabledChanged);
-	/// Gap around each window inside the layout, in logical pixels (Hyprland's gaps_in, so two
-	/// neighbours are 2 × gapsIn apart). Default 4.
 	Q_PROPERTY(qint32 gapsIn READ gapsIn WRITE setGapsIn NOTIFY gapsInChanged);
-	/// Gap between the layout and the edges of the work area, in logical pixels. Default 5.
 	Q_PROPERTY(qint32 gapsOut READ gapsOut WRITE setGapsOut NOTIFY gapsOutChanged);
-	/// Keep each split's direction once made (Hyprland's dwindle:preserve_split). When false a
-	/// split follows its area's aspect ratio unless togglesplit pinned it. Default true.
 	Q_PROPERTY(bool preserveSplit READ preserveSplit WRITE setPreserveSplit NOTIFY preserveSplitChanged);
-	/// Windows that always float: process names ("vlc" or "vlc.exe"), app ids
-	/// (AppUserModelIDs) or window classes, or window titles with a `title:` prefix
-	/// ("title:Picture-in-Picture*"). Case insensitive, whole string, * and ? wildcards.
 	Q_PROPERTY(QStringList excluded READ excluded WRITE setExcluded NOTIFY excludedChanged);
 	// clang-format on
 
 public:
 	explicit Tiling(QObject* parent = nullptr);
 
-	/// Re-evaluates every window and places all tiled windows again.
 	Q_INVOKABLE void relayout();
 
 	[[nodiscard]] bool enabled() const;

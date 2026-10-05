@@ -40,7 +40,6 @@ bool WinAppBar::ensureRegistered(HWND hwnd) {
 
 	auto data = appBarData(hwnd);
 	if (!SHAppBarMessage(ABM_NEW, &data)) {
-		// Usually explorer is not running (yet). TaskbarCreated triggers a retry.
 		qCWarning(logAppBar) << "Failed to register AppBar for window" << hwnd;
 		return false;
 	}
@@ -59,9 +58,6 @@ QRect WinAppBar::reserve(HWND hwnd, UINT edge, const QRect& monitor, qint32 size
 	data.uEdge = edge;
 	data.rc = toRECT(monitor);
 
-	// Propose the full edge strip, then let the shell push it away from the taskbar and
-	// AppBars registered before us. QUERYPOS only guarantees the leading edge, so the size
-	// has to be re-applied afterwards.
 	auto applySize = [&]() {
 		switch (edge) {
 		case ABE_TOP: data.rc.bottom = data.rc.top + size; break;

@@ -12,7 +12,6 @@
 
 #include "util.hpp"
 
-// last: pulls in the rpc headers, which define macros like `small`
 #include <objbase.h>
 #include <shobjidl_core.h>
 
@@ -47,12 +46,9 @@ constexpr const wchar_t* DESKTOPS_KEY =
 constexpr const wchar_t* SESSION_KEY_FORMAT =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\SessionInfo\\%1\\VirtualDesktops";
 
-// Message VirtualDesktopAccessor posts to the listener window when the desktop changes.
 constexpr UINT ACCESSOR_MESSAGE = WM_APP + 0x100;
 constexpr const wchar_t* LISTENER_CLASS = L"QuickshellVirtualDesktops";
 
-// Hyprland style configs happily reference workspace 10 with three desktops open; creating
-// desktops on demand is the mapping, but keep a sane upper bound.
 constexpr qsizetype MAX_DESKTOPS = 20;
 
 bool readBinary(HKEY key, const wchar_t* name, QByteArray& out) {
@@ -99,8 +95,6 @@ bool isOwnWindow(HWND hwnd) {
 }
 
 } // namespace
-
-// --- RegistryWatcher ---------------------------------------------------------------------------
 
 RegistryWatcher::RegistryWatcher(QList<QString> subkeys, QObject* parent)
     : QThread(parent)
@@ -149,7 +143,6 @@ void RegistryWatcher::run() {
 	while (true) {
 		for (qsizetype i = 0; i < keys.length(); i++) {
 			if (armed[i]) continue;
-			// One notification per call: the key is re-armed after its event fires.
 			auto status = RegNotifyChangeKeyValue(
 			    keys[i],
 			    TRUE,
@@ -178,19 +171,14 @@ void RegistryWatcher::run() {
 	for (auto* event: events) CloseHandle(event);
 }
 
-// --- VirtualDesktops ---------------------------------------------------------------------------
-
 VirtualDesktops* VirtualDesktops::instance() {
 	static auto* instance = new VirtualDesktops(); // NOLINT
 	return instance;
 }
 
 VirtualDesktops::VirtualDesktops() {
-	// Qt's platform plugin initializes COM on the GUI thread; this is a no-op there and makes
-	// the console probes work without one.
 	CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-	// CLSID_VirtualDesktopManager; spelled out to avoid pulling in shobjidl.h / uuid.lib.
 	static constexpr GUID clsid = {
 	    0xaa509086,
 	    0x5ca9,
@@ -271,8 +259,6 @@ void VirtualDesktops::accessorFailed() const {
 }
 
 void VirtualDesktops::loadAccessor() {
-	// Ciantic ships the dll per Windows generation: the Windows 11 build next to the executable,
-	// the Windows 10 one (no CreateDesktop/RemoveDesktop) in win10\.
 	auto path = QCoreApplication::applicationDirPath()
 	          + (windowsBuild() < 22000 ? "/win10/VirtualDesktopAccessor.dll" : "/VirtualDesktopAccessor.dll");
 	auto wpath = path.toStdWString();
@@ -298,7 +284,6 @@ void VirtualDesktops::loadAccessor() {
 	       && load(a.moveWindowToDesktopNumber, "MoveWindowToDesktopNumber")
 	       && load(a.isWindowOnCurrentVirtualDesktop, "IsWindowOnCurrentVirtualDesktop");
 
-	// Optional on older builds of the dll.
 	load(a.getDesktopIdByNumber, "GetDesktopIdByNumber");
 	load(a.getWindowDesktopNumber, "GetWindowDesktopNumber");
 	load(a.createDesktop, "CreateDesktop");
@@ -310,8 +295,6 @@ void VirtualDesktops::loadAccessor() {
 	load(a.unPinWindow, "UnPinWindow");
 	load(a.restart, "RestartVirtualDesktopAccessor");
 
-	// The dll talks to undocumented COM interfaces that change between Windows builds; a build
-	// mismatch shows up as -1 from everything, in which case it is as good as absent.
 	if (!ok || this->call(-1, a.getDesktopCount) <= 0) {
 		qCWarning(logDesktops) << "VirtualDesktopAccessor.dll" << path
 		                       << "does not work on this Windows build; ignoring it.";
@@ -326,8 +309,6 @@ void VirtualDesktops::loadAccessor() {
 
 LRESULT CALLBACK VirtualDesktops::listenerProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	if (msg == ACCESSOR_MESSAGE) {
-		// wparam/lparam are the old and new desktop numbers; the registry read is cheap and keeps
-		// a single source of truth, so just refresh.
 		VirtualDesktops::instance()->refresh();
 		return 0;
 	}
@@ -343,7 +324,7 @@ void VirtualDesktops::installListener() {
 	cls.lpfnWndProc = &VirtualDesktops::listenerProc;
 	cls.hInstance = module;
 	cls.lpszClassName = LISTENER_CLASS;
-	RegisterClassW(&cls); // fails harmlessly if already registered
+	RegisterClassW(&cls);
 
 	this->listener = CreateWindowExW(
 	    0,
@@ -370,7 +351,6 @@ void VirtualDesktops::installListener() {
 }
 
 QString VirtualDesktops::readDesktopName(const GUID& id) const {
-	// Names only exist for desktops the user renamed.
 	if (guidIsNull(id)) return {};
 
 	HKEY key = nullptr;
@@ -391,7 +371,6 @@ bool VirtualDesktops::readRegistry(QList<GUID>& ids, GUID& current) const {
 		return false;
 	}
 
-	// Absent until a second desktop has been created at least once.
 	QByteArray blob;
 	if (readBinary(key, L"VirtualDesktopIDs", blob)) {
 		for (qsizetype offset = 0; offset + static_cast<qsizetype>(sizeof(GUID)) <= blob.length();
@@ -401,7 +380,6 @@ bool VirtualDesktops::readRegistry(QList<GUID>& ids, GUID& current) const {
 		}
 	}
 
-	// Since Windows 10 1903 the live value is per session; the global one is a stale copy.
 	QByteArray currentBytes;
 	HKEY sessionKey = nullptr;
 	auto sessionPath = QString::fromWCharArray(SESSION_KEY_FORMAT).arg(this->sessionId).toStdWString();
@@ -432,8 +410,6 @@ void VirtualDesktops::refresh() {
 		qCWarning(logDesktops) << "Unable to read the virtual desktop registry keys.";
 	}
 
-	// The accessor asks the shell directly, which beats registry values that are absent on a
-	// fresh profile or might lag behind.
 	const auto& a = this->accessor;
 	if (a.loaded) {
 		auto count = this->call(-1, a.getDesktopCount);
@@ -447,7 +423,6 @@ void VirtualDesktops::refresh() {
 		}
 	}
 
-	// A fresh profile has a single unnamed desktop and no registry entries yet.
 	if (ids.isEmpty()) ids.append(GUID {});
 
 	QList<Desktop> desktops;
@@ -521,7 +496,6 @@ qsizetype VirtualDesktops::windowDesktopIndex(HWND hwnd) const {
 	auto index = this->indexOf(this->windowDesktopId(hwnd));
 	if (index != -1) return index;
 
-	// Public API unanswered (fresh profile without registry ids, or a stale list): ask the shell.
 	const auto& a = this->accessor;
 	if (a.loaded && a.getWindowDesktopNumber != nullptr) {
 		auto number = this->call(-1, a.getWindowDesktopNumber, hwnd);
@@ -539,7 +513,6 @@ bool VirtualDesktops::isWindowOnCurrent(HWND hwnd) const {
 }
 
 void VirtualDesktops::sendShortcut(WORD key, int times) const {
-	// Ctrl+Win+<key>, as the user would press it. Only usable without the accessor dll.
 	QList<INPUT> inputs;
 	auto push = [&inputs](WORD vk, bool up) {
 		INPUT input {};
@@ -581,8 +554,6 @@ bool VirtualDesktops::switchTo(qsizetype index) {
 }
 
 bool VirtualDesktops::waitForCount(qsizetype count) {
-	// Desktop creation is rare and explorer writes the registry within a few ms; a short
-	// synchronous wait keeps "create then switch" sequences simple.
 	for (auto i = 0; i < 40; i++) {
 		this->refresh();
 		if (this->count() >= count) return true;
@@ -607,7 +578,6 @@ bool VirtualDesktops::ensureCount(qsizetype count) {
 				return false;
 			}
 		} else {
-			// Ctrl+Win+D creates a desktop and switches to it.
 			this->sendShortcut('D', 1);
 		}
 

@@ -14,19 +14,15 @@ namespace qs::windows::hotkeys {
 
 namespace {
 
-// Shared between the gui thread and the hook thread.
 std::atomic<std::shared_ptr<const HookSnapshot>> gSnapshot; // NOLINT
 std::atomic<HWND> gTarget = nullptr;                         // NOLINT
 std::atomic<UINT> gMessageBase = 0;                          // NOLINT
 std::atomic<DWORD> gThreadId = 0;                            // NOLINT
 std::atomic<bool> gInstalled = false;                        // NOLINT
-// True while the foreground window belongs to a process we can't inject into (UIPI).
 std::atomic<bool> gForegroundBlocked = false; // NOLINT
 
-// Gui thread only. Heap allocated so static destruction never meets a joinable thread.
 std::thread* gThread = nullptr; // NOLINT
 
-// Hook thread only.
 struct HeldKey {
 	uint32_t id = 0;
 	uint32_t serial = 0;
@@ -39,14 +35,10 @@ uint8_t gTapCandidate = 0;         // NOLINT
 DWORD gTapStart = 0;               // NOLINT
 uint8_t gHoldActive = 0;           // NOLINT
 
-// A swallowed key whose release we never saw (focus moved to an elevated window, the hook got
-// dropped...) must not turn its next press into an auto-repeat. Real repeats arrive at most the
-// maximum keyboard delay (1 s) apart.
 constexpr DWORD STALE_REPEAT_MS = 1500;
 
 bool isDown(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
-// Inside the hook the async state does not include the event being processed yet.
 uint8_t heldModifiers() {
 	uint8_t mods = 0;
 	if (isDown(VK_CONTROL)) mods |= ModCtrl;
@@ -103,9 +95,6 @@ INPUT keyInput(uint8_t vk, bool up, WORD scan = 0, bool extended = false) {
 	return input;
 }
 
-// Any key event between a Win (Alt) press and its release keeps the Start menu (menu bar) from
-// opening. Injected events queue behind the event being processed, so this is enough when the
-// modifier is still held; a release has to be swallowed and re-sent behind the mask instead.
 void injectMask() {
 	std::array<INPUT, 2> inputs {
 	    keyInput(KeyboardHook::MASK_KEY, false),
@@ -177,8 +166,6 @@ DWORD ownIntegrityLevel() {
 	return level;
 }
 
-// UIPI hides input sent to windows of a higher integrity level from our hook and blocks our
-// SendInput into them. A process we can't even query counts as hidden.
 bool isHiddenFromUs(HWND hwnd) {
 	if (hwnd == nullptr) return false;
 
@@ -219,19 +206,15 @@ LRESULT onModifier(const HookSnapshot& snapshot, const KBDLLHOOKSTRUCT* info, ui
 	auto blocked = gForegroundBlocked.load();
 
 	if (!up) {
-		// auto-repeat of a held modifier
 		if (isDown(vk)) return 0;
 
 		if (gTapCandidate != 0) {
-			// a second modifier: this is a combo, not a tap
 			gTapCandidate = 0;
 		} else if (!blocked && heldModifiers() == 0 && hasTrigger(snapshot, HookTrigger::Tap, bit)) {
 			gTapCandidate = bit;
 			gTapStart = info->time;
 		}
 
-		// Holds only observe, so they also run while the foreground is hidden from us. A press
-		// is reported even if the last release was never seen (Win+L, elevated windows).
 		if (!isDown(otherSide(info->vkCode))) {
 			gHoldActive |= bit;
 			postAll(snapshot, HookTrigger::Hold, bit, HookPressed);
@@ -249,15 +232,9 @@ LRESULT onModifier(const HookSnapshot& snapshot, const KBDLLHOOKSTRUCT* info, ui
 	gTapCandidate = 0;
 	if (blocked) return 0;
 
-	// Masked even after a long hold: with Super bound to the launcher, opening the Start menu
-	// on release would be surprising. Ctrl+Esc still opens it.
 	auto masked = bit == ModSuper || bit == ModAlt;
 	if (masked) injectMaskedRelease(info);
 
-	// After the injection: the re-sent release makes this process the source of the last input,
-	// so the gui thread may take the foreground for the tap's action (verified on the target
-	// with AllowSetForegroundWindow). Swallowed combos don't get that, even with a mask key
-	// injected; panels use forceForegroundWindow there.
 	if (info->time - gTapStart <= snapshot.tapTimeoutMs) {
 		postAll(snapshot, HookTrigger::Tap, bit, HookTapped);
 	}
@@ -292,7 +269,6 @@ LRESULT onKey(const HookSnapshot& snapshot, const KBDLLHOOKSTRUCT* info, bool up
 
 	auto mods = heldModifiers();
 
-	// The secure attention sequence never reaches hooks, but don't even try.
 	if (vk == VK_DELETE && (mods & ModCtrl) != 0 && (mods & ModAlt) != 0) return 0;
 
 	for (const auto& trigger: snapshot.triggers) {
@@ -302,7 +278,6 @@ LRESULT onKey(const HookSnapshot& snapshot, const KBDLLHOOKSTRUCT* info, bool up
 		held = HeldKey {.id = trigger.id, .serial = snapshot.serial, .lastTime = info->time, .active = true};
 		post(HookPressed, trigger.id, snapshot.serial);
 
-		// The swallowed key would otherwise leave a lone Win (Alt) press behind.
 		if ((mods & (ModSuper | ModAlt)) != 0) injectMask();
 		return 1;
 	}
@@ -316,8 +291,6 @@ LRESULT CALLBACK hookProc(int code, WPARAM wParam, LPARAM lParam) {
 	auto* info = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam); // NOLINT(performance-no-int-to-ptr)
 	qs::windows::noteHookDelay(true, info->time);
 
-	// Our own mask keys and re-sent releases. Other injected input (on-screen keyboards,
-	// automation tools) is handled like real input.
 	if ((info->flags & LLKHF_INJECTED) != 0 && info->dwExtraInfo == KeyboardHook::INJECTION_MARKER) {
 		return CallNextHookEx(nullptr, code, wParam, lParam);
 	}
@@ -337,12 +310,10 @@ LRESULT CALLBACK hookProc(int code, WPARAM wParam, LPARAM lParam) {
 }
 
 void hookThreadMain(HANDLE readyEvent) {
-	// Create the message queue before signaling so an early WM_QUIT from stop() isn't lost.
 	MSG msg {};
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 	gThreadId.store(GetCurrentThreadId());
 
-	// Keystrokes wait for this thread; don't let busy normal priority threads delay them.
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
 	auto* hook = SetWindowsHookExW(WH_KEYBOARD_LL, &hookProc, GetModuleHandleW(nullptr), 0);
@@ -366,7 +337,6 @@ void hookThreadMain(HANDLE readyEvent) {
 	SetEvent(readyEvent);
 	if (hook == nullptr) return;
 
-	// Low level hooks are called from this thread's message loop.
 	while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
 		TranslateMessage(&msg);
 		DispatchMessageW(&msg);
