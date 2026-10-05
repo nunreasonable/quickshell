@@ -1,5 +1,6 @@
 #include "panel_window.hpp"
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 #include <qt_windows.h>
@@ -52,6 +53,38 @@ void setChildStyle(HWND hwnd, bool child) {
 bool forceLayeredDesktopPanels() {
 	static const bool force = qEnvironmentVariableIntValue("QS_DESKTOP_LAYERED") != 0;
 	return force;
+}
+
+// Explorer restacking the icons list over a panel above the icons on every restack of ours would
+// be a fight; past this many restacks in RESTACK_WINDOW_MS the panel stays where it is.
+constexpr int MAX_RESTACKS = 20;
+constexpr DWORD RESTACK_WINDOW_MS = 5000;
+
+// A region in logical window coordinates as physical pixels, rounded outwards.
+QRegion toPhysicalRegion(const QRegion& region, qreal dpr) {
+	QRegion physical;
+
+	for (const auto& rect: region) {
+		auto left = static_cast<int>(std::floor(rect.x() * dpr));
+		auto top = static_cast<int>(std::floor(rect.y() * dpr));
+		auto right = static_cast<int>(std::ceil((rect.x() + rect.width()) * dpr));
+		auto bottom = static_cast<int>(std::ceil((rect.y() + rect.height()) * dpr));
+		physical += QRect(left, top, right - left, bottom - top);
+	}
+
+	return physical;
+}
+
+HRGN toHrgn(const QRegion& region) {
+	auto* hrgn = CreateRectRgn(0, 0, 0, 0);
+
+	for (const auto& rect: region) {
+		auto* part = CreateRectRgn(rect.x(), rect.y(), rect.x() + rect.width(), rect.y() + rect.height());
+		CombineRgn(hrgn, hrgn, part, RGN_OR);
+		DeleteObject(part);
+	}
+
+	return hrgn;
 }
 } // namespace
 
@@ -204,6 +237,14 @@ WinPanelWindow::WinPanelWindow(QObject* parent)
 	    queued
 	);
 	QObject::connect(host, &DesktopHost::parentMoved, this, &WinPanelWindow::placeEmbedded, queued);
+	QObject::connect(
+	    host,
+	    &DesktopHost::aboveIconsChanged,
+	    this,
+	    &WinPanelWindow::updateLayer,
+	    queued
+	);
+	QObject::connect(host, &DesktopHost::iconsRestacked, this, &WinPanelWindow::keepAboveIcons);
 }
 
 WinPanelWindow::~WinPanelWindow() {
@@ -224,7 +265,13 @@ ProxiedWindow* WinPanelWindow::retrieveWindow(QObject* oldInstance) {
 	// And the window stays inside the desktop.
 	this->mEmbedParent = old->mEmbedParent;
 	this->mEmbedInsertAfter = old->mEmbedInsertAfter;
+	this->mEmbedAboveIcons = old->mEmbedAboveIcons;
 	this->mEmbedRect = old->mEmbedRect;
+	// Along with the region it carries, until this panel's mask comes.
+	this->mInputMask = old->mInputMask;
+	this->mHasInputMask = old->mHasInputMask;
+	this->mAppliedRegion = old->mAppliedRegion;
+	this->mRegionApplied = old->mRegionApplied;
 
 	return old->disownWindow();
 }
@@ -261,6 +308,9 @@ void WinPanelWindow::connectWindow() {
 	if (this->hwnd() == nullptr) {
 		this->mEmbedParent = nullptr;
 		this->mEmbedInsertAfter = nullptr;
+		this->mEmbedAboveIcons = false;
+		this->mRegionApplied = false;
+		this->mAppliedRegion = QRegion();
 	}
 
 	// Qt::Tool gives WS_EX_TOOLWINDOW: no taskbar button, no alt-tab entry, and the shell shows
@@ -302,6 +352,9 @@ void WinPanelWindow::releaseNativeState() {
 	// destroyed with its parent's region repainted by explorer.
 	this->mEmbedParent = nullptr;
 	this->mEmbedInsertAfter = nullptr;
+	this->mEmbedAboveIcons = false;
+	this->mRegionApplied = false;
+	this->mButtonHeld = false;
 	this->destroyedHwnd = nullptr;
 }
 
@@ -369,6 +422,9 @@ void WinPanelWindow::applyNativeStyles() {
 	if (this->mEmbedParent != nullptr) {
 		// Qt rewrites the styles of what it takes for a top level window as a popup's.
 		setChildStyle(hwnd, true);
+		// Clicks and the window's destruction aren't reported to explorer's windows: they don't
+		// expect a child they didn't create.
+		setExStyleBits(hwnd, WS_EX_NOPARENTNOTIFY, true);
 
 		if (forceLayeredDesktopPanels()) {
 			setExStyleBits(hwnd, WS_EX_LAYERED, true);
@@ -615,10 +671,16 @@ bool WinPanelWindow::reservesSpace() const {
 }
 
 bool WinPanelWindow::wantsEmbedding() const {
-	// Wallpapers and desktop widgets. Inside the desktop the icons view covers them, so
-	// anything that has to take input, or pushes windows away, stays a window.
+	// Wallpapers and desktop widgets. Anything that takes keyboard focus, or pushes windows
+	// away, stays a window.
 	return DesktopHost::instance()->enabled() && this->bLayer.value() <= PanelLayer::Bottom
 	    && this->bKeyboardFocus.value() == PanelKeyboardFocus::None && !this->reservesSpace();
+}
+
+bool WinPanelWindow::wantsAboveIcons() const {
+	// The icons view covers the desktop behind it and takes every click there, so desktop
+	// widgets that take the mouse go above the icons, by namespace like a compositor's rules.
+	return DesktopHost::instance()->aboveIcons().contains(this->bNamespace.value());
 }
 
 void WinPanelWindow::updateEmbedding() {
@@ -629,21 +691,33 @@ void WinPanelWindow::updateEmbedding() {
 	if (this->mEmbedParent != nullptr && GetAncestor(hwnd, GA_PARENT) != this->mEmbedParent) {
 		this->mEmbedParent = nullptr;
 		this->mEmbedInsertAfter = nullptr;
+		this->mEmbedAboveIcons = false;
 	}
 
 	auto* host = DesktopHost::instance();
-	auto* parent = this->wantsEmbedding() ? host->parentWindow() : nullptr;
+	auto embed = this->wantsEmbedding();
+	auto aboveIcons = embed && this->wantsAboveIcons();
+
+	HWND parent = nullptr;
+	// Without an icons view, a panel that takes input is better off as a window than out of
+	// reach behind the icons.
+	if (embed) parent = aboveIcons ? host->iconsHost() : host->parentWindow();
 	// Refused once (DPI awareness or integrity mismatch): it would be refused again.
 	if (parent != nullptr && parent == this->embedRefusedBy) parent = nullptr;
-	auto* insertAfter = parent == nullptr ? nullptr : host->insertAfter();
+	if (parent == nullptr) aboveIcons = false;
+	auto* insertAfter = parent == nullptr || aboveIcons ? nullptr : host->insertAfter();
 
-	if (parent == this->mEmbedParent && insertAfter == this->mEmbedInsertAfter) return;
+	if (parent == this->mEmbedParent && insertAfter == this->mEmbedInsertAfter
+	    && aboveIcons == this->mEmbedAboveIcons)
+	{
+		return;
+	}
 
-	if (parent != nullptr) this->embedInto(parent, insertAfter);
+	if (parent != nullptr) this->embedInto(parent, insertAfter, aboveIcons);
 	else this->unembed();
 }
 
-void WinPanelWindow::embedInto(HWND parent, HWND insertAfter) {
+void WinPanelWindow::embedInto(HWND parent, HWND insertAfter, bool aboveIcons) {
 	auto* hwnd = this->hwnd();
 	auto wasEmbedded = this->mEmbedParent != nullptr;
 
@@ -658,6 +732,7 @@ void WinPanelWindow::embedInto(HWND parent, HWND insertAfter) {
 	// Set first: SetParent's own messages already go to a child.
 	this->mEmbedParent = parent;
 	this->mEmbedInsertAfter = insertAfter;
+	this->mEmbedAboveIcons = aboveIcons;
 
 	SetLastError(0);
 	if (SetParent(hwnd, parent) == nullptr && GetLastError() != 0) {
@@ -669,19 +744,23 @@ void WinPanelWindow::embedInto(HWND parent, HWND insertAfter) {
 		else {
 			this->mEmbedParent = nullptr;
 			this->mEmbedInsertAfter = nullptr;
+			this->mEmbedAboveIcons = false;
 			setChildStyle(hwnd, false);
 		}
 		return;
 	}
 
-	qCDebug(logPanel) << "Put" << this << "into the desktop window" << parent;
+	qCDebug(logPanel) << "Put" << this << "into the desktop window" << parent
+	                  << (aboveIcons ? "above the icons" : "behind the icons");
 
 	this->embedRefusedBy = nullptr;
+	this->restackCount = 0;
 	// Left by the virtual desktop manager along with the top level window list.
 	this->pinnedToAllDesktops = false;
 	this->appBar.remove();
 	this->applyNativeStyles();
 	this->placeEmbedded();
+	this->routeInputMask();
 	// The blur backdrop is a top level window behind the panel: off inside the desktop.
 	this->blur->attach();
 }
@@ -691,11 +770,16 @@ void WinPanelWindow::unembed() {
 	auto wasEmbedded = this->mEmbedParent != nullptr;
 	this->mEmbedParent = nullptr;
 	this->mEmbedInsertAfter = nullptr;
+	this->mEmbedAboveIcons = false;
+	this->mButtonHeld = false;
 	if (hwnd == nullptr || !wasEmbedded) return;
 
 	SetParent(hwnd, nullptr);
 	setChildStyle(hwnd, false);
+	setExStyleBits(hwnd, WS_EX_NOPARENTNOTIFY, false);
 	if (forceLayeredDesktopPanels()) setExStyleBits(hwnd, WS_EX_LAYERED, false);
+	// The input mask goes back to click-through toggling, without a window region.
+	this->routeInputMask();
 
 	// The same spot on screen, now in screen coordinates. The caller restacks it.
 	UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED;
@@ -722,13 +806,15 @@ void WinPanelWindow::placeEmbedded() {
 
 	auto rect = this->embeddedRect();
 	UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER;
-	// Inside Progman, the icons view is a sibling and explorer may restack its children.
-	if (this->mEmbedInsertAfter == nullptr) flags |= SWP_NOZORDER;
+	// Inside Progman, the icons view is a sibling and explorer may restack its children. Above
+	// the icons, it is a sibling too.
+	auto* insertAfter = this->mEmbedAboveIcons ? HWND_TOP : this->mEmbedInsertAfter;
+	if (insertAfter == nullptr && !this->mEmbedAboveIcons) flags |= SWP_NOZORDER;
 
 	this->placingEmbedded = true;
 	SetWindowPos(
 	    hwnd,
-	    this->mEmbedInsertAfter,
+	    insertAfter,
 	    rect.x(),
 	    rect.y(),
 	    rect.width(),
@@ -736,6 +822,93 @@ void WinPanelWindow::placeEmbedded() {
 	    flags
 	);
 	this->placingEmbedded = false;
+
+	// The device pixel ratio may have changed with the screen.
+	if (this->mEmbedAboveIcons) this->applyInputRegion();
+}
+
+void WinPanelWindow::keepAboveIcons() {
+	auto* hwnd = this->hwnd();
+	if (hwnd == nullptr || !this->mEmbedAboveIcons) return;
+
+	auto covered = false;
+	for (auto* above = GetWindow(hwnd, GW_HWNDPREV); above != nullptr;
+	     above = GetWindow(above, GW_HWNDPREV))
+	{
+		// Other panels above the icons may come first, in any order.
+		if (IsWindowVisible(above) && !isOwnProcessWindow(above)) {
+			covered = true;
+			break;
+		}
+	}
+
+	if (!covered) return;
+
+	auto now = GetTickCount();
+	if (this->restackCount == 0 || now - this->restackWindowStart > RESTACK_WINDOW_MS) {
+		this->restackCount = 0;
+		this->restackWindowStart = now;
+	}
+
+	if (++this->restackCount > MAX_RESTACKS) {
+		if (this->restackCount == MAX_RESTACKS + 1) {
+			qCWarning(logPanel) << "Explorer keeps covering" << this
+			                    << "with the desktop icons; leaving it there";
+		}
+
+		return;
+	}
+
+	qCDebug(logPanel) << "Putting" << this << "back above the desktop icons";
+	this->placeEmbedded();
+}
+
+void WinPanelWindow::routeInputMask() {
+	if (this->window == nullptr) return;
+	auto* tracker = InputMaskTracker::instance();
+
+	// Hit testing only passes a child window by (click-through) to windows of the same thread,
+	// never to explorer's icons below it, so above the icons the mask is the window region
+	// instead. That also clips what is drawn outside it.
+	if (this->mHasInputMask && !this->mEmbedAboveIcons) {
+		tracker->setMask(this->window, this->mInputMask);
+	} else {
+		tracker->remove(this->window);
+	}
+
+	this->applyInputRegion();
+}
+
+void WinPanelWindow::applyInputRegion() {
+	auto* hwnd = this->hwnd();
+	if (hwnd == nullptr || this->window == nullptr) return;
+
+	// Lifted while a button is held: the window has the mouse captured anyway, and a widget being
+	// dragged isn't clipped by a region that lags a frame behind it.
+	auto wantsRegion = this->mEmbedAboveIcons && this->mHasInputMask && !this->mButtonHeld;
+	auto region = wantsRegion ? toPhysicalRegion(this->mInputMask, this->window->devicePixelRatio())
+	                          : QRegion();
+
+	if (wantsRegion == this->mRegionApplied && region == this->mAppliedRegion) return;
+
+	// An empty region is a window without input and without anything drawn, like an empty mask.
+	auto* hrgn = wantsRegion ? toHrgn(region) : nullptr;
+
+	// the system owns the region from here on
+	if (SetWindowRgn(hwnd, hrgn, TRUE) == 0) {
+		if (hrgn != nullptr) DeleteObject(hrgn);
+		qCWarning(logPanel) << "Could not set the window region of" << this;
+		return;
+	}
+
+	this->mRegionApplied = wantsRegion;
+	this->mAppliedRegion = region;
+}
+
+void WinPanelWindow::setButtonHeld(bool held) {
+	if (held == this->mButtonHeld) return;
+	this->mButtonHeld = held;
+	this->applyInputRegion();
 }
 
 void WinPanelWindow::onWindowScreenChanged() {
@@ -838,8 +1011,9 @@ void WinPanelWindow::scheduleFocusGrab() {
 void WinPanelWindow::applyInputMask(const QRegion& region, bool hasMask) {
 	if (this->window == nullptr) return;
 
-	if (hasMask) InputMaskTracker::instance()->setMask(this->window, region);
-	else InputMaskTracker::instance()->remove(this->window);
+	this->mInputMask = region;
+	this->mHasInputMask = hasMask;
+	this->routeInputMask();
 
 	this->blur->setInputMask(region, hasMask);
 }
@@ -878,11 +1052,36 @@ bool WinPanelWindow::handleNativeMessage(MSG* msg, qintptr* result) {
 			*result = 0;
 			return true;
 		}
+		case WM_LBUTTONDOWN:
+		case WM_LBUTTONDBLCLK:
+		case WM_RBUTTONDOWN:
+		case WM_RBUTTONDBLCLK:
+		case WM_MBUTTONDOWN:
+		case WM_MBUTTONDBLCLK:
+		case WM_XBUTTONDOWN:
+		case WM_XBUTTONDBLCLK:
+			if (this->mEmbedAboveIcons) this->setButtonHeld(true);
+			break;
+		// Before Qt handles the release, so the capture Qt took on the press is still there; its
+		// release comes as WM_CAPTURECHANGED.
+		case WM_LBUTTONUP:
+		case WM_RBUTTONUP:
+		case WM_MBUTTONUP:
+		case WM_XBUTTONUP:
+			if (GetCapture() != msg->hwnd) this->setButtonHeld(false);
+			break;
+		case WM_CAPTURECHANGED:
+			if (reinterpret_cast<HWND>(msg->lParam) != msg->hwnd) this->setButtonHeld(false); // NOLINT
+			break;
 		case WM_DESTROY:
 			// Explorer went away (crash, restart) and took its desktop's child windows, this one
 			// included. Qt would keep rendering to the dead handle, so the window is replaced.
 			this->mEmbedParent = nullptr;
 			this->mEmbedInsertAfter = nullptr;
+			this->mEmbedAboveIcons = false;
+			this->mRegionApplied = false;
+			this->mAppliedRegion = QRegion();
+			this->mButtonHeld = false;
 			this->destroyedHwnd = msg->hwnd;
 			this->visibleWhenDestroyed = this->window->isVisible();
 			QTimer::singleShot(0, this, &WinPanelWindow::recreateDestroyedWindow);

@@ -4,6 +4,7 @@
 
 #include <qobject.h>
 #include <qqmlintegration.h>
+#include <qstringlist.h>
 #include <qtclasshelpermacros.h>
 #include <qtimer.h>
 #include <qtmetamacros.h>
@@ -26,6 +27,15 @@ namespace qs::windows {
 // Without a WorkerW, Progman draws the wallpaper itself; panels then go into Progman right
 // below the icons view.
 //
+// Desktop widgets that take the mouse can't live back there: the icons view (SHELLDLL_DefView)
+// covers the whole desktop and takes every click. Those go right above the icons view, into the
+// window holding it (Progman, or the top level WorkerW before 24H2), with their input mask as
+// their window region so the icons get the clicks everywhere else. Inside the icons view itself
+// would follow it around, but how explorer draws it changed across builds (on 24H2 it may be
+// layered, no place to rely on for DirectX content), while children of Progman are where the
+// wallpaper panels are known to render. Explorer moves the icons view between Progman and a
+// WorkerW when it rebuilds the desktop, which is watched for.
+//
 // Child windows get none of the broadcasts top level windows get (TaskbarCreated, display
 // changes), so a hidden top level window listens for them, and a WinEvent hook follows the
 // parent's moves and destruction.
@@ -45,6 +55,13 @@ public:
 	[[nodiscard]] HWND parentWindow();
 	// Sibling to place desktop panels right below, when the parent also holds the icons view.
 	[[nodiscard]] HWND insertAfter() const { return this->mInsertAfter; }
+	// The window holding the icons view, where desktop panels that take input go (above the
+	// icons view), or null.
+	[[nodiscard]] HWND iconsHost();
+
+	// Namespaces of desktop panels that go above the icons instead of behind them.
+	[[nodiscard]] QStringList aboveIcons() const { return this->mAboveIcons; }
+	void setAboveIcons(const QStringList& namespaces);
 
 	// Enabled and a desktop window was found.
 	[[nodiscard]] bool active() const { return this->mEnabled && this->mParent != nullptr; }
@@ -54,8 +71,13 @@ signals:
 	void activeChanged();
 	// Desktop panels have to be re-parented (or put back as top level windows).
 	void parentChanged();
-	// The parent moved or resized (it spans the virtual screen): re-place the panels in it.
+	// The parent or the icons view moved or resized (they span the virtual screen): re-place the
+	// panels in them.
 	void parentMoved();
+	void aboveIconsChanged();
+	// Explorer created, showed or restacked something next to the icons view: panels above the
+	// icons make sure they still are.
+	void iconsRestacked();
 
 private:
 	explicit DesktopHost(QObject* parent);
@@ -83,11 +105,15 @@ private:
 	bool lookedUp = false;
 	HWND mParent = nullptr;
 	HWND mInsertAfter = nullptr;
+	HWND mIconsView = nullptr;
+	HWND mIconsHost = nullptr;
+	QStringList mAboveIcons;
 	HWND listener = nullptr;
 	HWINEVENTHOOK hook = nullptr;
 	HWINEVENTHOOK moveHook = nullptr;
 	DWORD hookThread = 0;
 	bool movePending = false;
+	bool restackPending = false;
 	QTimer refreshTimer;
 };
 
@@ -97,8 +123,10 @@ private:
 /// part of the Windows desktop, behind the desktop icons, instead of separate windows: they
 /// stay out of Alt+Tab, Task View and the taskbar and stay visible through Show Desktop.
 ///
-/// The icons view covers the whole desktop, so these panels get no mouse input. If explorer
-/// has no desktop window to put them in (or Windows refuses), they stay bottom-most windows.
+/// The icons view covers the whole desktop, so panels behind it get no mouse input. Desktop
+/// widgets that have to be clicked or dragged go above the icons instead (see @@aboveIcons),
+/// still inside the desktop. If explorer has no desktop window to put them in (or Windows
+/// refuses), they stay bottom-most windows.
 class DesktopLayer: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
@@ -108,6 +136,13 @@ class DesktopLayer: public QObject {
 	Q_PROPERTY(bool enabled READ enabled WRITE setEnabled NOTIFY enabledChanged);
 	/// True while desktop panels are actually inside the desktop.
 	Q_PROPERTY(bool active READ active NOTIFY activeChanged);
+	/// Namespaces (`WlrLayershell.namespace`) of desktop panels that go above the desktop icons
+	/// instead of behind them, so they get the mouse. Such a panel only takes input inside its
+	/// @@Quickshell.QsWindow.mask (the icons get the rest of the desktop) and is only drawn
+	/// there, so the mask should cover everything it draws, shadows included. Without a mask it
+	/// covers the icons. Still part of the desktop: below every application window and on
+	/// screen through Show Desktop.
+	Q_PROPERTY(QStringList aboveIcons READ aboveIcons WRITE setAboveIcons NOTIFY aboveIconsChanged);
 	// clang-format on
 
 public:
@@ -118,9 +153,13 @@ public:
 
 	[[nodiscard]] bool active() const;
 
+	[[nodiscard]] QStringList aboveIcons() const;
+	void setAboveIcons(const QStringList& namespaces);
+
 signals:
 	void enabledChanged();
 	void activeChanged();
+	void aboveIconsChanged();
 };
 
 } // namespace qs::windows

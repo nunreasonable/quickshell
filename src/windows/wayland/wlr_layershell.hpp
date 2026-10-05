@@ -23,10 +23,12 @@ QML_ELEMENT;
 
 enum Enum : quint8 {
 	/// Directly above the desktop, below every other window. Behind the desktop icons instead
-	/// while @@Quickshell.Windows.DesktopLayer.enabled is set.
+	/// while @@Quickshell.Windows.DesktopLayer.enabled is set (or above them, see
+	/// @@Quickshell.Windows.DesktopLayer.aboveIcons).
 	Background = 0,
 	/// A normal window that is not kept on top. Behind the desktop icons, like `Background`,
-	/// while @@Quickshell.Windows.DesktopLayer.enabled is set.
+	/// while @@Quickshell.Windows.DesktopLayer.enabled is set, or above them if its namespace is
+	/// in @@Quickshell.Windows.DesktopLayer.aboveIcons.
 	Bottom = 1,
 	/// Always on top of normal windows, lowered while a fullscreen application is active.
 	Top = 2,
@@ -71,7 +73,8 @@ class WlrLayershell: public QObject {
 	Q_OBJECT;
 	/// The shell layer the window sits in. Defaults to `WlrLayer.Top`.
 	Q_PROPERTY(qs::wayland::layershell::WlrLayer::Enum layer READ layer WRITE setLayer NOTIFY layerChanged);
-	/// Identifier of the window for external tools. Stored only, for now.
+	/// Identifier of the window for external tools and rules, such as
+	/// @@Quickshell.Windows.DesktopLayer.aboveIcons.
 	Q_PROPERTY(QString namespace READ ns WRITE setNamespace NOTIFY namespaceChanged);
 	/// The degree of keyboard focus taken. Defaults to `WlrKeyboardFocus.None`.
 	Q_PROPERTY(qs::wayland::layershell::WlrKeyboardFocus::Enum keyboardFocus READ keyboardFocus WRITE setKeyboardFocus NOTIFY keyboardFocusChanged);
