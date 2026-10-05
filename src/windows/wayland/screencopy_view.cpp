@@ -34,9 +34,6 @@ Q_LOGGING_CATEGORY(logScreencopy, "quickshell.windows.screencopy", QtWarningMsg)
 
 constexpr int LIVE_FPS = 30;
 
-// Scene graph node holding the Qt side of a capture: the shared frame opened on Qt's D3D11
-// device and a Qt owned texture it is copied into (so Qt can sample it without holding the
-// keyed mutex across the whole render pass). Lives on the render thread only.
 class CaptureNode: public QSGSimpleTextureNode {
 public:
 	explicit CaptureNode(QQuickWindow* window): window(window) {
@@ -53,8 +50,6 @@ public:
 
 	[[nodiscard]] bool hasTexture() const { return this->sgTexture != nullptr; }
 
-	// Brings the node up to date with the latest published frame. Returns false if the content
-	// could not be copied this time (producer mid-write); the caller then asks for another sync.
 	bool sync(const std::shared_ptr<SharedFrame>& frame, quint64 serial) {
 		if (!frame) return true;
 
@@ -100,7 +95,6 @@ public:
 				}
 
 				this->size = frame->size;
-				// Window captures are premultiplied with transparent rounded corners.
 				this->sgTexture = QNativeInterface::QSGD3D11Texture::fromNative(
 				    this->texture,
 				    this->window,
@@ -117,7 +111,6 @@ public:
 		if (!this->reader.copyTo(context, this->texture)) return false;
 
 		this->serial = serial;
-		// Content changed under the same texture object; make sure a render pass follows.
 		this->markDirty(QSGNode::DirtyMaterial);
 		return true;
 	}
@@ -197,7 +190,6 @@ void ScreencopyView::setLive(bool live) {
 
 	if (this->mHandle) {
 		this->mHandle->setLive(live);
-		// Same as the wayland view: turning live on grabs a frame right away.
 		if (live) this->wantFrame = true;
 		this->syncSession();
 	}
@@ -234,7 +226,6 @@ void ScreencopyView::createContext() {
 	QObject::connect(this->mHandle, &CaptureHandle::stopped, this, &ScreencopyView::onCaptureStopped);
 
 	if (this->toplevel) {
-		// Minimized windows can't be captured; pause until restored.
 		QObject::connect(
 		    this->toplevel,
 		    &toplevel::Toplevel::minimizedChanged,
@@ -256,7 +247,6 @@ void ScreencopyView::destroyContext(bool update) {
 	}
 
 	if (this->mHandle) {
-		// Can run from inside the handle's own stopped() emission, so no plain delete.
 		this->mHandle->stop();
 		QObject::disconnect(this->mHandle, nullptr, this, nullptr);
 		this->mHandle->deleteLater();
@@ -359,8 +349,6 @@ QSGNode* ScreencopyView::updatePaintNode(QSGNode* oldNode, UpdatePaintNodeData* 
 	quint64 serial = 0;
 	auto frame = this->mHandle->latestFrame(&serial);
 
-	// A failed copy means the producer was writing; ask for another sync (allowed from here:
-	// the render loop records update() calls made during sync).
 	if (!node->sync(frame, serial)) this->update();
 
 	if (!node->hasTexture()) {

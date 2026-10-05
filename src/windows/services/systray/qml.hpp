@@ -10,12 +10,8 @@
 
 namespace qs::windows::services::systray {
 
-///! System tray
-/// Windows backend: the icons apps put in the notification area with `Shell_NotifyIcon`.
-/// Explorer keeps its own tray; see SystemTrayItem for how clicks and menus map.
 class SystemTray: public QObject {
 	Q_OBJECT;
-	/// List of all system tray icons.
 	QSDOC_TYPE_OVERRIDE(ObjectModel<qs::windows::services::systray::SystemTrayItem>*);
 	Q_PROPERTY(UntypedObjectModel* items READ items CONSTANT);
 	QML_ELEMENT;

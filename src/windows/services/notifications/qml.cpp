@@ -49,8 +49,6 @@ void NotificationServerQml::onPostReload() {
 		emit this->trackedNotificationsChanged();
 	});
 
-	// The mirror belongs to the process wide server and survives reloads; the newest
-	// generation's setting wins.
 	instance->setMirrorEnabled(this->mMirrorSystemNotifications);
 }
 

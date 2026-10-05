@@ -21,8 +21,6 @@
 #include <propidl.h>
 #include <propsys.h>
 
-// Must precede functiondiscoverykeys_devpkey.h in exactly one translation unit so the PKEY_*
-// constants it declares actually get storage (this SDK subset doesn't ship a lib for them).
 #include <initguid.h>
 #include <functiondiscoverykeys_devpkey.h>
 
@@ -39,9 +37,6 @@ Q_LOGGING_CATEGORY(logPwBackend, "quickshell.windows.pipewire.backend", QtWarnin
 
 bool ensureComInitialized() {
 	auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-	// S_FALSE: already initialized on this thread. RPC_E_CHANGED_MODE: initialized with a
-	// different concurrency model already (Qt's platform plugin does this for us) -- both fine,
-	// we just piggyback on the existing apartment.
 	if (hr == S_OK || hr == S_FALSE || hr == RPC_E_CHANGED_MODE) return true;
 	qCWarning(logPwBackend) << "CoInitializeEx failed:" << Qt::hex << hr;
 	return false;
@@ -68,8 +63,6 @@ QString propertyAsString(IPropertyStore* store, const PROPERTYKEY& key) {
 	PropVariantClear(&pv);
 	return result;
 }
-
-// --- IMMNotificationClient: default device / endpoint add-remove-state notifications ---
 
 class MMNotificationClient final
     : public IMMNotificationClient
@@ -162,8 +155,6 @@ private:
 	volatile LONG mRefCount = 1;
 };
 
-// --- IAudioSessionNotification: new per-application sessions on one endpoint ---
-
 class SessionNotificationClient final
     : public IAudioSessionNotification
     , public ComCallbackTarget<PwBackend> {
@@ -197,7 +188,7 @@ public:
 
 	HRESULT STDMETHODCALLTYPE OnSessionCreated(IAudioSessionControl* newSession) override {
 		if (newSession == nullptr) return S_OK;
-		newSession->AddRef(); // kept alive until the GUI thread adopts it
+		newSession->AddRef();
 
 		auto endpointId = this->mEndpointId;
 		if (auto* backend = this->target()) {
@@ -219,8 +210,6 @@ private:
 	volatile LONG mRefCount = 1;
 	const QString mEndpointId;
 };
-
-// --- IAudioSessionEvents: volume/mute/state/disconnect for one application session ---
 
 class SessionEventsCallback final
     : public IAudioSessionEvents
@@ -329,8 +318,6 @@ private:
 PwBackend::PwBackend(Pipewire* owner): owner(owner) {}
 
 PwBackend::~PwBackend() {
-	// Order matters: unregister notifications before releasing anything they could still fire
-	// a callback against.
 	if (this->notificationClient != nullptr && this->enumerator != nullptr) {
 		auto* client = static_cast<MMNotificationClient*>(this->notificationClient);
 		this->enumerator->UnregisterEndpointNotificationCallback(client);
@@ -507,7 +494,6 @@ void PwBackend::removeEndpoint(const QString& deviceId) {
 	auto entry = it.value();
 	this->endpoints.erase(it);
 
-	// Sessions belong to this endpoint; drop them first.
 	QStringList affectedSessions;
 	for (auto sessionIt = this->sessions.cbegin(); sessionIt != this->sessions.cend(); ++sessionIt) {
 		if (sessionIt.value().endpointId == deviceId) affectedSessions.append(sessionIt.key());
@@ -556,9 +542,6 @@ void PwBackend::adoptNewSession(const QString& endpointId, IAudioSessionControl*
 }
 
 void PwBackend::addSessionNode(const QString& endpointId, IAudioSessionControl* control) {
-	// `control` is a borrowed, already-AddRef'd pointer (per COM out-param convention); we hold
-	// our own separate reference via QueryInterface below, so always release this one on the
-	// way out.
 	class ReleaseGuard {
 	public:
 		explicit ReleaseGuard(IAudioSessionControl* ptr): ptr(ptr) {}
@@ -582,8 +565,6 @@ void PwBackend::addSessionNode(const QString& endpointId, IAudioSessionControl* 
 		return;
 	}
 
-	// IsSystemSoundsSession returns S_OK (not a BOOL) when this is the system sounds session;
-	// we don't want to expose it as a controllable "application".
 	if (ctrl2->IsSystemSoundsSession() == S_OK) {
 		ctrl2->Release();
 		return;
@@ -670,7 +651,7 @@ void PwBackend::addSessionNode(const QString& endpointId, IAudioSessionControl* 
 	entry.node = node;
 	entry.endpointId = endpointId;
 	entry.eventsCallback = events;
-	entry.control = ctrl2; // our own QueryInterface'd reference
+	entry.control = ctrl2;
 	entry.capturing = false;
 	this->sessions.insert(sessionKey, entry);
 
@@ -766,8 +747,6 @@ void PwBackend::setPreferredDefault(PwNode* node, bool isSink) {
 	auto* wideId = reinterpret_cast<LPCWSTR>(deviceId.utf16());
 	auto* config = static_cast<IPolicyConfig*>(this->policyConfig);
 
-	// Point every role at it; Windows itself only separates "communications" from the rest in
-	// a handful of apps (VoIP clients mostly), ii has no notion of that distinction.
 	config->SetDefaultEndpoint(wideId, eConsole);
 	config->SetDefaultEndpoint(wideId, eMultimedia);
 	config->SetDefaultEndpoint(wideId, eCommunications);

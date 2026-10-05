@@ -21,7 +21,7 @@
 namespace qs::windows::services::notifications {
 
 // NOLINTNEXTLINE(misc-use-internal-linkage)
-QS_DECLARE_LOGGING_CATEGORY(logNotifications); // server.cpp
+QS_DECLARE_LOGGING_CATEGORY(logNotifications);
 
 QString NotificationUrgency::toString(NotificationUrgency::Enum value) {
 	switch (value) {
@@ -96,8 +96,6 @@ void Notification::sendInlineReply(const QString& replyText) {
 		return;
 	}
 
-	// Nothing on Windows sends inline-reply actions (notifySend has no way to ask for one and
-	// toasts' reply boxes aren't reachable from outside the app), so there's no one to tell.
 	qCInfo(logNotifications) << "Inline reply to" << this << "has no receiver:" << replyText;
 
 	if (!this->bindableResident().value()) {
@@ -125,7 +123,6 @@ void Notification::updateProperties(
 	this->bTransient = hints.value("transient").toBool();
 	this->bDesktopEntry = hints.value("desktop-entry").toString();
 
-	// Over D-Bus this is a byte; notifySend stores an int. Clamp instead of trusting either.
 	this->bUrgency = hints.contains("urgency")
 	                   ? static_cast<NotificationUrgency::Enum>(
 	                         std::clamp(hints.value("urgency").toInt(), 0, 2)
@@ -140,7 +137,6 @@ void Notification::updateProperties(
 
 	this->bAppIcon = appIcon;
 
-	// No raw pixmap hints (image-data) on Windows: nothing produces them without D-Bus.
 	QString imagePath;
 	if (hints.contains("image-path")) imagePath = hints.value("image-path").toString();
 	else if (hints.contains("image_path")) imagePath = hints.value("image_path").toString();
@@ -173,7 +169,6 @@ void Notification::updateProperties(
 					this->bHasInlineReply = true;
 					this->bInlineReplyPlaceholder = text;
 				}
-				// skip inserting this action into action list
 				continue;
 			}
 

@@ -12,12 +12,6 @@ namespace qs::windows::services::mpris {
 class Mpris;
 class GsmtcWorker;
 
-///! GUI-thread owner of the GSMTC worker thread.
-/// Starts a dedicated MTA thread (`winrt::init_apartment(multi_threaded)`; Qt's GUI thread is
-/// STA and can't host WinRT calls, see docs/AGENTS.md) running a GsmtcWorker, and relays
-/// MprisPlayer control calls to it. The worker posts state back to `frontend` (an Mpris, GUI
-/// thread) via `QMetaObject::invokeMethod(..., Qt::QueuedConnection)`; never blocks the GUI
-/// thread on a WinRT async operation.
 class GsmtcBackend: public QObject {
 	Q_OBJECT;
 
@@ -26,8 +20,6 @@ public:
 	~GsmtcBackend() override;
 	Q_DISABLE_COPY_MOVE(GsmtcBackend);
 
-	// Each of these posts a command to the worker thread and returns immediately; the resulting
-	// property changes arrive later via Mpris::backendUpdate*, same as a real MPRIS player.
 	void play(quint64 sessionId);
 	void pause(quint64 sessionId);
 	void togglePlayPause(quint64 sessionId);
@@ -39,7 +31,7 @@ public:
 
 private:
 	QThread mThread;
-	GsmtcWorker* mWorker = nullptr; // lives in mThread; created/destroyed around its lifetime
+	GsmtcWorker* mWorker = nullptr;
 };
 
 } // namespace qs::windows::services::mpris

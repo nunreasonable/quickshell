@@ -1,7 +1,3 @@
-# Native Windows backend for Quickshell.Services.UPower (replaces the QML shim of the same URI).
-# GetSystemPowerStatus + RegisterPowerSettingNotification for the aggregate battery, and the
-# powrprof overlay scheme APIs for power profiles. No DBus involved.
-
 qt_add_library(quickshell-windows-upower STATIC
 	core.cpp
 	device.cpp

@@ -18,10 +18,6 @@ class QTimer;
 
 namespace qs::windows::services::notifications {
 
-///! Runs on ToastMirror's MTA thread and owns the UserNotificationListener.
-/// Created with no parent and moved to the thread before it starts; every method other than the
-/// constructor runs on that thread. Commands arrive as queued calls from ToastMirror, results go
-/// back the same way (`QMetaObject::invokeMethod(frontend, ..., Qt::QueuedConnection)`).
 class ToastMirrorWorker: public QObject {
 	Q_OBJECT;
 
@@ -35,8 +31,6 @@ public:
 	void removeToast(quint32 id);
 
 public slots:
-	// Connected to QThread::started/finished: the apartment and the listener live exactly as
-	// long as the thread.
 	void start();
 	void shutdown();
 
@@ -60,13 +54,13 @@ private:
 	winrt::event_token mChangedToken {};
 	bool mEvents = false;
 
-	QTimer* mPollTimer = nullptr;   // 2 s resync while polling
-	QTimer* mAccessTimer = nullptr; // re-reads the access status while it isn't Allowed
-	QTimer* mEventTimer = nullptr;  // coalesces bursts of NotificationChanged events
+	QTimer* mPollTimer = nullptr;
+	QTimer* mAccessTimer = nullptr;
+	QTimer* mEventTimer = nullptr;
 
 	bool mBaselined = false;
 	QSet<quint32> mKnown;
-	QHash<QString, QString> mLogos; // AUMID -> cached logo path ("" if Windows has none), this run
+	QHash<QString, QString> mLogos;
 
 	SystemNotificationAccess::Enum mAccess = SystemNotificationAccess::Unknown;
 	bool mActive = false;

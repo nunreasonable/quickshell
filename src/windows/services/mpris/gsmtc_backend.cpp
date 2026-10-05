@@ -14,8 +14,6 @@ GsmtcBackend::GsmtcBackend(Mpris* frontend) {
 	this->mWorker = new GsmtcWorker(frontend);
 	this->mWorker->moveToThread(&this->mThread);
 
-	// start()/shutdown() run on the worker thread itself: started() is emitted there right
-	// before QThread::exec() begins, finished() right after it ends (see gsmtc_worker.hpp).
 	QObject::connect(&this->mThread, &QThread::started, this->mWorker, &GsmtcWorker::start);
 	QObject::connect(&this->mThread, &QThread::finished, this->mWorker, &GsmtcWorker::shutdown);
 

@@ -13,10 +13,6 @@
 
 namespace qs::windows::services::pipewire {
 
-///! Monitors peak levels of an audio node.
-/// Backed by `IAudioMeterInformation`, polled at ~30Hz while `enabled` and @@node is set.
-/// Only hardware nodes (@@PwNode.isStream false) have a meter on Windows; the monitor reports
-/// silence for application stream nodes.
 class PwNodePeakMonitor: public QObject {
 	Q_OBJECT;
 	// clang-format off

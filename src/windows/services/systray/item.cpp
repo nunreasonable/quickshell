@@ -25,12 +25,8 @@ namespace {
 
 QS_LOGGING_CATEGORY(logTrayItem, "quickshell.windows.systray", QtWarningMsg);
 
-// What apps that don't set an icon get from their executable.
 constexpr int FALLBACK_ICON_SIZE = 32;
-// Apps answer TaskbarCreated within a moment; a click held longer than this is stale.
 constexpr ULONGLONG PENDING_MAX_MS = 4000;
-// NIM_SETVERSION comes right after the NIM_ADD that brings the callback message: wait for it,
-// so the held click goes out in the format the app asked for.
 constexpr int REPLAY_DELAY_MS = 150;
 
 } // namespace
@@ -38,7 +34,6 @@ constexpr int REPLAY_DELAY_MS = 150;
 QPixmap TrayIconImage::requestPixmap(const QString& /*id*/, QSize* size, const QSize& requestedSize) {
 	auto pixmap = QPixmap::fromImage(this->image);
 
-	// Apps hand over a single small icon sized for the taskbar's DPI.
 	if (!pixmap.isNull() && requestedSize.width() > 0 && requestedSize.height() > 0
 	    && pixmap.size() != requestedSize)
 	{
@@ -56,7 +51,6 @@ SystemTrayItem::SystemTrayItem(HWND hwnd, UINT uid, const QUuid& guid, QObject* 
     , guid(guid) {}
 
 bool SystemTrayItem::matches(HWND hwnd, UINT uid, const QUuid& guid) const {
-	// With NIF_GUID the GUID alone names the icon; without it, the window and id do.
 	if (!guid.isNull() && guid == this->guid) return true;
 	return hwnd != nullptr && hwnd == this->hwnd && uid == this->uid;
 }
@@ -77,9 +71,6 @@ void SystemTrayItem::update(const TrayIconMessage& message) {
 	} else if (!hadCallback && message.message == NIM_MODIFY && !message.seeded
 	           && message.callbackMessage >= WM_USER && message.callbackMessage <= 0xffff)
 	{
-		// The add that carried it went past us. Apps usually keep one NOTIFYICONDATA and only
-		// flag what changed, so the callback message (and the version they set) is still in
-		// there. Only an app message is taken: never a system one from a stray value.
 		this->callbackMessage = message.callbackMessage;
 		auto version = message.version;
 		if (version == NOTIFYICON_VERSION || version == NOTIFYICON_VERSION_4) this->version = version;
@@ -114,8 +105,6 @@ void SystemTrayItem::applyExplorerData(UINT callbackMessage, UINT version) {
 }
 
 void SystemTrayItem::refreshFromExplorer(const TrayIconMessage& message) {
-	// Explorer's list has the icon it shows now, which may be the one we already have: a new
-	// image would make every Image reload it.
 	if (!message.icon.isNull() && message.icon != this->image.image) {
 		this->image.image = message.icon;
 		this->updateIconSource();
@@ -153,21 +142,16 @@ void SystemTrayItem::updateIconSource() {
 		return;
 	}
 
-	// A new url per change, or Image keeps the cached pixmap.
 	this->image.imageChanged();
 	this->bIcon = this->image.url();
 }
 
 void SystemTrayItem::allowForeground() const {
-	// The app calls SetForegroundWindow before showing its menu or window, which Windows only
-	// lets it do with our blessing (we got the click). Without it its menu doesn't close when
-	// clicking elsewhere.
 	DWORD pid = 0;
 	GetWindowThreadProcessId(this->hwnd, &pid);
 	if (pid != 0) AllowSetForegroundWindow(pid);
 }
 
-// The icon's callback message, in the format the app chose with NIM_SETVERSION.
 void SystemTrayItem::send(UINT event) const {
 	if (this->callbackMessage == 0 || !this->ownerAlive()) return;
 
@@ -175,7 +159,6 @@ void SystemTrayItem::send(UINT event) const {
 	LPARAM lParam = 0;
 
 	if (this->version >= NOTIFYICON_VERSION_4) {
-		// The anchor point in screen coordinates, the event and the icon id.
 		POINT cursor {};
 		GetCursorPos(&cursor);
 		wParam = MAKEWPARAM(static_cast<WORD>(cursor.x), static_cast<WORD>(cursor.y));
@@ -185,19 +168,15 @@ void SystemTrayItem::send(UINT event) const {
 		lParam = event;
 	}
 
-	// Never wait on the app: some only return once their menu closes.
 	SendNotifyMessageW(this->hwnd, this->callbackMessage, wParam, lParam);
 }
 
 void SystemTrayItem::activate() {
-	// Explorer sends a double click message for the second click; some apps only open their
-	// window on that.
 	auto now = GetTickCount64();
 	auto doubleClick = this->lastActivate != 0 && now - this->lastActivate <= GetDoubleClickTime();
 	this->lastActivate = doubleClick ? 0 : now;
 
 	if (!this->hasCallback()) {
-		// The first click of the two is held already; the second makes it a double click.
 		this->hold(doubleClick && this->pending == Pending::Activate ? Pending::DoubleClick
 		                                                            : Pending::Activate);
 		return;
@@ -234,7 +213,6 @@ void SystemTrayItem::sendActivate(bool doubleClick) {
 	this->allowForeground();
 	this->send(doubleClick ? WM_LBUTTONDBLCLK : WM_LBUTTONDOWN);
 	this->send(WM_LBUTTONUP);
-	// Documented for version 4, but explorer sends it for version 3 too.
 	if (this->version >= NOTIFYICON_VERSION) this->send(NIN_SELECT);
 }
 
@@ -251,7 +229,6 @@ void SystemTrayItem::sendDisplay() {
 	if (this->version >= NOTIFYICON_VERSION) this->send(WM_CONTEXTMENU);
 }
 
-// Only the last click is kept: it's the one the user still waits on.
 void SystemTrayItem::hold(Pending action) {
 	this->pending = action;
 	this->pendingAt = GetTickCount64();

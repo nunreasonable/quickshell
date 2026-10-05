@@ -9,10 +9,6 @@
 
 namespace qs::windows::wayland {
 
-///! Keeps the display and system awake while enabled.
-/// Windows stand-in for the Wayland idle inhibitor, using a power request (shown by
-/// `powercfg /requests`). `window` is accepted for compatibility; Windows doesn't tie power
-/// requests to a surface, so the inhibitor applies while `enabled` is true.
 class IdleInhibitor: public QObject {
 	Q_OBJECT;
 	// clang-format off

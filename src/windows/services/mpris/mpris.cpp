@@ -21,8 +21,6 @@ Mpris::Mpris(QObject* parent): QObject(parent) {
 }
 
 Mpris::~Mpris() {
-	// Stop the GSMTC worker thread first so no more backendXxx calls can land on players that
-	// are about to be destroyed by ~QObject below (they're parented to this).
 	this->mBackend.reset();
 }
 

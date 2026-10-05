@@ -1,9 +1,3 @@
-# Stand-in for the Quickshell.Wayland module, which is not built on Windows. It carries the
-# WlrLayershell attached object so configurations using it keep working, the IdleInhibitor,
-# ToplevelManager / Toplevel backed by the Windows window tracker, and ScreencopyView on
-# Windows.Graphics.Capture (frames reach the D3D11 scene graph as shared textures). The session
-# lock types are still QML stubs until something backs them.
-
 qt_add_library(quickshell-windows-wayland STATIC
 	wlr_layershell.cpp
 	idle_inhibitor.cpp

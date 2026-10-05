@@ -12,8 +12,6 @@
 
 #include "pw_types.hpp"
 
-// Forward declared COM interfaces so this header doesn't need to pull in the Core Audio
-// headers; only pw_node.cpp touches their members.
 struct IAudioEndpointVolume;
 struct ISimpleAudioVolume;
 struct IAudioMeterInformation;
@@ -22,10 +20,6 @@ namespace qs::windows::services::pipewire {
 
 class PwNode;
 
-///! Audio specific properties of a pipewire node.
-/// Backed by `IAudioEndpointVolume` for hardware sinks/sources, or `ISimpleAudioVolume` for
-/// per-application streams. Unlike upstream, these are always valid: Core Audio has no
-/// separate "unbound" state, so @@PwObjectTracker is a no-op on Windows.
 class PwNodeAudio: public QObject {
 	Q_OBJECT;
 	// clang-format off
@@ -42,9 +36,7 @@ public:
 	~PwNodeAudio() override;
 	Q_DISABLE_COPY_MOVE(PwNodeAudio);
 
-	// Takes ownership of (one reference to) the endpoint volume control of a hardware node.
 	void bindEndpoint(IAudioEndpointVolume* endpointVolume);
-	// Takes ownership of (one reference to) the per-session volume control of an app stream.
 	void bindSession(ISimpleAudioVolume* sessionVolume);
 
 	[[nodiscard]] bool isMuted() const;
@@ -58,7 +50,6 @@ public:
 	[[nodiscard]] QVector<float> volumes() const;
 	void setVolumes(const QVector<float>& volumes);
 
-	// Called (always on the GUI thread) by the Core Audio change callbacks.
 	void applyVolumeMuted(float volume, bool muted);
 
 signals:
@@ -70,12 +61,9 @@ signals:
 private:
 	IAudioEndpointVolume* mEndpointVolume = nullptr;
 	ISimpleAudioVolume* mSessionVolume = nullptr;
-	void* mEndpointCallback = nullptr; // EndpointVolumeCallback*, opaque here
+	void* mEndpointCallback = nullptr;
 };
 
-///! A node in the Core Audio graph, standing in for `Quickshell.Services.Pipewire`'s `PwNode`.
-/// Either a hardware endpoint (@@isStream false) or an application stream bound to one
-/// (@@isStream true): see @@Pipewire.nodes.
 class PwNode: public QObject {
 	Q_OBJECT;
 	// clang-format off
@@ -124,13 +112,9 @@ public:
 	[[nodiscard]] bool isReady() const { return this->mReady; }
 	void setReady(bool ready);
 
-	// Core Audio endpoint id (`IMMDevice::GetId`) for a hardware node, or a synthetic
-	// "pid-instance" key for an application stream. Used by PwBackend for bookkeeping; not
-	// exposed to QML (upstream has no equivalent, it uses pipewire object ids for this).
 	[[nodiscard]] const QString& backendKey() const { return this->mBackendKey; }
 	void setBackendKey(const QString& key) { this->mBackendKey = key; }
 
-	// Only set on hardware nodes, used by PwNodePeakMonitor; not exposed to QML.
 	void setMeterInformation(IAudioMeterInformation* meter);
 	[[nodiscard]] IAudioMeterInformation* meterInformation() const { return this->mMeter; }
 

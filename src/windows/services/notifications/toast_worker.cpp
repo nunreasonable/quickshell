@@ -74,7 +74,6 @@ void ToastMirrorWorker::start() {
 		qCWarning(logToastMirror) << "init_apartment(multi_threaded) failed:" << Qt::hex << codeOf(e);
 	}
 
-	// Created here so they belong to this thread.
 	this->mPollTimer = new QTimer(this);
 	this->mPollTimer->setInterval(POLL_INTERVAL_MS);
 	QObject::connect(this->mPollTimer, &QTimer::timeout, this, [this] { this->resync(true); });
@@ -125,9 +124,6 @@ void ToastMirrorWorker::begin(bool request) {
 
 		auto status = this->mListener.GetAccessStatus();
 
-		// Only Unspecified is worth asking about: a Denied comes from the notification access
-		// switch in Settings, which only the user can flip back. With that switch on (the
-		// Windows default) the status is already Allowed for an unpackaged exe, no prompt.
 		if (request && status == UserNotificationListenerAccessStatus::Unspecified) {
 			status = this->mListener.RequestAccessAsync().get();
 		}
@@ -147,7 +143,6 @@ void ToastMirrorWorker::applyAccess(UserNotificationListenerAccessStatus status)
 
 	if (this->mAccess != SystemNotificationAccess::Allowed || !this->mEnabled) {
 		this->stop();
-		// Keep looking: the user may turn notification access on in Settings at any time.
 		if (this->mEnabled) this->mAccessTimer->start();
 		this->report();
 		return;
@@ -159,7 +154,6 @@ void ToastMirrorWorker::applyAccess(UserNotificationListenerAccessStatus status)
 		if (!this->mEvents) {
 			try {
 				this->mChangedToken = this->mListener.NotificationChanged([this](auto&&, auto&&) {
-					// Arbitrary thread pool thread: hop to ours before touching anything.
 					QMetaObject::invokeMethod(
 					    this,
 					    [this] {
@@ -170,7 +164,6 @@ void ToastMirrorWorker::applyAccess(UserNotificationListenerAccessStatus status)
 				});
 				this->mEvents = true;
 			} catch (const winrt::hresult_error& e) {
-				// 0x80070490 (ERROR_NOT_FOUND) without package identity, which is how qs runs.
 				qCInfo(logToastMirror) << "NotificationChanged unavailable (" << Qt::hex << codeOf(e)
 				                       << "), polling every" << POLL_INTERVAL_MS << "ms";
 			}
@@ -178,7 +171,7 @@ void ToastMirrorWorker::applyAccess(UserNotificationListenerAccessStatus status)
 
 		this->mActive = true;
 		this->mKnown.clear();
-		this->resync(false); // baseline: what's already in the notification center isn't new
+		this->resync(false);
 
 		if (this->mActive && !this->mEvents) this->mPollTimer->start();
 	}
@@ -211,12 +204,6 @@ void ToastMirrorWorker::stop() {
 		this->mEvents = false;
 	}
 
-	// Mirroring is stopping (access revoked, disabled, or the listener itself failed): nothing
-	// will tell the frontend about these toasts leaving the notification center from here on
-	// (the next resync(), if there is one, baselines silently -- see applyAccess). Without this,
-	// toasts mirrored before the stop stay in the server's tracked list forever: ghosts that
-	// never go away, and that can even reappear if the server ever re-emits its tracked list
-	// (e.g. a reload).
 	for (auto id: std::as_const(this->mKnown)) {
 		QMetaObject::invokeMethod(
 		    this->mFrontend,
@@ -236,7 +223,6 @@ void ToastMirrorWorker::resync(bool announce) {
 	try {
 		toasts = this->mListener.GetNotificationsAsync(NotificationKinds::Toast).get();
 	} catch (const winrt::hresult_error& e) {
-		// Most likely notification access was turned off in Settings while mirroring.
 		qCWarning(logToastMirror) << "GetNotificationsAsync failed:" << Qt::hex << codeOf(e);
 		this->stop();
 		this->mAccess = e.code() == E_ACCESSDENIED ? SystemNotificationAccess::Denied
@@ -284,7 +270,6 @@ void ToastMirrorWorker::resync(bool announce) {
 }
 
 void ToastMirrorWorker::removeToast(quint32 id) {
-	// Forget it first so the next resync doesn't report our own removal back.
 	this->mKnown.remove(id);
 	if (!this->mListener || !this->mActive) return;
 
@@ -317,8 +302,6 @@ ToastSnapshot ToastMirrorWorker::snapshotOf(const UserNotification& toast) {
 		auto visual = notification ? notification.Visual() : nullptr;
 
 		if (visual) {
-			// Toasts are ToastGeneric nowadays (legacy templates are converted, keeping the old
-			// name in a hint); fall back to whatever binding there is.
 			auto binding = visual.GetBinding(KnownNotificationBindings::ToastGeneric());
 			if (!binding && visual.Bindings().Size() != 0) binding = visual.Bindings().GetAt(0);
 
@@ -337,14 +320,11 @@ ToastSnapshot ToastMirrorWorker::snapshotOf(const UserNotification& toast) {
 }
 
 QString ToastMirrorWorker::logoFor(const AppInfo& info, const QString& aumid) {
-	// Fetched once per AUMID per run (and rewritten then, so app updates are picked up).
 	if (auto it = this->mLogos.constFind(aumid); it != this->mLogos.constEnd()) return *it;
 
 	QString path;
 
 	try {
-		// Null for unpackaged Win32 senders (PowerShell, most classic apps); the Start menu
-		// entry's shell icon covers those.
 		auto logo = info.DisplayInfo().GetLogo(winrt::Windows::Foundation::Size(LOGO_SIZE, LOGO_SIZE));
 		auto stream = logo ? logo.OpenReadAsync().get() : nullptr;
 

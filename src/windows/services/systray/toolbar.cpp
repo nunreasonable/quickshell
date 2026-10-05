@@ -12,23 +12,15 @@
 #include "../../util.hpp"
 #include "hook.hpp"
 
-// Explorer's notification area on Windows 10 (and in the first Windows 11 builds) is a set of
-// toolbar controls whose buttons each carry, in their dwData, a pointer to explorer's own
-// record of the icon. Its head is stable since Windows 7 and is what ManagedShell reads too:
-// window, id, callback message, state and version. Windows 11's newer XAML tray has no such
-// toolbars and this finds nothing there.
 namespace qs::windows::services::systray {
 
 namespace {
 
 QS_LOGGING_CATEGORY(logTrayToolbar, "quickshell.windows.systray", QtWarningMsg);
 
-// A hung explorer is skipped (SMTO_ABORTIFHUNG); a slow one isn't waited on for long.
 constexpr UINT TOOLBAR_TIMEOUT_MS = 300;
-// Way more than any notification area holds; bounds a toolbar answering nonsense.
 constexpr LRESULT MAX_BUTTONS = 512;
 
-// The head of explorer's per-icon record, in a 64 bit explorer.
 struct TrayItemHead {
 	HWND hwnd;
 	UINT uid;
@@ -43,9 +35,6 @@ bool hasClass(HWND hwnd, const wchar_t* name) {
 	return wcscmp(cls, name) == 0;
 }
 
-// The toolbars holding notification icons: under TrayNotifyWnd (its SysPager has the user's
-// icons, a toolbar of its own the system ones) and in NotifyIconOverflowWindow (the hidden
-// icons). Other toolbars on the taskbar (Links, Desktop...) carry other data and are left out.
 std::vector<HWND> trayToolbars() {
 	std::vector<HWND> toolbars;
 
@@ -87,7 +76,6 @@ std::vector<HWND> trayToolbars() {
 } // namespace
 
 std::vector<ExplorerIconData> readExplorerToolbars() {
-	// The record layout above is the 64 bit one, and explorer matches the system.
 	if constexpr (sizeof(void*) != 8) return {};
 
 	auto toolbars = trayToolbars();
@@ -97,8 +85,6 @@ std::vector<ExplorerIconData> readExplorerToolbars() {
 	GetWindowThreadProcessId(toolbars.front(), &pid);
 	if (pid == 0) return {};
 
-	// TB_GETBUTTON writes into the toolbar owner's memory, so the button goes through a buffer
-	// in explorer. Same user and integrity level: no extra rights needed.
 	auto* process = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ, FALSE, pid);
 	if (process == nullptr) {
 		qCDebug(logTrayToolbar) << "Can't open explorer to read its tray toolbars:" << GetLastError();
@@ -157,7 +143,6 @@ std::vector<ExplorerIconData> readExplorerToolbars() {
 				continue;
 			}
 
-			// Anything else means this isn't the record we think it is.
 			auto versionKnown = head.version == 0 || head.version == NOTIFYICON_VERSION
 			                 || head.version == NOTIFYICON_VERSION_4;
 			if (head.hwnd == nullptr || head.callbackMessage == 0 || !versionKnown) continue;

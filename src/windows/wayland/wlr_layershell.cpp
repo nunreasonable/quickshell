@@ -46,7 +46,6 @@ WlrLayershell* WlrLayershell::qmlAttachedProperties(QObject* object) {
 	else if (auto* window = qobject_cast<WinPanelWindow*>(object)) panel = window;
 	else return nullptr;
 
-	// One attached object per panel, whether it was reached through the interface or the window.
 	if (auto* attached = qobject_cast<WlrLayershell*>(panel->layershellAttached())) {
 		return attached;
 	}

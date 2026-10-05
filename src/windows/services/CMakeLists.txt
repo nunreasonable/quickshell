@@ -1,4 +1,3 @@
-# Shared infrastructure for native Windows service backends (not a QML module itself).
 qt_add_library(quickshell-windows-services STATIC
 	message_window.cpp
 )

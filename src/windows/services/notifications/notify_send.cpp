@@ -11,7 +11,7 @@
 namespace qs::windows::services::notifications {
 
 // NOLINTNEXTLINE(misc-use-internal-linkage)
-QS_DECLARE_LOGGING_CATEGORY(logNotifications); // server.cpp
+QS_DECLARE_LOGGING_CATEGORY(logNotifications);
 
 namespace {
 
@@ -49,7 +49,6 @@ const Option* findLong(const QString& name) {
 	return nullptr;
 }
 
-// --hint=TYPE:NAME:VALUE with libnotify's types (case-insensitive).
 void addHint(QVariantMap& hints, const QString& spec) {
 	auto first = spec.indexOf(':');
 	auto second = first == -1 ? -1 : spec.indexOf(':', first + 1);
@@ -110,7 +109,6 @@ void apply(NotifySendRequest& request, const Option& option, const QString& valu
 	case 'c': request.hints.insert("category", value); break;
 	case 'h': addHint(request.hints, value); break;
 	case 'A': {
-		// [NAME=]Text; without a name libnotify uses the action's index.
 		auto eq = value.indexOf('=');
 		if (eq > 0) {
 			request.actions << value.first(eq) << value.sliced(eq + 1);
@@ -128,7 +126,7 @@ void apply(NotifySendRequest& request, const Option& option, const QString& valu
 		break;
 	}
 	case 'e': request.hints.insert("transient", true); break;
-	default: break; // -p, -w: nothing to do here
+	default: break;
 	}
 }
 

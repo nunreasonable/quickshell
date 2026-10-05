@@ -19,7 +19,6 @@ ServiceMessageWindow::ServiceMessageWindow() {
 
 	this->mClassAtom = RegisterClassExW(&wc);
 
-	// HWND_MESSAGE: a message-only window, never shown, not part of any z-order.
 	this->mHwnd = CreateWindowExW(
 	    0,
 	    WINDOW_CLASS_NAME,

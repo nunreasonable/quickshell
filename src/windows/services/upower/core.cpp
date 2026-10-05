@@ -14,8 +14,6 @@ namespace qs::service::upower {
 namespace {
 QS_LOGGING_CATEGORY(logUPower, "quickshell.service.upower", QtWarningMsg);
 
-// Power setting GUIDs for RegisterPowerSettingNotification, by value from winnt.h (the
-// DEFINE_GUID declarations there need INITGUID in exactly one translation unit).
 // NOLINTBEGIN(cert-err58-cpp)
 const GUID kGuidAcDcPowerSource =
     {0x5d3e9a59, 0xe9d5, 0x4b00, {0xa6, 0xbd, 0xff, 0x34, 0xff, 0x51, 0x65, 0x48}};
@@ -51,8 +49,6 @@ UPowerQml::UPowerQml(QObject* parent): QObject(parent) {
 	this->batteryPercentNotify = registerSetting(window->hwnd(), kGuidBatteryPercentageRemaining);
 	this->energySaverNotify = registerSetting(window->hwnd(), kGuidEnergySaverStatus);
 
-	// Safety net: GetSystemPowerStatus is cheap, and this catches anything the notifications
-	// above miss.
 	this->pollTimer.setInterval(30000);
 	QObject::connect(&this->pollTimer, &QTimer::timeout, this, &UPowerQml::refresh);
 	this->pollTimer.start();

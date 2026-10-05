@@ -8,7 +8,6 @@
 #include <qstring.h>
 #include <qt_windows.h>
 
-// last: powersetting.h pulls in more of the power API surface than qt_windows.h does alone.
 #include <powersetting.h>
 
 #include "../../../core/logcat.hpp"
@@ -18,10 +17,6 @@ namespace qs::service::upower {
 namespace {
 QS_LOGGING_CATEGORY(logPowerProfiles, "quickshell.service.powerprofiles", QtWarningMsg);
 
-// PowerGetEffectiveOverlayScheme/PowerSetActiveOverlayScheme are genuine powrprof.dll exports
-// (present since Windows 10 1709), but neither this SDK snapshot's powrprof.h nor its import
-// library know about them, so they're resolved by hand with GetProcAddress instead of being
-// linked normally.
 using PowerGetEffectiveOverlaySchemeFn = DWORD(WINAPI*)(GUID*);
 using PowerSetActiveOverlaySchemeFn = DWORD(WINAPI*)(GUID);
 
@@ -46,12 +41,11 @@ struct OverlaySchemeApi {
 	}
 };
 
-// Overlay scheme GUIDs (powrprof.h doesn't declare these; they're identified by value only).
 const GUID GUID_OVERLAY_BEST_EFFICIENCY =
     {0x961cc777, 0x2547, 0x4f9d, {0x81, 0x74, 0x7d, 0x86, 0x18, 0x1b, 0x8a, 0x7a}};
 const GUID GUID_OVERLAY_BEST_PERFORMANCE =
     {0xded574b5, 0x45a0, 0x4f42, {0x87, 0x37, 0x46, 0x34, 0x5c, 0x09, 0xc2, 0x38}};
-const GUID GUID_OVERLAY_BALANCED = {0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0}}; // 00000000-0000-...
+const GUID GUID_OVERLAY_BALANCED = {0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0}};
 
 PowerProfile::Enum profileFromOverlayGuid(const GUID& guid) {
 	if (IsEqualGUID(guid, GUID_OVERLAY_BEST_EFFICIENCY)) return PowerProfile::PowerSaver;
@@ -67,8 +61,6 @@ GUID overlayGuidFromProfile(PowerProfile::Enum profile) {
 	}
 }
 
-// Called back on an arbitrary thread pool thread (per MSDN); hop back onto the Qt thread that
-// owns the singleton before touching any bindable property.
 void CALLBACK effectiveModeChanged(EFFECTIVE_POWER_MODE /*mode*/, void* context) {
 	auto* self = static_cast<PowerProfilesQml*>(context);
 	QMetaObject::invokeMethod(self, &PowerProfilesQml::refresh, Qt::QueuedConnection);
@@ -99,8 +91,6 @@ bool PowerProfileHold::operator==(const PowerProfileHold& other) const {
 }
 
 PowerProfilesQml::PowerProfilesQml(QObject* parent): QObject(parent) {
-	// Windows always offers a "Best performance" overlay scheme on desktop builds; there is no
-	// cheap, documented way to query scheme availability, so this mirrors the old QML shim.
 	this->bHasPerformanceProfile = true;
 	this->bDegradationReason = PerformanceDegradationReason::None;
 	this->bHolds = QList<PowerProfileHold> {};

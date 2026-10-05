@@ -1,9 +1,3 @@
-# Native replacement for the Quickshell.Services.SystemTray shim, with the QML API of the Linux
-# StatusNotifierItem module. Icons come from Shell_NotifyIcon traffic: a stand-in Shell_TrayWnd
-# on its own thread receives it and passes everything on to explorer's (hook.*), explorer's
-# ITrayNotify lists the icons that were there before us (seed.cpp), and explorer's tray toolbars
-# give their callback messages where they exist (toolbar.cpp, Windows 10).
-
 qt_add_library(quickshell-windows-systray STATIC
 	hook.cpp
 	seed.cpp
@@ -23,8 +17,6 @@ qs_add_module_deps_light(quickshell-windows-systray Quickshell)
 
 install_qml_module(quickshell-windows-systray)
 
-# quickshell-windows: util (finding explorer's taskbar) and the exe icon fallback (appicon).
-# version: executable descriptions for item titles.
 target_link_libraries(quickshell-windows-systray PRIVATE
 	Qt::Quick Qt::Gui quickshell-core quickshell-windows user32 shell32 ole32 version
 )

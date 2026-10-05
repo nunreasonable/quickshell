@@ -13,10 +13,6 @@
 
 namespace qs::windows::services::pipewire {
 
-///! A connection between pipewire nodes.
-/// Core Audio has no per-channel routing graph to report, so `Pipewire.links` is always empty
-/// and this type is never instantiated; kept only for API parity with upstream (see
-/// @@PwLinkGroup, which Windows uses instead to report mic/camera usage).
 class PwLink: public QObject {
 	Q_OBJECT;
 	// clang-format off
@@ -45,11 +41,6 @@ private:
 	PwNode* mSource = nullptr;
 };
 
-///! A group of connections between two pipewire nodes.
-/// Windows creates one of these for each application currently recording from a capture
-/// device, so configs that use this to show mic/camera "in use" indicators (as ii's
-/// `services/Privacy.qml` does) keep working. `source` is the capture device, `target` the
-/// recording application's stream; it only exists while that stream is actively capturing.
 class PwLinkGroup: public QObject {
 	Q_OBJECT;
 	// clang-format off
@@ -78,9 +69,6 @@ private:
 	PwNode* mTarget;
 };
 
-///! Tracks non-monitor link connections to a given node.
-/// Only ever reports anything for a capture device (@@Pipewire.linkGroups is only ever
-/// populated for capture -> recording-stream pairs on Windows); kept for API parity.
 class PwNodeLinkTracker: public QObject {
 	Q_OBJECT;
 	// clang-format off
@@ -97,7 +85,6 @@ public:
 
 	[[nodiscard]] QQmlListProperty<PwLinkGroup> linkGroups();
 
-	// Called by Pipewire whenever its linkGroups list changes.
 	void refresh();
 
 signals:

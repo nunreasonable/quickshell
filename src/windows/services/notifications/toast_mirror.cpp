@@ -26,14 +26,9 @@ ToastMirror::ToastMirror(QObject* parent): QObject(parent) {
 	this->mWorker = new ToastMirrorWorker(this);
 	this->mWorker->moveToThread(&this->mThread);
 
-	// start()/shutdown() run on the worker thread itself: started() is emitted there right before
-	// its event loop begins, finished() right after it ends.
 	QObject::connect(&this->mThread, &QThread::started, this->mWorker, &ToastMirrorWorker::start);
 	QObject::connect(&this->mThread, &QThread::finished, this->mWorker, &ToastMirrorWorker::shutdown);
 
-	// The server (and so this) is a process lifetime singleton that is never deleted; stop the
-	// thread while Qt is still fully alive instead of letting process exit kill it mid-call.
-	// Bounded, since a RequestAccessAsync waiting on a consent prompt can't be interrupted.
 	QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this] {
 		this->mThread.quit();
 		if (!this->mThread.wait(QDeadlineTimer(2000))) {
