@@ -7,6 +7,7 @@
 #include <qmetaobject.h>
 #include <qpair.h>
 #include <qstring.h>
+#include <qtimer.h>
 #include <qtimezone.h>
 
 #include <winrt/Windows.Foundation.Collections.h>
@@ -25,6 +26,9 @@ using winrt::Windows::Media::MediaPlaybackAutoRepeatMode;
 namespace qs::windows::services::mpris {
 
 namespace {
+constexpr int EMPTY_REREAD_MS = 400;
+constexpr int MAX_EMPTY_REREADS = 8;
+
 Q_LOGGING_CATEGORY(logMprisWorker, "quickshell.windows.mpris.worker", QtWarningMsg);
 
 constexpr qint64 WINDOWS_TO_UNIX_EPOCH_TICKS = 116444736000000000LL;
@@ -221,9 +225,13 @@ void GsmtcWorker::addSession(const GlobalSystemMediaTransportControlsSession& se
 		entry->cachedArtUrl = artUrl;
 
 		media = {entry->uniqueId, title, artist, album, albumArtist, artUrl};
+		qCDebug(logMprisWorker) << "New session" << id << "title" << title << "artist" << artist
+		                        << "art" << !artUrl.isEmpty();
+		if (title.isEmpty()) this->scheduleReread(id);
 	} catch (const winrt::hresult_error& e) {
 		qCDebug(logMprisWorker) << "TryGetMediaPropertiesAsync failed for new session:" << Qt::hex
 		                        << static_cast<uint32_t>(e.code().value);
+		this->scheduleReread(id);
 	}
 
 	QMetaObject::invokeMethod(
@@ -346,6 +354,14 @@ void GsmtcWorker::refreshTimeline(quint64 sessionId) {
 	);
 }
 
+void GsmtcWorker::scheduleReread(quint64 sessionId) {
+	auto it = this->mEntries.find(sessionId);
+	if (it == this->mEntries.end()) return;
+	if (++it->second->emptyReads > MAX_EMPTY_REREADS) return;
+
+	QTimer::singleShot(EMPTY_REREAD_MS, this, [this, sessionId] { this->refreshMediaProperties(sessionId); });
+}
+
 void GsmtcWorker::refreshMediaProperties(quint64 sessionId) {
 	auto it = this->mEntries.find(sessionId);
 	if (it == this->mEntries.end()) return;
@@ -362,11 +378,18 @@ void GsmtcWorker::refreshMediaProperties(quint64 sessionId) {
 		if (trackKey != entry.trackKey) {
 			entry.trackKey = trackKey;
 			entry.uniqueId++;
-
-			QString artUrl;
-			if (auto thumb = props.Thumbnail()) artUrl = cacheThumbnail(thumb, trackKey);
-			entry.cachedArtUrl = artUrl;
+			entry.cachedArtUrl.clear();
+			entry.emptyReads = 0;
 		}
+
+		if (entry.cachedArtUrl.isEmpty()) {
+			if (auto thumb = props.Thumbnail()) entry.cachedArtUrl = cacheThumbnail(thumb, trackKey);
+		}
+
+		qCDebug(logMprisWorker) << "Session" << sessionId << "title" << title << "artist" << artist
+		                        << "art" << !entry.cachedArtUrl.isEmpty() << "reads" << entry.emptyReads;
+		if (title.isEmpty()) this->scheduleReread(sessionId);
+		else entry.emptyReads = 0;
 
 		MprisPlayer::MediaSnapshot snapshot {
 		    entry.uniqueId,

@@ -44,11 +44,14 @@ QString cacheThumbnail(const IRandomAccessStreamReference& thumbnail, const QStr
 	if (thumbnail == nullptr) return {};
 
 	auto dir = cacheDir();
+	auto keyed = !QString(trackKey).remove(QChar(0x1f)).trimmed().isEmpty();
 	auto hash = QCryptographicHash::hash(trackKey.toUtf8(), QCryptographicHash::Sha1).toHex();
 
-	auto existing = QDir(dir).entryList({hash + ".png"}, QDir::Files);
-	if (!existing.isEmpty()) {
-		return QUrl::fromLocalFile(dir + "/" + existing.first()).toString();
+	if (keyed) {
+		auto existing = QDir(dir).entryList({hash + ".png"}, QDir::Files);
+		if (!existing.isEmpty()) {
+			return QUrl::fromLocalFile(dir + "/" + existing.first()).toString();
+		}
 	}
 
 	try {
@@ -71,7 +74,9 @@ QString cacheThumbnail(const IRandomAccessStreamReference& thumbnail, const QStr
 			return {};
 		}
 
+		if (!keyed) hash = QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex();
 		auto path = dir + "/" + hash + ".png";
+		if (!keyed && QFileInfo::exists(path)) return QUrl::fromLocalFile(path).toString();
 		if (!image.save(path, "PNG")) {
 			qCWarning(logMprisArt) << "Could not save thumbnail to" << path;
 			return {};

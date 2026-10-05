@@ -48,6 +48,7 @@ private:
 		QString trackKey;
 		quint32 uniqueId = 0;
 		QString cachedArtUrl;
+		int emptyReads = 0;
 	};
 
 	void resyncSessions();
@@ -60,6 +61,7 @@ private:
 	void refreshPlaybackInfo(quint64 sessionId);
 	void refreshTimeline(quint64 sessionId);
 	void refreshMediaProperties(quint64 sessionId);
+	void scheduleReread(quint64 sessionId);
 
 	[[nodiscard]] MprisPlayer::PlaybackSnapshot
 	buildPlaybackSnapshot(const winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSession& session
