@@ -129,6 +129,7 @@ private:
 		qint32 corrections = 0;
 		qint64 lastCorrection = 0;
 		bool verifying = false;
+		bool suspended = false; // maximized or fullscreen in its slot
 		// Raw window rect before it was first tiled, restored when it floats again.
 		QRect preTiling;
 		quint64 focusStamp = 0;
@@ -158,7 +159,10 @@ private:
 	void dropEmptyLayouts();
 	void apply(Layout* layout);
 	[[nodiscard]] QRect tileRect(const Layout* layout, TrackedWindow* window) const;
+	// Puts the window on its tile, or checks that it got there and corrects it a bounded
+	// number of times.
 	void place(Managed& m, const QRect& tile);
+	void send(Managed& m, const QRect& frame);
 	void restoreFloating(Managed& m);
 
 	void onActiveWindowChanged();

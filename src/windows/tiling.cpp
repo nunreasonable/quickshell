@@ -48,7 +48,9 @@ constexpr int DEADLINE_MS = 2000;
 // Corrective placements before a window that doesn't take its tile is left alone or floated.
 // Two cover a move to a monitor with another DPI (the window rescales itself once).
 constexpr qint32 MAX_CORRECTIONS = 2;
-constexpr qint64 CORRECTION_RESET_MS = 3000;
+// Corrections further apart than this start counting again (the user snapping a tiled window
+// away with Win+Arrow now and then is put back every time).
+constexpr qint64 CORRECTION_RESET_MS = 1500;
 // Physical pixels within which an edge counts as not moved by the user.
 constexpr int EDGE_TOLERANCE = 2;
 
@@ -467,8 +469,10 @@ TilingManager::State TilingManager::stateOf(const Managed& m) const {
 bool TilingManager::floatsByRule(const Managed& m) const {
 	auto* hwnd = m.window->hwnd();
 
-	// Dialogs and other owned windows (tracked when they have WS_EX_APPWINDOW).
-	if (GetWindow(hwnd, GW_OWNER) != nullptr) return true;
+	// Dialogs and other owned windows (tracked when they have WS_EX_APPWINDOW). A hidden owner
+	// is a toolkit's application window (Delphi, some Java and Qt apps), not a parent.
+	auto* owner = GetWindow(hwnd, GW_OWNER);
+	if (owner != nullptr && IsWindowVisible(owner)) return true;
 
 	auto style = GetWindowLongPtrW(hwnd, GWL_STYLE);
 	auto exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -628,19 +632,27 @@ void TilingManager::syncWindow(TrackedWindow* window) {
 	if (index >= this->desktops->count()) return; // a stale index; the refresh marks it again
 	auto desktop = this->desktops->desktops().at(index).id;
 
-	// A tiled window keeps its layout while the layout lives and the window stays on its
-	// desktop: it is put back on its monitor if something else moved it there (only a drag or
-	// a dispatcher moves it between monitors). Moves to another desktop are always followed.
+	// A window keeps its layout while the layout lives and the window stays on its desktop and
+	// monitor. Moves to another desktop are always followed, moves to another monitor when they
+	// weren't ours (Win+Shift+Arrow, the app itself): while one of our requests is in flight the
+	// window may still be on its old monitor.
 	Layout* want = nullptr;
 	auto* current = m.layout;
 	if (current != nullptr && this->layoutAlive(current) && IsEqualGUID(current->desktop, desktop)) {
 		want = current;
+
+		if (state == State::Tiled && !m.verifying && window->screen() != current->screen) {
+			this->moveToLayout(m, this->layoutFor(window, true), nullptr);
+			return;
+		}
 	} else if (state == State::Tiled) {
 		want = this->layoutFor(window, true);
 	}
 
 	if (want == m.layout) {
-		// Restored from maximized or fullscreen in place, or just a state change: place again.
+		// Back from maximized or fullscreen in its slot: a fresh placement, not a correction.
+		if (m.suspended && state == State::Tiled) m.target = QRect();
+		m.suspended = state == State::Suspended;
 		this->markLayout(m.layout);
 		return;
 	}
@@ -672,6 +684,7 @@ void TilingManager::insertInto(
 
 	layout->tree.insert(idOf(window), targetId, cursor);
 	m.layout = layout;
+	m.suspended = false;
 	m.target = QRect();
 	m.accepted = QRect();
 	m.corrections = 0;
@@ -753,17 +766,15 @@ QRect TilingManager::tileRect(const Layout* layout, TrackedWindow* window) const
 }
 
 void TilingManager::place(Managed& m, const QRect& tile) {
-	auto* hwnd = m.window->hwnd();
-
-	QRect raw;
-	QRect frame;
-	if (!readFrame(hwnd, raw, frame)) return;
+	auto frame = currentFrame(m.window->hwnd());
 
 	if (tile != m.target) {
 		m.target = tile;
 		m.accepted = QRect();
 		m.corrections = 0;
-	} else if (!m.accepted.isNull() && frame == m.accepted) {
+
+		if (frame == tile) m.verifying = false;
+		else this->send(m, frame);
 		return;
 	}
 
@@ -772,9 +783,29 @@ void TilingManager::place(Managed& m, const QRect& tile) {
 		return;
 	}
 
+	if (!m.accepted.isNull() && frame == m.accepted) return;
+	// The last request is still on its way; the deadline catches windows that never take it.
+	if (m.verifying && frame == m.before) return;
+
+	// It moved, but not onto its tile, or away from it again: the borders changed with the DPI,
+	// it has a minimum size or a size step, or the user or the app moved it.
+	auto now = QDateTime::currentMSecsSinceEpoch();
+	if (now - m.lastCorrection > CORRECTION_RESET_MS) m.corrections = 0;
+
+	if (m.corrections >= MAX_CORRECTIONS) {
+		this->giveUp(m, frame);
+		return;
+	}
+
+	m.corrections++;
+	m.lastCorrection = now;
+	this->send(m, frame);
+}
+
+void TilingManager::send(Managed& m, const QRect& frame) {
 	m.before = frame;
 	m.verifying = true;
-	setFrame(hwnd, tile);
+	setFrame(m.window->hwnd(), m.target);
 	this->deadlineTimer.start();
 }
 
@@ -854,7 +885,6 @@ void TilingManager::onRectChanged(TrackedWindow* window) {
 void TilingManager::verify() {
 	auto pending = std::move(this->unverified);
 	this->unverified.clear();
-	auto now = QDateTime::currentMSecsSinceEpoch();
 
 	for (auto* window: pending) {
 		auto iter = this->managed.find(window);
@@ -865,30 +895,7 @@ void TilingManager::verify() {
 		// Maximized, minimized and the like are handled by the state change.
 		if (this->stateOf(m) != State::Tiled) continue;
 
-		auto frame = currentFrame(window->hwnd());
-
-		if (frame == m.target) {
-			m.verifying = false;
-			continue;
-		}
-
-		if (!m.accepted.isNull() && frame == m.accepted) continue;
-		// The move is still on its way; the deadline catches windows that never take it.
-		if (m.verifying && frame == m.before) continue;
-
-		if (now - m.lastCorrection > CORRECTION_RESET_MS) m.corrections = 0;
-
-		if (m.corrections < MAX_CORRECTIONS) {
-			m.corrections++;
-			m.lastCorrection = now;
-			m.before = frame;
-			m.verifying = true;
-			setFrame(window->hwnd(), m.target);
-			this->deadlineTimer.start();
-			continue;
-		}
-
-		this->giveUp(m, frame);
+		this->place(m, m.target);
 	}
 }
 
@@ -971,7 +978,8 @@ void TilingManager::onMoveSizeEnded(TrackedWindow* window) {
 	}
 
 	auto frame = currentFrame(hwnd);
-	const auto& target = m.target;
+	// Where it was before the drag: its tile, or the size it settled on near it.
+	const auto target = m.accepted.isNull() ? m.target : m.accepted;
 
 	auto movedLeft = qAbs(frame.left() - target.left()) > EDGE_TOLERANCE;
 	auto movedTop = qAbs(frame.top() - target.top()) > EDGE_TOLERANCE;
@@ -980,6 +988,9 @@ void TilingManager::onMoveSizeEnded(TrackedWindow* window) {
 	auto moved = int(movedLeft) + int(movedTop) + int(movedRight) + int(movedBottom);
 	auto resized = qAbs(frame.width() - target.width()) > EDGE_TOLERANCE
 	            || qAbs(frame.height() - target.height()) > EDGE_TOLERANCE;
+
+	// Whatever happens next is a placement the user asked for, not a correction.
+	m.target = QRect();
 
 	if (moved == 0) {
 		// A click on the caption, or a drag that came back: just make it exact again.
@@ -1012,7 +1023,9 @@ void TilingManager::drop(Managed& m, const QPoint& cursor) {
 
 	// Over another tiled window on the same desktop (any monitor): swap with it.
 	for (auto& [key, layout]: this->layouts) {
-		if (!IsEqualGUID(layout->desktop, from->desktop) || !this->layoutAlive(layout.get())) continue;
+		if (!IsEqualGUID(layout->desktop, from->desktop) || !this->layoutAlive(layout.get())) {
+			continue;
+		}
 
 		for (auto id: layout->tree.ids()) {
 			if (id == self) continue;
