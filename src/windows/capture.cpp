@@ -905,14 +905,41 @@ QImage CaptureThread::grabMonitor(HMONITOR monitor, int timeoutMs) {
 	if (!this->mThread.isRunning()) return {};
 	if (QThread::currentThread() == &this->mThread) return this->mWorker->grabMonitor(monitor, timeoutMs);
 
-	QImage image;
+	// CaptureWorker::grabMonitor's own wait_for only bounds the time *after* it starts running;
+	// it does nothing for a WinRT call ahead of that wait (CreateFreeThreaded, StartCapture, ...)
+	// that hangs, or for a capture thread that is simply backed up with other queued work. A
+	// plain Qt::BlockingQueuedConnection has no deadline of its own, so any of that would block
+	// this (GUI) thread forever. Dispatch without blocking instead and wait on our own condition
+	// variable with the same deadline (plus a little slack for the inner wait to actually wind
+	// down); a result that arrives after we have given up is simply dropped via the shared_ptr.
+	struct Result {
+		std::mutex mutex;
+		std::condition_variable cv;
+		bool done = false;
+		QImage image;
+	};
+	auto result = std::make_shared<Result>();
+
 	auto* worker = this->mWorker;
 	QMetaObject::invokeMethod(
 	    worker,
-	    [worker, monitor, timeoutMs, &image] { image = worker->grabMonitor(monitor, timeoutMs); },
-	    Qt::BlockingQueuedConnection
+	    [worker, monitor, timeoutMs, result] {
+		    auto image = worker->grabMonitor(monitor, timeoutMs);
+		    std::lock_guard lock(result->mutex);
+		    result->image = std::move(image);
+		    result->done = true;
+		    result->cv.notify_all();
+	    },
+	    Qt::QueuedConnection
 	);
-	return image;
+
+	std::unique_lock lock(result->mutex);
+	result->cv.wait_for(
+	    lock,
+	    std::chrono::milliseconds(timeoutMs) + std::chrono::milliseconds(500),
+	    [&] { return result->done; }
+	);
+	return result->done ? result->image : QImage();
 }
 
 } // namespace qs::windows::capture

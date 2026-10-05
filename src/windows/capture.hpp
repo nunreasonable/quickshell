@@ -144,8 +144,10 @@ public:
 	[[nodiscard]] QThread* thread() { return &this->mThread; }
 
 	// Captures one frame of a monitor (no cursor) into an RGBA8888 QImage. Blocks the calling
-	// thread (not a COM wait, so it is fine on the GUI thread) for at most `timeoutMs`.
-	// Returns a null image on failure.
+	// thread (not a COM wait, so it is fine on the GUI thread) for at most `timeoutMs` plus a
+	// little slack, no matter what the capture thread is doing (including a hung WinRT call,
+	// e.g. a monitor that won't wake from DPMS) -- not just while waiting for a frame. Returns a
+	// null image on failure or on timing out.
 	[[nodiscard]] QImage grabMonitor(HMONITOR monitor, int timeoutMs = 2000);
 
 private:
