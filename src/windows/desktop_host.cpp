@@ -186,6 +186,7 @@ void DesktopHost::refresh() {
 }
 
 void DesktopHost::lookup() {
+	auto first = !this->lookedUp;
 	this->lookedUp = true;
 
 	Lookup found;
@@ -209,7 +210,7 @@ void DesktopHost::lookup() {
 		if (found.parent == nullptr) found = findProgman(progman);
 	}
 
-	if (found.parent != this->mParent) {
+	if (first || found.parent != this->mParent) {
 		if (found.parent != nullptr) {
 			qCInfo(logDesktop) << "Desktop panels go into" << found.layout << "on build"
 			                   << windowsBuild();
@@ -280,8 +281,10 @@ LRESULT CALLBACK DesktopHost::listenerProc(HWND hwnd, UINT msg, WPARAM wparam, L
 }
 
 void DesktopHost::installHook() {
+	// Without a parent, explorer's desktop thread is still watched for a WorkerW to show up.
+	auto* target = this->mParent != nullptr ? this->mParent : FindWindowW(L"Progman", nullptr);
 	DWORD pid = 0;
-	auto thread = this->mParent == nullptr ? 0 : GetWindowThreadProcessId(this->mParent, &pid);
+	auto thread = target == nullptr ? 0 : GetWindowThreadProcessId(target, &pid);
 	if (thread == this->hookThread && (thread == 0 || this->hook != nullptr)) return;
 
 	this->removeHook();
@@ -356,9 +359,10 @@ void CALLBACK DesktopHost::eventProc(
 		case EVENT_OBJECT_HIDE: host->scheduleRefresh(SETTLE_MS); break;
 		default: break;
 		}
-	} else if (event == EVENT_OBJECT_SHOW && host->mInsertAfter != nullptr && hasClass(hwnd, L"WorkerW"))
+	} else if (event == EVENT_OBJECT_SHOW && (host->mParent == nullptr || host->mInsertAfter != nullptr)
+	           && hasClass(hwnd, L"WorkerW"))
 	{
-		// In Progman for lack of a WorkerW, and explorer just made one.
+		// Nowhere or in Progman for lack of a WorkerW, and explorer just showed one.
 		host->scheduleRefresh(SETTLE_MS);
 	}
 }
