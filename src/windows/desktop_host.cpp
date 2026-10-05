@@ -8,6 +8,7 @@
 #include <qloggingcategory.h>
 #include <qobject.h>
 #include <qpointer.h>
+#include <qstringlist.h>
 #include <qtimer.h>
 
 #include "../core/logcat.hpp"
@@ -54,17 +55,9 @@ struct Lookup {
 	const char* layout = "";
 };
 
-// Windows 11 24H2 and later: Progman > { SHELLDLL_DefView, WorkerW }.
-Lookup findChildWorkerW(HWND progman) {
-	auto* workerw = FindWindowExW(progman, nullptr, L"WorkerW", nullptr);
-	// A hidden parent would hide the panels with it.
-	if (workerw == nullptr || !IsWindowVisible(workerw)) return {};
-	return {.parent = workerw, .layout = "WorkerW inside Progman"};
-}
-
-// Windows 10 and 11 before 24H2: a top level WorkerW right behind the top level window that
-// holds the icons view (Progman itself, or another WorkerW with a slideshow).
-Lookup findTopLevelWorkerW(HWND progman) {
+// The top level window holding the icons view on Windows 10 and 11 before 24H2: Progman
+// itself, or a WorkerW (after the wallpaper WorkerW was spawned, or with a slideshow).
+HWND findTopLevelIconsHost(HWND progman) {
 	struct Search {
 		DWORD pid = 0;
 		HWND iconsHost = nullptr;
@@ -81,11 +74,41 @@ Lookup findTopLevelWorkerW(HWND progman) {
 	    reinterpret_cast<LPARAM>(&search)
 	);
 
-	if (search.iconsHost == nullptr) return {};
+	return search.iconsHost;
+}
+
+// SHELLDLL_DefView, wherever explorer keeps it: inside Progman (24H2 and later, or before the
+// wallpaper WorkerW exists) or inside a top level WorkerW.
+HWND findIconsView(HWND progman) {
+	auto* icons = FindWindowExW(progman, nullptr, L"SHELLDLL_DefView", nullptr);
+
+	if (icons == nullptr) {
+		auto* host = findTopLevelIconsHost(progman);
+		if (host != nullptr) icons = FindWindowExW(host, nullptr, L"SHELLDLL_DefView", nullptr);
+	}
+
+	// A hidden parent would hide the panels with it.
+	return icons != nullptr && IsWindowVisible(icons) ? icons : nullptr;
+}
+
+// Windows 11 24H2 and later: Progman > { SHELLDLL_DefView, WorkerW }.
+Lookup findChildWorkerW(HWND progman) {
+	auto* workerw = FindWindowExW(progman, nullptr, L"WorkerW", nullptr);
+	// A hidden parent would hide the panels with it.
+	if (workerw == nullptr || !IsWindowVisible(workerw)) return {};
+	return {.parent = workerw, .layout = "WorkerW inside Progman"};
+}
+
+// Windows 10 and 11 before 24H2: a top level WorkerW right behind the top level window that
+// holds the icons view (Progman itself, or another WorkerW with a slideshow).
+Lookup findTopLevelWorkerW(HWND progman) {
+	auto* iconsHost = findTopLevelIconsHost(progman);
+	if (iconsHost == nullptr) return {};
 
 	// the next WorkerW down the z order
-	auto* workerw = FindWindowExW(nullptr, search.iconsHost, L"WorkerW", nullptr);
-	if (workerw == nullptr || processOf(workerw) != search.pid || !IsWindowVisible(workerw)) {
+	auto pid = processOf(progman);
+	auto* workerw = FindWindowExW(nullptr, iconsHost, L"WorkerW", nullptr);
+	if (workerw == nullptr || processOf(workerw) != pid || !IsWindowVisible(workerw)) {
 		return {};
 	}
 
@@ -155,6 +178,22 @@ HWND DesktopHost::parentWindow() {
 	return this->mParent;
 }
 
+HWND DesktopHost::iconsView() {
+	if (!this->mEnabled) return nullptr;
+
+	if (!this->lookedUp || (this->mIconsView != nullptr && !IsWindow(this->mIconsView))) {
+		this->refresh();
+	}
+
+	return this->mIconsView;
+}
+
+void DesktopHost::setAboveIcons(const QStringList& namespaces) {
+	if (namespaces == this->mAboveIcons) return;
+	this->mAboveIcons = namespaces;
+	emit this->aboveIconsChanged();
+}
+
 void DesktopHost::scheduleRefresh(int delayMs) { this->refreshTimer.start(delayMs); }
 
 void DesktopHost::refresh() {
@@ -162,6 +201,7 @@ void DesktopHost::refresh() {
 
 	auto* oldParent = this->mParent;
 	auto* oldInsertAfter = this->mInsertAfter;
+	auto* oldIconsView = this->mIconsView;
 	auto wasActive = this->active();
 
 	if (this->mEnabled) {
@@ -171,11 +211,14 @@ void DesktopHost::refresh() {
 	} else {
 		this->mParent = nullptr;
 		this->mInsertAfter = nullptr;
+		this->mIconsView = nullptr;
 		this->lookedUp = false;
 		this->removeHook();
 	}
 
-	if (this->mParent != oldParent || this->mInsertAfter != oldInsertAfter) {
+	if (this->mParent != oldParent || this->mInsertAfter != oldInsertAfter
+	    || this->mIconsView != oldIconsView)
+	{
 		emit this->parentChanged();
 	} else if (this->mParent != nullptr) {
 		// Same window, possibly another size (display change).
@@ -210,6 +253,14 @@ void DesktopHost::lookup() {
 		if (found.parent == nullptr) found = findProgman(progman);
 	}
 
+	// After the WorkerW was spawned: that moves the icons view on Windows 10.
+	auto* iconsView = progman == nullptr ? nullptr : findIconsView(progman);
+
+	if ((first || iconsView != this->mIconsView) && iconsView == nullptr && found.parent != nullptr) {
+		qCWarning(logDesktop) << "No desktop icons view found; desktop panels that take input"
+		                      << "stay top level windows";
+	}
+
 	if (first || found.parent != this->mParent) {
 		if (found.parent != nullptr) {
 			qCInfo(logDesktop) << "Desktop panels go into" << found.layout << "on build"
@@ -222,6 +273,7 @@ void DesktopHost::lookup() {
 
 	this->mParent = found.parent;
 	this->mInsertAfter = found.insertAfter;
+	this->mIconsView = iconsView;
 }
 
 void DesktopHost::ensureListener() {
@@ -291,10 +343,11 @@ void DesktopHost::installHook() {
 	if (thread == 0) return;
 
 	// Out of context: the callback runs on this (the gui) thread, from its message loop.
-	// Restricted to explorer's desktop thread, which also owns the parent's siblings.
+	// Restricted to explorer's desktop thread, which also owns the parent's siblings and the
+	// icons view. Creation and reordering are for the windows inside the icons view.
 	this->hook = SetWinEventHook(
-	    EVENT_OBJECT_DESTROY,
-	    EVENT_OBJECT_HIDE,
+	    EVENT_OBJECT_CREATE,
+	    EVENT_OBJECT_REORDER,
 	    nullptr,
 	    &DesktopHost::eventProc,
 	    pid,
@@ -341,29 +394,73 @@ void CALLBACK DesktopHost::eventProc(
 		return;
 	}
 
+	auto scheduleMoved = [host] {
+		// Comes in bursts while explorer resizes the desktop.
+		if (host->movePending) return;
+		host->movePending = true;
+
+		QTimer::singleShot(0, host, [host] {
+			host->movePending = false;
+			emit host->parentMoved();
+		});
+	};
+
 	if (hwnd == host->mParent) {
 		switch (event) {
-		case EVENT_OBJECT_LOCATIONCHANGE:
-			// Comes in bursts while explorer resizes the desktop.
-			if (!host->movePending) {
-				host->movePending = true;
-
-				QTimer::singleShot(0, host, [host] {
-					host->movePending = false;
-					emit host->parentMoved();
-				});
-			}
-			break;
+		case EVENT_OBJECT_LOCATIONCHANGE: scheduleMoved(); break;
 		// Gone or hidden: the panels inside are too. Look again once explorer is done.
 		case EVENT_OBJECT_DESTROY:
 		case EVENT_OBJECT_HIDE: host->scheduleRefresh(SETTLE_MS); break;
 		default: break;
 		}
-	} else if (event == EVENT_OBJECT_SHOW && (host->mParent == nullptr || host->mInsertAfter != nullptr)
-	           && hasClass(hwnd, L"WorkerW"))
+
+		return;
+	}
+
+	if (event == EVENT_OBJECT_SHOW && (host->mParent == nullptr || host->mInsertAfter != nullptr)
+	    && hasClass(hwnd, L"WorkerW"))
 	{
 		// Nowhere or in Progman for lack of a WorkerW, and explorer just showed one.
 		host->scheduleRefresh(SETTLE_MS);
+		return;
+	}
+
+	if (host->mIconsView == nullptr) {
+		// Desktop panels found a place but the icons view was missing or hidden.
+		if (event == EVENT_OBJECT_SHOW && host->mParent != nullptr
+		    && hasClass(hwnd, L"SHELLDLL_DefView"))
+		{
+			host->scheduleRefresh(SETTLE_MS);
+		}
+
+		return;
+	}
+
+	if (hwnd == host->mIconsView) {
+		switch (event) {
+		// Panels above the icons went or are hidden with it; look for it again.
+		case EVENT_OBJECT_DESTROY:
+		case EVENT_OBJECT_HIDE: host->scheduleRefresh(SETTLE_MS); return;
+		// The panels inside are placed relative to it.
+		case EVENT_OBJECT_LOCATIONCHANGE: scheduleMoved(); return;
+		// Reordering is reported on the container.
+		case EVENT_OBJECT_REORDER: break;
+		default: return;
+		}
+	} else if ((event != EVENT_OBJECT_CREATE && event != EVENT_OBJECT_SHOW)
+	           || GetAncestor(hwnd, GA_PARENT) != host->mIconsView)
+	{
+		return;
+	}
+
+	// Panels only restack when something else is above them, so their own moves end here.
+	if (!host->restackPending) {
+		host->restackPending = true;
+
+		QTimer::singleShot(0, host, [host] {
+			host->restackPending = false;
+			emit host->iconsRestacked();
+		});
 	}
 }
 
@@ -373,10 +470,17 @@ DesktopLayer::DesktopLayer(QObject* parent): QObject(parent) {
 	auto* host = DesktopHost::instance();
 	QObject::connect(host, &DesktopHost::enabledChanged, this, &DesktopLayer::enabledChanged);
 	QObject::connect(host, &DesktopHost::activeChanged, this, &DesktopLayer::activeChanged);
+	QObject::connect(host, &DesktopHost::aboveIconsChanged, this, &DesktopLayer::aboveIconsChanged);
 }
 
 bool DesktopLayer::enabled() const { return DesktopHost::instance()->enabled(); }
 void DesktopLayer::setEnabled(bool enabled) { DesktopHost::instance()->setEnabled(enabled); }
 bool DesktopLayer::active() const { return DesktopHost::instance()->active(); }
+
+QStringList DesktopLayer::aboveIcons() const { return DesktopHost::instance()->aboveIcons(); }
+
+void DesktopLayer::setAboveIcons(const QStringList& namespaces) {
+	DesktopHost::instance()->setAboveIcons(namespaces);
+}
 
 } // namespace qs::windows

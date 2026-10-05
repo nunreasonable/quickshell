@@ -140,7 +140,8 @@ public:
 	// Called by WinProxiedWindow for every native message of the backing window.
 	bool handleNativeMessage(MSG* msg, qintptr* result);
 
-	// Inside the desktop, behind the icons (see DesktopHost), instead of a top level window.
+	// Inside the desktop, behind the icons or above them (see DesktopHost), instead of a top
+	// level window.
 	[[nodiscard]] bool isEmbedded() const { return this->mEmbedParent != nullptr; }
 
 signals:
@@ -177,10 +178,15 @@ private:
 	void stickToAllDesktops();
 	[[nodiscard]] bool reservesSpace() const;
 	[[nodiscard]] bool wantsEmbedding() const;
+	[[nodiscard]] bool wantsAboveIcons() const;
 	void updateEmbedding();
-	void embedInto(HWND parent, HWND insertAfter);
+	void embedInto(HWND parent, HWND insertAfter, bool aboveIcons);
 	void unembed();
 	void placeEmbedded();
+	void keepAboveIcons();
+	void routeInputMask();
+	void applyInputRegion();
+	void setButtonHeld(bool held);
 	[[nodiscard]] QRect embeddedRect() const;
 	void onWindowScreenChanged();
 	void recreateDestroyedWindow();
@@ -199,6 +205,16 @@ private:
 	HWND mEmbedParent = nullptr;
 	HWND mEmbedInsertAfter = nullptr;
 	HWND embedRefusedBy = nullptr;
+	// Inside the icons view, above the icons list. The input mask is then the window region
+	// (physical window coordinates), lifted while a mouse button is held on the window.
+	bool mEmbedAboveIcons = false;
+	QRegion mInputMask;
+	bool mHasInputMask = false;
+	QRegion mAppliedRegion;
+	bool mRegionApplied = false;
+	bool mButtonHeld = false;
+	int restackCount = 0;
+	DWORD restackWindowStart = 0;
 	QRect mEmbedRect;
 	bool placingEmbedded = false;
 	bool screenRestorePending = false;
@@ -218,6 +234,7 @@ private:
 	Q_OBJECT_BINDABLE_PROPERTY(WinPanelWindow, Qt::Edge, bcExclusionEdge);
 
 	QS_BINDING_SUBSCRIBE_METHOD(WinPanelWindow, bLayer, updateLayerCb, onValueChanged);
+	QS_BINDING_SUBSCRIBE_METHOD(WinPanelWindow, bNamespace, updateLayerCb, onValueChanged);
 	QS_BINDING_SUBSCRIBE_METHOD(WinPanelWindow, bKeyboardFocus, updateFocusCb, onValueChanged);
 	QS_BINDING_SUBSCRIBE_METHOD(WinPanelWindow, bAnchors, updateDimensionsCb, onValueChanged);
 	QS_BINDING_SUBSCRIBE_METHOD(WinPanelWindow, bMargins, updateDimensionsCb, onValueChanged);
