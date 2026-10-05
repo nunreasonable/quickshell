@@ -21,6 +21,9 @@ class HyprlandMonitor;
 class HyprlandWorkspace: public QObject {
 	Q_OBJECT;
 	// clang-format off
+	/// The workspace id as a string, as upstream reports it for Hyprland before 0.57.
+	/// Desktops have no separate address on Windows.
+	Q_PROPERTY(QString address READ default NOTIFY addressChanged BINDABLE bindableAddress);
 	Q_PROPERTY(qint32 id READ default NOTIFY idChanged BINDABLE bindableId);
 	Q_PROPERTY(QString name READ default NOTIFY nameChanged BINDABLE bindableName);
 	/// If this workspace is the current virtual desktop. See also @@focused.
@@ -55,6 +58,7 @@ public:
 	/// > ```
 	Q_INVOKABLE void activate();
 
+	[[nodiscard]] QBindable<QString> bindableAddress() { return &this->bAddress; }
 	[[nodiscard]] QBindable<qint32> bindableId() { return &this->bId; }
 	[[nodiscard]] QBindable<QString> bindableName() { return &this->bName; }
 	[[nodiscard]] QBindable<bool> bindableActive() { return &this->bActive; }
@@ -70,6 +74,7 @@ public:
 	void removeToplevel(HyprlandToplevel* toplevel);
 
 signals:
+	void addressChanged();
 	void idChanged();
 	void nameChanged();
 	void activeChanged();
@@ -89,6 +94,7 @@ private:
 	ObjectModel<HyprlandToplevel> mToplevels {this};
 
 	// clang-format off
+	Q_OBJECT_BINDABLE_PROPERTY(HyprlandWorkspace, QString, bAddress, &HyprlandWorkspace::addressChanged);
 	Q_OBJECT_BINDABLE_PROPERTY_WITH_ARGS(HyprlandWorkspace, qint32, bId, -1, &HyprlandWorkspace::idChanged);
 	Q_OBJECT_BINDABLE_PROPERTY(HyprlandWorkspace, QString, bName, &HyprlandWorkspace::nameChanged);
 	Q_OBJECT_BINDABLE_PROPERTY(HyprlandWorkspace, bool, bActive, &HyprlandWorkspace::activeChanged);

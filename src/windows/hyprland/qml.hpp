@@ -24,6 +24,8 @@ class HyprlandIpcQml: public QObject {
 	Q_PROPERTY(QString requestSocketPath READ requestSocketPath CONSTANT);
 	/// Always empty on Windows (no event socket).
 	Q_PROPERTY(QString eventSocketPath READ eventSocketPath CONSTANT);
+	/// Always false on Windows: @@dispatch() takes both spellings, so the classic one keeps working.
+	Q_PROPERTY(bool usingLua READ usingLua CONSTANT);
 	/// The monitor with the foreground window. May be null.
 	Q_PROPERTY(qs::hyprland::ipc::HyprlandMonitor* focusedMonitor READ default NOTIFY focusedMonitorChanged BINDABLE bindableFocusedMonitor);
 	/// The current virtual desktop. May be null.
@@ -64,6 +66,7 @@ public:
 
 	[[nodiscard]] static QString requestSocketPath();
 	[[nodiscard]] static QString eventSocketPath();
+	[[nodiscard]] static bool usingLua() { return false; }
 	[[nodiscard]] static QBindable<HyprlandMonitor*> bindableFocusedMonitor();
 	[[nodiscard]] static QBindable<HyprlandWorkspace*> bindableFocusedWorkspace();
 	[[nodiscard]] static QBindable<HyprlandToplevel*> bindableActiveToplevel();
