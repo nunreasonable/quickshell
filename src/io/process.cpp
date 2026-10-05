@@ -314,15 +314,13 @@ void Process::signal(qint32 signal) {
 	if (this->process == nullptr) return;
 
 #ifdef _WIN32
-	// There are no POSIX signals on Windows. QProcess::terminate() posts WM_CLOSE to the
-	// process's windows (console programs ignore it), QProcess::kill() calls TerminateProcess.
 	switch (signal) {
-	case 1:  // SIGHUP
-	case 2:  // SIGINT
-	case 15: // SIGTERM
+	case 1:
+	case 2:
+	case 15:
 		this->process->terminate();
 		break;
-	case 9: // SIGKILL
+	case 9:
 		this->process->kill();
 		break;
 	default:

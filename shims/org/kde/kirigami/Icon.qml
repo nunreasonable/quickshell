@@ -1,10 +1,4 @@
 pragma ComponentBehavior: Bound
-// Windows shim for org.kde.kirigami's Icon (the only Kirigami type ii uses).
-// Real backend: nothing special is needed here long-term -- this is plain
-// QtQuick (Image + an optional MultiEffect recolor pass), it just isn't
-// available as "org.kde.kirigami" outside real Kirigami. Reproduces the
-// subset of behaviour ii relies on: a source/fallback pair with automatic
-// fallback-on-load-error, and isMask/color recoloring for monochrome icons.
 import QtQuick
 import QtQuick.Effects
 

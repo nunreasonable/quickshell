@@ -1,7 +1,4 @@
 pragma Singleton
-// Windows shim for Quickshell.Services.Pam's PamError.
-// Real backend: whatever Windows credential API eventually backs
-// authentication here. Not used by ii today; kept for API completeness.
 import QtQml
 
 QtObject {

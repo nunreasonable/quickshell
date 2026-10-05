@@ -12,7 +12,6 @@
 namespace qs::launch {
 
 #ifdef _WIN32
-// Inherited pipe handle used to report the daemon's startup result to the launching process.
 extern void* DAEMON_PIPE; // NOLINT
 #else
 extern int DAEMON_PIPE; // NOLINT
@@ -114,8 +113,6 @@ struct LaunchArgs {
 void exitDaemon(int code);
 
 #ifdef _WIN32
-// Implements --daemonize by relaunching this executable detached. Returns true in the launching
-// process (with the daemon's startup result in exitCode) and false in the daemon itself.
 bool spawnDaemon(int argc, char** argv, int* exitCode);
 #endif
 

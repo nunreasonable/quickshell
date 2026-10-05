@@ -465,7 +465,6 @@ QString FileView::path() const { return this->state.path; }
 
 void FileView::setPath(const QString& path) {
 #ifdef _WIN32
-	// file:///C:/x must become C:/x, not /C:/x.
 	auto p = path.startsWith("file://") ? QUrl(path).toLocalFile() : path;
 #else
 	auto p = path.startsWith("file://") ? path.sliced(7) : path;
@@ -518,9 +517,6 @@ void FileView::updateWatchedFiles() {
 			dirPath = dirPath.sliced(0, lastIndex);
 
 			if (!this->watcher->addPath(dirPath)) {
-				// The parent directory doesn't exist yet, so the file's creation can't be seen.
-				// Writes create it, so watch again after the first successful one and report the
-				// file like the directory watch would have.
 				QObject::connect(
 				    this,
 				    &FileView::saved,

@@ -34,7 +34,6 @@ namespace qs::debuginfo {
 
 namespace {
 
-// Environment variables starting with any of these are included in the debug output.
 constexpr auto ENV_PREFIXES = std::array<std::string_view, 5> {
     "QS_",
     "QT_",
@@ -67,7 +66,6 @@ QString gpuInfo() {
 		auto model = QString::fromWCharArray(device.DeviceString);
 		auto id = QString::fromWCharArray(device.DeviceID);
 
-		// Every output of an adapter is listed as its own display device.
 		if (seen.contains(id)) continue;
 		seen.insert(id);
 
@@ -218,7 +216,6 @@ QString envInfo() {
 			if (strncmp(prefix.data(), *envp, prefix.length()) == 0) goto print;
 		}
 
-		// Exact variable, not a prefix; only meaningful on Linux desktops.
 		if (std::string_view(*envp).starts_with("XDG_CURRENT_DESKTOP=")) goto print;
 		continue;
 

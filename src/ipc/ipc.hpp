@@ -190,17 +190,12 @@ public:
 		this->stream << message;
 		this->socket.flush();
 #ifdef _WIN32
-		// The client has no event loop. With named pipes flush() only queues an overlapped write,
-		// which is never completed without one, so the server would never see the command.
 		this->socket.waitForBytesWritten(-1);
 #endif
 	}
 
 	template <typename T>
 	bool waitForResponse(T& slot) {
-		// Parse what is already buffered before waiting again, and once more after the connection
-		// closes: on Windows the server can write the response and close the pipe at once, and
-		// waitForReadyRead() then reports the closed pipe rather than the buffered data.
 		auto closed = false;
 		while (true) {
 			if (this->socket.bytesAvailable() > 0) {

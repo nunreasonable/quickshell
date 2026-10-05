@@ -27,7 +27,6 @@ QS_LOGGING_CATEGORY(logTooling, "quickshell.tooling", QtWarningMsg);
 
 bool QmlToolingSupport::updateTooling(const QDir& configRoot, QmlScanner& scanner) {
 #ifdef _WIN32
-	// TODO(windows): qmlls support relies on symlinks and fcntl locks. Disabled for now.
 	Q_UNUSED(configRoot);
 	Q_UNUSED(scanner);
 	return false;

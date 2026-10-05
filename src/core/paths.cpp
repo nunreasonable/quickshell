@@ -29,9 +29,6 @@
 namespace {
 QS_LOGGING_CATEGORY(logPaths, "quickshell.paths", QtWarningMsg);
 
-// Creates a link to `target` at `linkPath`, replacing anything already there.
-// POSIX: a symlink. Windows: symlinks need privileges, so a plain file containing the target
-// path is written instead and resolved with QsPaths::resolveRunLink.
 bool createRunLink(const QDir& target, const QString& linkPath) {
 	QFile::remove(linkPath);
 
@@ -82,9 +79,6 @@ QString QsPaths::basePath(const QString& id) {
 
 QString QsPaths::ipcPath(const QString& id) {
 #ifdef _WIN32
-	// QLocalServer/QLocalSocket use named pipes on Windows (\\.\pipe\<name>), which can't be
-	// filesystem paths. Instance ids are unique per machine (pid + launch time), so a plain
-	// name is enough.
 	return "quickshell-" + id;
 #else
 	return QDir(QsPaths::basePath(id)).filePath("ipc.sock");
@@ -93,7 +87,6 @@ QString QsPaths::ipcPath(const QString& id) {
 
 QString QsPaths::resolveRunLink(const QString& path) {
 #ifdef _WIN32
-	// Links in the run dir are pointer files on Windows, see createRunLink.
 	if (QFileInfo(path).isFile()) {
 		auto file = QFile(path);
 		if (file.open(QFile::ReadOnly)) {
@@ -109,8 +102,6 @@ QString QsPaths::resolveRunLink(const QString& path) {
 QDir* QsPaths::baseRunDir() {
 	if (this->baseRunState == DirState::Unknown) {
 #ifdef _WIN32
-		// There is no per-session runtime directory on Windows. %LOCALAPPDATA%\quickshell\run
-		// is per user and, unlike %TEMP%, not subject to automatic cleanup while instances run.
 		auto runtimeDir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
 		this->mBaseRunDir = QDir(QDir(runtimeDir).filePath("run"));
 #else
@@ -445,7 +436,6 @@ bool QsPaths::checkLock(const QString& path, InstanceLockInfo* info, bool allowD
 		auto stream = QDataStream(&file);
 		stream >> info->instance;
 
-		// Windows locks don't expose their owner; the lock file records the owning pid.
 		info->pid = isLocked ? info->instance.pid : -1;
 	}
 #else
@@ -482,7 +472,6 @@ QsPaths::collectInstances(const QString& path, const QString& display) {
 	auto dir = QDir(QsPaths::resolveRunLink(path));
 
 #ifdef _WIN32
-	// Instance links are pointer files on Windows, see createRunLink.
 	constexpr auto filters = QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot;
 #else
 	constexpr auto filters = QDir::Dirs | QDir::NoDotAndDotDot;

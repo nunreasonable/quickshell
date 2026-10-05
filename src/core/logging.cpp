@@ -62,7 +62,6 @@ QS_LOGGING_CATEGORY(logLogging, "quickshell.logging", QtWarningMsg);
 
 namespace {
 #ifdef _WIN32
-// QTemporaryFile only exposes open() publicly; the flags overload is needed for Unbuffered.
 class EarlyLogFile: public QTemporaryFile {
 public:
 	using QTemporaryFile::open;
@@ -88,7 +87,6 @@ bool copyFileData(int sourceFd, int destFd, qint64 size) {
 
 	return true;
 #elif defined(_WIN32)
-	// QFile::handle() is a CRT descriptor on Windows.
 	std::array<char, 64 * 1024> buffer = {};
 	auto remaining = usize;
 
@@ -418,7 +416,6 @@ CategoryFilter LogManager::getFilter(QLatin1StringView category) {
 
 void ThreadLogging::init() {
 #ifdef _WIN32
-	// No memfd on Windows: early logs are buffered in anonymous temporary files instead.
 	auto* logTmp = new EarlyLogFile();
 	auto* dlogTmp = new EarlyLogFile();
 
@@ -430,7 +427,6 @@ void ThreadLogging::init() {
 		delete logTmp;
 	}
 
-	// buffered by WriteBuffer
 	if (dlogTmp->open(QFile::ReadWrite | QFile::Unbuffered)) {
 		crash::CrashInfo::INSTANCE.logFd = dlogTmp->handle();
 		this->detailedFile = dlogTmp;

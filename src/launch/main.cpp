@@ -24,9 +24,6 @@
 #include "build.hpp"
 #include "launch_p.hpp"
 
-// On Windows there is no re-exec'd crash-reporter step to check for (see
-// src/windows/crash/handler.cpp): the dump is written and the shell relaunched directly from
-// the crash handler itself, so main.hpp/qsCheckCrash is POSIX-only.
 #if CRASH_HANDLER && !defined(_WIN32)
 #include "../crash/main.hpp"
 #endif
@@ -37,11 +34,6 @@ namespace {
 
 void checkCrashRelaunch(char** argv) {
 #if CRASH_HANDLER && defined(_WIN32)
-	// src/windows/crash/handler.cpp already wrote the dump and started this process with
-	// "-p <configPath>" on the command line before the crashed instance terminated, so there's
-	// nothing left to relaunch here - just the same crash-loop guard as the POSIX path (crashed
-	// within 10s of its own launch), based on env vars the handler set on the old process before
-	// spawning this one (inherited since CreateProcess was given no explicit environment block).
 	Q_UNUSED(argv);
 
 	if (qEnvironmentVariableIsSet("__QUICKSHELL_CRASH_RELAUNCH")) {
@@ -115,7 +107,6 @@ void checkCrashRelaunch(char** argv) {
 } // namespace
 
 #ifndef _WIN32
-// The Windows implementation lives in daemon_win.cpp.
 int DAEMON_PIPE = -1; // NOLINT
 
 void exitDaemon(int code) {
@@ -156,8 +147,6 @@ void exitDaemon(int code) {
 
 int main(int argc, char** argv) {
 #ifdef QS_WINDOWS_GUI_EXE
-	// qsw.exe has no console of its own. If it was started from one, attach to it so
-	// CLI output (--help, qs list, ...) is still visible.
 	if (AttachConsole(ATTACH_PARENT_PROCESS)) {
 		FILE* stream = nullptr;
 		freopen_s(&stream, "CONIN$", "r", stdin);
@@ -178,10 +167,6 @@ int main(int argc, char** argv) {
 	exitDaemon(code);
 
 #ifdef _WIN32
-	// Qt and the shell have cleaned up by now. Skip the DLL detach notifications ExitProcess
-	// sends: third party DLLs make cross-process COM calls there (VirtualDesktopAccessor
-	// releasing its explorer objects), and with ExitProcess having already ended every other
-	// thread, including RPC's, they never get an answer and leave a one-thread process behind.
 	fflush(nullptr);
 	TerminateProcess(GetCurrentProcess(), static_cast<UINT>(code));
 #endif

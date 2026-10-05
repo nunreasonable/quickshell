@@ -1,5 +1,3 @@
-# CLI11 is header only. Prefer an installed package; when cross compiling it can be pointed at
-# a plain include directory instead.
 find_package(CLI11 CONFIG QUIET)
 
 if (NOT TARGET CLI11::CLI11)

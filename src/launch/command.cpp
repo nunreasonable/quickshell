@@ -46,8 +46,6 @@ namespace {
 
 QList<QString> configBaseDirs() {
 #ifdef _WIN32
-	// %LOCALAPPDATA%, then %APPDATA% (roaming), then the system wide %ProgramData%.
-	// XDG_CONFIG_HOME and XDG_CONFIG_DIRS (';' separated) are still honored when set.
 	auto configHome = qEnvironmentVariable("XDG_CONFIG_HOME");
 	if (configHome.isEmpty()) {
 		configHome = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
@@ -538,7 +536,6 @@ int runCommand(int argc, char** argv) {
 #ifdef _WIN32
 		auto ret = 0;
 		if (spawnDaemon(argc, argv, &ret)) return ret;
-		// Otherwise this process is the detached daemon; carry on normally.
 #else
 		auto closepipes = std::array<int, 2>();
 		if (pipe(closepipes.data()) == -1) {
@@ -622,8 +619,6 @@ int runCommand(int argc, char** argv) {
 
 QString getDisplayConnection() {
 #ifdef _WIN32
-	// QGuiApplication::platformName() is empty in CLI mode (QCoreApplication only), so it can't
-	// be used to match instances. Each logon session has its own desktop; use its id.
 	DWORD sessionId = 0;
 	ProcessIdToSessionId(GetCurrentProcessId(), &sessionId);
 	return "windows/" + QString::number(sessionId);

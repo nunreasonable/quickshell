@@ -1,5 +1,4 @@
 if (NOT WIN32)
-	# Only used by debuginfo.cpp (GPU info). Windows uses EnumDisplayDevices instead.
 	pkg_check_modules(libdrm REQUIRED IMPORTED_TARGET libdrm)
 endif()
 

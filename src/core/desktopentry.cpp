@@ -424,9 +424,6 @@ DesktopEntryManager::DesktopEntryManager(): monitor(new DesktopEntryMonitor(this
 	);
 
 	if (DesktopEntryManager::sBackend != nullptr) {
-		// Backend scans may hit COM/WinRT or disk and must not block the Qt GUI thread (which
-		// is where the singleton is typically first constructed from); run it like any other
-		// rescan instead of inline like the synchronous Linux .desktop scan below.
 		this->scanDesktopEntries();
 	} else {
 		DesktopEntryScanner(this).run();
@@ -486,10 +483,6 @@ DesktopEntry* DesktopEntryManager::heuristicLookup(const QString& name) {
 
 	if (iter != list.end()) return *iter;
 
-	// Backend-provided entries (Windows) have no meaningful startupClass to match on, but
-	// matching a window's title/appId against the display name is a reasonable last resort
-	// there. Gated on a backend being installed so Linux's .desktop-driven lookup (which this
-	// could make falsely match a Name= against an arbitrary window class) is unaffected.
 	if (DesktopEntryManager::sBackend != nullptr) {
 		auto lowerName = name.toLower();
 

@@ -40,15 +40,8 @@ IconImageProvider::requestPixmap(const QString& id, QSize* size, const QSize& re
 	if (targetSize.width() == 0 || targetSize.height() == 0) targetSize = QSize(2, 2);
 
 #ifdef Q_OS_WIN
-	// The id arrives percent-encoded where the URL needed it: Apps folder ids of Win32 tools
-	// ("{1ac14e77-...}\windowspowershell\v1.0\powershell.exe") and paths with braces or
-	// backslashes would never match otherwise. Theme icon names have no '%' to lose.
 	iconName = QUrl::fromPercentEncoding(iconName.toUtf8());
 
-	// Windows has no icon theme to speak of; app icons (and arbitrary exe/file icons) are
-	// pulled from the shell instead. Keys that aren't recognized as Windows icon keys fall
-	// through to the normal (always-null here) theme lookup below and then the missing-icon
-	// placeholder, same as any other unresolvable icon name.
 	if (path.isEmpty()) {
 		auto winPixmap = qs::windows::iconForKey(iconName, targetSize);
 		if (!winPixmap.isNull()) {

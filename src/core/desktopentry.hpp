@@ -46,26 +46,14 @@ struct ParsedDesktopEntryData {
 	QVector<DesktopActionData> actions;
 };
 
-/// Platform backend that can replace DesktopEntryManager's desktop-entry-spec scanner and
-/// process launcher with an OS-native application list, while leaving the DesktopEntry /
-/// DesktopEntries QML API identical. Linux installs none and keeps the built-in `.desktop`
-/// file scanner; Windows installs qs::windows::WindowsDesktopEntryBackend, backed by the
-/// shell Apps folder (see src/windows/desktopentry_backend.hpp).
 class DesktopEntryBackend {
 public:
 	virtual ~DesktopEntryBackend() = default;
 
-	/// Enumerate all applications. Always called from a worker thread, never the Qt GUI
-	/// thread, so implementations needing COM/WinRT are free to block and must init their
-	/// own apartment.
 	virtual QList<ParsedDesktopEntryData> scan() = 0;
 
-	/// Directories to watch (via QFileSystemWatcher) for changes that should trigger a rescan.
 	virtual QStringList watchPaths() = 0;
 
-	/// Launch `command` (opaque to the generic code; whatever `scan()` put in
-	/// ParsedDesktopEntryData::command) with `workingDirectory`. Called from the Qt GUI
-	/// thread and must not block it.
 	virtual void execute(const QVector<QString>& command, const QString& workingDirectory) = 0;
 };
 
@@ -287,10 +275,6 @@ public:
 
 	static const QStringList& desktopPaths();
 
-	/// Installs a platform backend (see @@DesktopEntryBackend), replacing the `.desktop` file
-	/// scanner and QProcess-based launcher. Must be called before the first use of
-	/// DesktopEntries / DesktopEntryManager::instance() (i.e. from a QsEnginePlugin::init()),
-	/// since the manager decides how to perform its initial scan at construction time.
 	static void installBackend(DesktopEntryBackend* backend);
 	static DesktopEntryBackend* backend();
 
