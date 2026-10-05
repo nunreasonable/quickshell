@@ -206,7 +206,7 @@ void Clipboard::captureImage() {
 		              DIB_RGB_COLORS,
 		              SRCCOPY
 		          )
-		       != GDI_ERROR;
+		       != static_cast<int>(GDI_ERROR);
 	}
 
 	QImage image;

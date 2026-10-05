@@ -157,7 +157,7 @@ void SystemStats::setupGpuCounters() {
 
 	auto status = PdhExpandWildCardPathW(nullptr, wildcard, nullptr, &pathListSize, 0);
 
-	if (status != PDH_MORE_DATA && status != ERROR_SUCCESS) {
+	if (status != static_cast<PDH_STATUS>(PDH_MORE_DATA) && status != ERROR_SUCCESS) {
 		qCDebug(logSystemStats) << "No GPU engine counters available (PdhExpandWildCardPathW):"
 		                        << Qt::hex << status;
 		this->teardownGpuCounters();
