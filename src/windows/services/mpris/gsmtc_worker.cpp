@@ -27,7 +27,6 @@ namespace qs::windows::services::mpris {
 namespace {
 Q_LOGGING_CATEGORY(logMprisWorker, "quickshell.windows.mpris.worker", QtWarningMsg);
 
-// 100ns ticks since 1601-01-01 (FILETIME epoch) to 1970-01-01 (Unix epoch).
 constexpr qint64 WINDOWS_TO_UNIX_EPOCH_TICKS = 116444736000000000LL;
 
 QString toQString(const winrt::hstring& value) {
@@ -40,9 +39,6 @@ QDateTime toQDateTime(const winrt::Windows::Foundation::DateTime& dt) {
 	return QDateTime::fromMSecsSinceEpoch(unixMs, QTimeZone::UTC);
 }
 
-// Best-effort AUMID -> (identity, desktopEntry). Unknown AUMIDs fall back to the AUMID itself
-// (minus a trailing ".exe") so ii's DesktopEntries.byId lookup still gets *something* to match
-// against, same as the real name a dbus-based MPRIS player would send as its own guess.
 QPair<QString, QString> identityForAumid(const QString& aumid) {
 	static const QHash<QString, QPair<QString, QString>> known = {
 	    {"Spotify.exe",                                           {"Spotify", "spotify"}                },
@@ -51,7 +47,6 @@ QPair<QString, QString> identityForAumid(const QString& aumid) {
 	    {"Microsoft.MicrosoftEdge_8wekyb3d8bbwe!MicrosoftEdge",   {"Microsoft Edge", "msedge"}          },
 	    {"MicrosoftEdge.exe",                                     {"Microsoft Edge", "msedge"}          },
 	    {"msedge.exe",                                             {"Microsoft Edge", "msedge"}          },
-        // Firefox doesn't set a human-readable AUMID; this is the fixed id it registers under.
 	    {"308046B0AF4A39CB",                                      {"Firefox", "firefox"}                },
 	    {"firefox.exe",                                            {"Firefox", "firefox"}                },
 	    {"chrome.exe",                                             {"Google Chrome", "google-chrome"}    },
@@ -156,7 +151,6 @@ void GsmtcWorker::resyncSessions() {
 		return;
 	}
 
-	// Remove entries whose session disappeared.
 	QVector<quint64> toRemove;
 	for (const auto& [id, entry]: this->mEntries) {
 		auto stillLive = false;
@@ -170,7 +164,6 @@ void GsmtcWorker::resyncSessions() {
 	}
 	for (auto id: toRemove) this->removeSession(id);
 
-	// Add sessions we haven't seen yet.
 	for (const auto& s: sessions) {
 		if (!this->sessionStillTracked(s)) this->addSession(s);
 	}

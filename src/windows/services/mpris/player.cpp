@@ -14,7 +14,6 @@ namespace qs::windows::services::mpris {
 namespace {
 Q_LOGGING_CATEGORY(logMprisPlayer, "quickshell.windows.mpris.player", QtWarningMsg);
 
-// GSMTC timestamps/durations are in 100ns ticks (same unit as FILETIME / TimeSpan).
 constexpr qint64 TICKS_PER_SECOND = 10'000'000;
 } // namespace
 

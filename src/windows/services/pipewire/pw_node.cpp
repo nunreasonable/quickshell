@@ -20,7 +20,6 @@ namespace qs::windows::services::pipewire {
 namespace {
 Q_LOGGING_CATEGORY(logPwNode, "quickshell.windows.pipewire.node", QtWarningMsg);
 
-// Forwards IAudioEndpointVolume change notifications to a PwNodeAudio on the GUI thread.
 class EndpointVolumeCallback final
     : public IAudioEndpointVolumeCallback
     , public ComCallbackTarget<PwNodeAudio> {
@@ -50,7 +49,6 @@ public:
 		return static_cast<ULONG>(rc);
 	}
 
-	// Called by Core Audio on an arbitrary worker thread.
 	HRESULT STDMETHODCALLTYPE OnNotify(PAUDIO_VOLUME_NOTIFICATION_DATA data) override {
 		if (data == nullptr) return S_OK;
 
@@ -160,7 +158,7 @@ float PwNodeAudio::volume() const {
 
 void PwNodeAudio::setVolume(float volume) {
 	if (volume < 0.0F) volume = 0.0F;
-	if (volume > 1.0F) volume = 1.0F; // Core Audio's scalar volume has no boost range above 100%
+	if (volume > 1.0F) volume = 1.0F;
 
 	HRESULT hr = S_OK;
 	if (this->mEndpointVolume != nullptr) {
@@ -180,8 +178,6 @@ void PwNodeAudio::setVolume(float volume) {
 }
 
 QVector<PwAudioChannel::Enum> PwNodeAudio::channels() const {
-	// Only hardware endpoints expose per-channel control; Core Audio has no concept of channel
-	// *position* here (that needs devicetopology parsing we don't do), so they're all Unknown.
 	if (this->mEndpointVolume == nullptr) return {};
 
 	UINT count = 0;
@@ -225,8 +221,6 @@ void PwNodeAudio::setVolumes(const QVector<float>& volumes) {
 void PwNodeAudio::applyVolumeMuted(float volume, bool muted) {
 	Q_UNUSED(volume);
 	Q_UNUSED(muted);
-	// The new values are already live in Core Audio by the time this notification fires;
-	// just re-read through the normal getters so the two code paths can't disagree.
 	emit this->volumeChanged();
 	emit this->mutedChanged();
 	emit this->volumesChanged();

@@ -8,7 +8,7 @@
 namespace qs::windows::services::pipewire {
 
 namespace {
-constexpr auto PollIntervalMs = 33; // ~30Hz
+constexpr auto PollIntervalMs = 33;
 }
 
 PwNodePeakMonitor::PwNodePeakMonitor(QObject* parent): QObject(parent) {

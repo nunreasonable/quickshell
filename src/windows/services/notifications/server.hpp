@@ -30,10 +30,6 @@ struct NotificationServerSupport {
 	QVector<QString> extraHints;
 };
 
-// Process wide notification store, the Windows counterpart of the Linux D-Bus server.
-// Notifications come from the shell itself (notifySend), from other qs processes of the same
-// config through the session bus window (forwardToOwner) and from the Windows notification
-// center (ToastMirror).
 class NotificationServer: public QObject {
 	Q_OBJECT;
 
@@ -44,8 +40,6 @@ public:
 	ObjectModel<Notification>* trackedNotifications();
 	void deleteNotification(Notification* notification, NotificationCloseReason::Enum reason);
 
-	// Same contract as the D-Bus Notify method: creates a notification (or updates the one with
-	// `replacesId`), emits `notification` for new ones and returns the id.
 	quint32 notify(
 	    const QString& appName,
 	    quint32 replacesId,
@@ -57,10 +51,6 @@ public:
 	    qint32 expireTimeout
 	);
 
-	// What `notify-send summary body args...` does on Linux. The id is handed out right away but
-	// the notification arrives on the next event loop turn, as it would after the D-Bus round
-	// trip, so callers never re-enter their own notification handlers. Sends made before any
-	// NotificationServer is live (during config load) wait for the next switchGeneration.
 	quint32 notifySend(const QString& summary, const QString& body, const QStringList& args);
 
 	void invokeAction(Notification* notification, const QString& identifier);
@@ -97,9 +87,6 @@ private:
 
 	[[nodiscard]] bool hasReceiver() const;
 
-	// Like the org.freedesktop.Notifications bus name, one process per session owns the
-	// notifications: the first shell.qml instance. Others (settings, welcome, dialogs started
-	// from the same config) forward notifySend to it and don't mirror Windows toasts.
 	void claimSession();
 	quint32 forwardToOwner(const QString& summary, const QString& body, const QStringList& args);
 	static LRESULT CALLBACK busWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -116,10 +103,10 @@ private:
 
 	quint32 nextId = 1;
 	QHash<quint32, Notification*> idMap;
-	QHash<quint32, Notification*> toastMap; // listener toast id -> its mirror
+	QHash<quint32, Notification*> toastMap;
 	ObjectModel<Notification> mNotifications {this};
 	ToastMirror* mMirror = nullptr;
-	QList<std::function<void()>> pendingSends; // notifySend calls made with no receiver yet
+	QList<std::function<void()>> pendingSends;
 };
 
 } // namespace qs::windows::services::notifications

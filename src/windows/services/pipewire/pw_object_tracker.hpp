@@ -7,10 +7,6 @@
 
 namespace qs::windows::services::pipewire {
 
-///! Binds pipewire objects.
-/// Upstream uses this to make unbound nodes' properties/audio valid. Core Audio has no
-/// "unbound" state -- every @@PwNode's properties and @@PwNode.audio are always live -- so on
-/// Windows this is just an inert holder for whatever QML assigns to @@objects.
 class PwObjectTracker: public QObject {
 	Q_OBJECT;
 	Q_PROPERTY(QList<QObject*> objects READ objects WRITE setObjects NOTIFY objectsChanged);

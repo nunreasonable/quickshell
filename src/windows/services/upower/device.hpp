@@ -9,16 +9,12 @@
 
 namespace qs::service::upower {
 
-///! Power state of a UPower device.
-/// See @@UPowerDevice.state.
 class UPowerDeviceState: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
 	QML_SINGLETON;
 
 public:
-	// Same values as upstream's DBus-backed UPowerDeviceState (src/services/upower/device.hpp),
-	// so QML written against either backend sees the same numbers.
 	enum Enum : quint8 {
 		Unknown = 0,
 		Charging = 1,
@@ -33,15 +29,12 @@ public:
 	Q_INVOKABLE static QString toString(qs::service::upower::UPowerDeviceState::Enum status);
 };
 
-///! Type of a UPower device.
-/// See @@UPowerDevice.type.
 class UPowerDeviceType: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
 	QML_SINGLETON;
 
 public:
-	// Same values as upstream's UPowerDeviceType.
 	enum Enum : quint8 {
 		Unknown = 0,
 		LinePower = 1,
@@ -78,10 +71,6 @@ public:
 	Q_INVOKABLE static QString toString(qs::service::upower::UPowerDeviceType::Enum type);
 };
 
-///! A device exposed through the Windows UPower backend.
-/// Windows only ever exposes the aggregate battery reported by `GetSystemPowerStatus`, so
-/// at most one of these exists (UPower.displayDevice, additionally listed in UPower.devices
-/// when a battery is present).
 class UPowerDevice: public QObject {
 	Q_OBJECT;
 	// clang-format off
@@ -109,7 +98,6 @@ class UPowerDevice: public QObject {
 public:
 	explicit UPowerDevice(QObject* parent = nullptr);
 
-	// Repopulates every property from a fresh GetSystemPowerStatus() snapshot.
 	void updateFromSystemPowerStatus();
 
 	[[nodiscard]] QBindable<UPowerDeviceType::Enum> bindableType() const { return &this->bType; }

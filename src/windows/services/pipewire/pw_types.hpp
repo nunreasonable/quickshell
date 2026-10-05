@@ -7,10 +7,6 @@
 
 namespace qs::windows::services::pipewire {
 
-///! The type of a pipewire node.
-/// Use bitwise comparisons to filter for audio, video, sink, source or stream nodes.
-/// Mirrors `Quickshell.Services.Pipewire`'s `PwNodeType` exactly, so configs comparing against
-/// these flags behave the same on Windows as on Linux.
 class PwNodeType: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
@@ -41,9 +37,6 @@ public:
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(PwNodeType::Flags)
 
-///! Audio channel of a pipewire node.
-/// Core Audio doesn't give us SPA channel positions, so this exists only for API parity with
-/// upstream; @@PwNodeAudio.channels entries are always `Unknown` on Windows.
 class PwAudioChannel: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
@@ -98,9 +91,6 @@ public:
 	Q_INVOKABLE static QString toString(qs::windows::services::pipewire::PwAudioChannel::Enum value);
 };
 
-///! State of a pipewire link.
-/// Core Audio has no per-link routing graph, so @@PwLink/@@PwLinkGroup never report anything
-/// but `Active`; kept for API parity.
 class PwLinkState: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;

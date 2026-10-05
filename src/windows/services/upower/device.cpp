@@ -61,15 +61,11 @@ UPowerDevice::UPowerDevice(QObject* parent): QObject(parent) {
 		return this->bType == UPowerDeviceType::Battery && this->bPowerSupply.value();
 	});
 
-	// GetSystemPowerStatus has no battery wear/health data.
 	this->bHealthSupported = false;
 	this->bHealthPercentage = 100.0;
 	this->bReady = true;
 }
 
-// GetSystemPowerStatus does not expose a charge/discharge wattage or a time-to-full estimate;
-// those stay at 0, matching the "no battery" shim defaults when unknown. See also BATTERY_STATUS
-// (IOCTL_BATTERY_QUERY_STATUS) for a richer source if this ever needs to improve.
 void UPowerDevice::updateFromSystemPowerStatus() {
 	SYSTEM_POWER_STATUS status {};
 	if (!GetSystemPowerStatus(&status)) {
@@ -108,7 +104,6 @@ void UPowerDevice::updateFromSystemPowerStatus() {
 	auto lifeTimeUnknown = status.BatteryLifeTime == static_cast<DWORD>(-1);
 	this->bTimeToEmpty =
 	    (present && !onAc && !lifeTimeUnknown) ? qreal(status.BatteryLifeTime) : 0.0;
-	// No time-to-full field in SYSTEM_POWER_STATUS.
 	this->bTimeToFull = 0.0;
 
 	this->bIconName = present

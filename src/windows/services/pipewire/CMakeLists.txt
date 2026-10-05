@@ -1,8 +1,3 @@
-# Native replacement for the Quickshell.Services.Pipewire shim: Core Audio (WASAPI device
-# enumeration + per-application session volume via IAudioSessionManager2) standing in for
-# pipewire, with the same QML API ii uses (see module.md... there isn't one yet, see the doc
-# comments on Pipewire/PwNode/PwNodeAudio instead).
-
 qt_add_library(quickshell-windows-pipewire STATIC
 	policy_config.cpp
 	pw_types.cpp

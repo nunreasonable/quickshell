@@ -16,13 +16,6 @@ namespace qs::windows::services::pipewire {
 
 class PwBackend;
 
-///! Contains links to all Core Audio objects, standing in for `Quickshell.Services.Pipewire`'s
-/// `Pipewire` singleton.
-///
-/// Backed by Windows Core Audio (WASAPI device enumeration, `IAudioSessionManager2` for
-/// per-application streams) rather than pipewire; see @@PwNode for how devices/sessions map
-/// onto nodes. `links` is always empty -- Core Audio has no per-channel routing graph -- use
-/// @@linkGroups instead, which is populated for capture devices currently being recorded from.
 class Pipewire: public QObject {
 	Q_OBJECT;
 	// clang-format off
@@ -55,15 +48,10 @@ public:
 
 	[[nodiscard]] bool isReady() const { return this->mReady; }
 
-	// Non-QML accessor used by PwNodeLinkTracker.
 	[[nodiscard]] const QList<PwLinkGroup*>& linkGroupList() const { return this->mLinkGroups.valueList(); }
 
-	// The one Pipewire instance (the QML engine only ever creates one, being QML_SINGLETON);
-	// null before that happens. Used by PwNodeLinkTracker, which upstream can also construct
-	// standalone before any Pipewire access.
 	static Pipewire* instance();
 
-	// --- Called by PwBackend (GUI thread only) ---
 	void backendAddNode(PwNode* node);
 	void backendRemoveNode(PwNode* node);
 	void backendAddLinkGroup(PwLinkGroup* group);

@@ -33,7 +33,7 @@ QString cacheDir() {
 
 void pruneCache(const QString& dir) {
 	QDir qdir(dir);
-	auto entries = qdir.entryInfoList(QDir::Files, QDir::Time); // newest first
+	auto entries = qdir.entryInfoList(QDir::Files, QDir::Time);
 	for (qsizetype i = MAX_CACHED_FILES; i < entries.size(); i++) {
 		QFile::remove(entries.at(i).absoluteFilePath());
 	}
@@ -46,7 +46,6 @@ QString cacheThumbnail(const IRandomAccessStreamReference& thumbnail, const QStr
 	auto dir = cacheDir();
 	auto hash = QCryptographicHash::hash(trackKey.toUtf8(), QCryptographicHash::Sha1).toHex();
 
-	// Write once per track: if we (or a previous run) already cached this key, reuse it.
 	auto existing = QDir(dir).entryList({hash + ".png"}, QDir::Files);
 	if (!existing.isEmpty()) {
 		return QUrl::fromLocalFile(dir + "/" + existing.first()).toString();

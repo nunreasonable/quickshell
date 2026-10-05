@@ -11,15 +11,12 @@
 
 namespace qs::service::upower {
 
-///! Power profile exposed by the PowerProfiles service.
-/// See @@PowerProfiles.
 class PowerProfile: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
 	QML_SINGLETON;
 
 public:
-	// Same values as upstream's PowerProfile.
 	enum Enum : quint8 {
 		PowerSaver = 0,
 		Balanced = 1,
@@ -30,8 +27,6 @@ public:
 	Q_INVOKABLE static QString toString(qs::service::upower::PowerProfile::Enum profile);
 };
 
-///! Reason for performance degradation. Windows has no equivalent signal to power-profiles-daemon's
-/// lap/thermal detection, so this is always `None`; kept for API parity with the DBus backend.
 class PerformanceDegradationReason: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
@@ -50,7 +45,6 @@ public:
 	// clang-format on
 };
 
-// docgen can't hit gadgets yet
 class PowerProfileHold {
 	Q_GADGET;
 	QML_VALUE_TYPE(powerProfileHold);
@@ -68,11 +62,6 @@ public:
 	[[nodiscard]] bool operator==(const PowerProfileHold& other) const;
 };
 
-///! Provides access to Windows power schemes ("overlay schemes" / power modes), mapped onto
-/// the same PowerSaver/Balanced/Performance vocabulary as power-profiles-daemon.
-///
-/// Backed by `PowerGetEffectiveOverlayScheme`/`PowerSetActiveOverlayScheme` (powrprof.dll) and
-/// `PowerRegisterForEffectivePowerModeNotifications` for change events.
 class PowerProfilesQml: public QObject {
 	Q_OBJECT;
 	QML_NAMED_ELEMENT(PowerProfiles);
@@ -103,8 +92,6 @@ public:
 
 	[[nodiscard]] QBindable<QList<PowerProfileHold>> bindableHolds() const { return &this->bHolds; }
 
-	// Re-reads the active overlay scheme. Public so the effective-power-mode notification
-	// callback (powerprofiles.cpp) can invoke it via QMetaObject::invokeMethod from any thread.
 	void refresh();
 
 signals:
@@ -122,8 +109,6 @@ private:
 	// clang-format on
 
 	HPOWERNOTIFY notificationHandle = nullptr;
-	// Opaque registration handle from PowerRegisterForEffectivePowerModeNotifications; its real
-	// type (PVOID) is declared in <powersetting.h>, only included from powerprofiles.cpp.
 	void* effectiveModeHandle = nullptr;
 };
 

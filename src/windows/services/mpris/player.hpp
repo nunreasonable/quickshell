@@ -12,8 +12,6 @@
 
 namespace qs::windows::services::mpris {
 
-///! Playback state of an MprisPlayer
-/// See @@MprisPlayer.playbackState. Same enum as upstream's Quickshell.Services.Mpris.
 class MprisPlaybackState: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
@@ -30,8 +28,6 @@ public:
 	Q_INVOKABLE static QString toString(qs::windows::services::mpris::MprisPlaybackState::Enum status);
 };
 
-///! Loop state of an MprisPlayer
-/// See @@MprisPlayer.loopState. Same enum as upstream's Quickshell.Services.Mpris.
 class MprisLoopState: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
@@ -50,15 +46,6 @@ public:
 
 class GsmtcBackend;
 
-///! A media session exposed by GlobalSystemMediaTransportControlsSessionManager.
-/// Windows backend for `Quickshell.Services.Mpris`'s MprisPlayer, standing in for an MPRIS
-/// player. One instance per GSMTC session (see @@Mpris.players). All properties are updated
-/// from snapshots posted by the GSMTC worker thread (gsmtc_worker.cpp); control methods post
-/// commands back to that thread and return immediately -- the resulting property changes arrive
-/// later, from the matching GSMTC event, same as a real (slow/async) MPRIS player would behave.
-///
-/// > [!WARNING] GSMTC has no equivalent of volume control, raise/quit, fullscreen or uri
-/// > schemes/mime types -- those properties are always their "unsupported" default.
 class MprisPlayer: public QObject {
 	Q_OBJECT;
 	// clang-format off
@@ -85,7 +72,7 @@ class MprisPlayer: public QObject {
 	Q_PROPERTY(quint32 uniqueId READ uniqueId NOTIFY uniqueIdChanged);
 	Q_PROPERTY(QString trackTitle READ trackTitle NOTIFY trackTitleChanged);
 	Q_PROPERTY(QString trackArtist READ trackArtist NOTIFY trackArtistChanged);
-	Q_PROPERTY(QString trackArtists READ trackArtist NOTIFY trackArtistChanged); // deprecated alias, see upstream
+	Q_PROPERTY(QString trackArtists READ trackArtist NOTIFY trackArtistChanged);
 	Q_PROPERTY(QString trackAlbum READ trackAlbum NOTIFY trackAlbumChanged);
 	Q_PROPERTY(QString trackAlbumArtist READ trackAlbumArtist NOTIFY trackAlbumArtistChanged);
 	Q_PROPERTY(QString trackArtUrl READ trackArtUrl NOTIFY trackArtUrlChanged);
@@ -180,8 +167,6 @@ public:
 	[[nodiscard]] static QList<QString> supportedUriSchemes() { return {}; }
 	[[nodiscard]] static QList<QString> supportedMimeTypes() { return {}; }
 
-	// --- Applied by GsmtcBackend (GUI thread only), one group per GSMTC event source ---
-
 	void applyIdentity(const QString& identity, const QString& desktopEntry, const QString& dbusName);
 
 	struct MediaSnapshot {
@@ -220,8 +205,6 @@ public:
 	void applyTimeline(const TimelineSnapshot& snapshot);
 
 signals:
-	/// The track has changed; track info properties are updated immediately after, then
-	/// @@postTrackChanged is sent. Mirrors upstream's MprisPlayer signals.
 	void trackChanged();
 	void postTrackChanged();
 
@@ -256,7 +239,7 @@ signals:
 
 private:
 	quint64 mSessionId;
-	GsmtcBackend* mBackend; // not owned; outlives all players, see Mpris::~Mpris
+	GsmtcBackend* mBackend;
 
 	bool mCanControl = false;
 	bool mCanPlay = false;
@@ -269,8 +252,6 @@ private:
 	QString mDesktopEntry;
 	QString mDbusName;
 
-	// Position extrapolation: last GSMTC-reported position, the (UTC) instant it was reported,
-	// and the rate to scale elapsed time by. See position().
 	qint64 mBasePositionTicks = 0;
 	QDateTime mBaseTimestamp;
 	qreal mRate = 1.0;

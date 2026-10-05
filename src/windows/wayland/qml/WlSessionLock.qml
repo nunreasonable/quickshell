@@ -1,5 +1,3 @@
-// Windows has no client side session lock: locking hands over to the real Windows lock
-// screen (LockWorkStation) and the lock is released right away on this side.
 import QtQuick
 import Quickshell
 

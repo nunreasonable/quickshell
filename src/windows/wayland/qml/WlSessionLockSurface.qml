@@ -1,4 +1,3 @@
-// Windows stand-in, never shown (see WlSessionLock).
 import QtQuick
 import Quickshell
 

@@ -32,7 +32,7 @@ QS_LOGGING_CATEGORY(logNotifications, "quickshell.windows.notifications", QtWarn
 namespace {
 constexpr auto BUS_CLASS = L"QuickshellNotificationBus";
 constexpr auto BUS_MUTEX = L"Local\\quickshell-notification-bus";
-constexpr ULONG_PTR NOTIFY_SEND_MAGIC = 0x514e5331; // "QNS1"
+constexpr ULONG_PTR NOTIFY_SEND_MAGIC = 0x514e5331;
 } // namespace
 
 NotificationServer* NotificationServer::instance() {
@@ -48,8 +48,6 @@ NotificationServer* NotificationServer::instance() {
 void NotificationServer::claimSession() {
 	if (this->mOwner) return;
 
-	// Only a config's main entry point serves; a settings window opened from it never does,
-	// even when it happens to start first.
 	auto entry = QFileInfo(InstanceInfo::CURRENT.configPath).fileName();
 	if (!entry.isEmpty() && entry.compare("shell.qml", Qt::CaseInsensitive) != 0) return;
 
@@ -61,7 +59,6 @@ void NotificationServer::claimSession() {
 
 		if (!this->claimRetry.isActive()) {
 			qCInfo(logNotifications) << "Another shell owns the notification server; forwarding to it.";
-			// Take over once it exits (a shell restarted while the old one was still closing).
 			this->claimRetry.setInterval(5000);
 			QObject::connect(&this->claimRetry, &QTimer::timeout, this, &NotificationServer::claimSession);
 			this->claimRetry.start();
@@ -72,7 +69,6 @@ void NotificationServer::claimSession() {
 
 	this->claimRetry.stop();
 
-	// The handle stays open for the life of the process; the name goes away with it.
 	this->ownerMutex = mutex;
 	this->mOwner = true;
 	if (this->mMirrorWanted) this->mirror()->setEnabled(true);
@@ -197,7 +193,6 @@ void NotificationServer::switchGeneration(bool reEmit, const std::function<void(
 			}
 		}
 	} else {
-		// Expired, not dismissed: mirrored toasts stay in the Windows notification center.
 		for (auto* notification: notifications) {
 			delete notification;
 		}
@@ -222,9 +217,6 @@ void NotificationServer::deleteNotification(
 	if (auto toastId = notification->toastId(); toastId != 0) {
 		this->toastMap.remove(toastId);
 
-		// Dismissed here means the user is done with it, same as dismissing it in Windows' own
-		// notification center. Expiring (popup timeouts, reloads) leaves the toast alone, and
-		// CloseRequested means it is already gone from Windows.
 		if (reason == NotificationCloseReason::Dismissed && this->mMirror) {
 			this->mMirror->removeToast(toastId);
 		}
@@ -277,8 +269,6 @@ quint32 NotificationServer::notifySend(
 	QMetaObject::invokeMethod(
 	    this,
 	    [this, send] {
-		    // With nobody listening the notification would be dropped as untracked; a server
-		    // that is still loading picks it up once it goes live.
 		    if (this->hasReceiver()) send();
 		    else this->pendingSends.append(send);
 	    },
@@ -335,8 +325,6 @@ quint32 NotificationServer::deliver(
 }
 
 void NotificationServer::invokeAction(Notification* notification, const QString& identifier) {
-	// A toast's own buttons and launch arguments only reach the app through Windows' toast
-	// activation, which another process can't trigger; bringing up the app is the best stand-in.
 	if (notification->toastId() != 0 && identifier == QStringLiteral("default")) {
 		NotificationServer::activateApp(
 		    notification->aumid(),
@@ -350,8 +338,6 @@ void NotificationServer::invokeAction(Notification* notification, const QString&
 void NotificationServer::activateApp(const QString& aumid, const QString& desktopEntry) {
 	if (aumid.isEmpty()) return;
 
-	// Packaged apps and Win32 apps that set an explicit AUMID on their windows report it as the
-	// tracker's appId, so an open window can be raised instead of starting another instance.
 	for (auto* window: qs::windows::WindowTracker::instance()->windows()) {
 		if (window->appId().compare(aumid, Qt::CaseInsensitive) == 0) {
 			window->activate();
@@ -363,15 +349,12 @@ void NotificationServer::activateApp(const QString& aumid, const QString& deskto
 	               ? QString()
 	               : qs::windows::WindowsDesktopEntryBackend::parsingNameForId(desktopEntry);
 
-	// shell:AppsFolder\<AUMID> resolves registered AUMIDs even without a Start menu entry.
 	qs::windows::WindowsDesktopEntryBackend::launch(token.isEmpty() ? aumid : token);
 }
 
 ToastMirror* NotificationServer::mirror() {
 	if (this->mMirror) return this->mMirror;
 
-	// Mirrored toasts are matched to their Start menu entries by AUMID; make sure the (async)
-	// Apps folder scan has started before the first one can arrive.
 	DesktopEntryManager::instance();
 
 	this->mMirror = new ToastMirror(this);
@@ -398,7 +381,6 @@ ToastMirror* NotificationServer::mirror() {
 
 void NotificationServer::setMirrorEnabled(bool enabled) {
 	this->mMirrorWanted = enabled;
-	// The owner already shows every Windows toast; a second mirror would show them twice.
 	if (!this->mOwner) enabled = false;
 	if (!enabled && !this->mMirror) return;
 	this->mirror()->setEnabled(enabled);
@@ -421,8 +403,6 @@ void NotificationServer::onToastAdded(const ToastSnapshot& toast) {
 	hints.insert("x-windows-aumid", toast.aumid);
 	hints.insert("x-windows-toast-id", toast.id);
 
-	// Start menu entry of the sender, for its icon (when Windows has no logo for it) and for
-	// launching it.
 	auto desktopEntry = qs::windows::WindowsDesktopEntryBackend::idForParsingName(toast.aumid);
 	if (!desktopEntry.isEmpty()) hints.insert("desktop-entry", desktopEntry);
 
@@ -435,7 +415,6 @@ void NotificationServer::onToastAdded(const ToastSnapshot& toast) {
 	    toast.appName,
 	    toast.logoPath,
 	    toast.summary,
-	    // Toast text is plain text, while notification bodies are rendered as markup.
 	    toast.body.toHtmlEscaped(),
 	    {QStringLiteral("default"), QStringLiteral("Open")},
 	    hints,

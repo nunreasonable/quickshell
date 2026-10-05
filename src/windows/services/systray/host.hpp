@@ -17,14 +17,6 @@
 
 namespace qs::windows::services::systray {
 
-// Process wide list of tray icons, fed by the hook and the explorer seed (on their threads,
-// queued here). Started by the first SystemTray singleton, lives as long as the process.
-//
-// Explorer's list (seed.cpp) is read again whenever the hook reports that explorer's window was in
-// front of it for a moment: icons added, changed or deleted in that time are caught up from it.
-// Icons whose callback message is still unknown (from the seed, or added while explorer was in
-// front) get it from explorer's tray toolbars where those exist, or from their app answering a
-// TaskbarCreated sent to just its window.
 class TrayHost: public QObject {
 	Q_OBJECT;
 
@@ -61,7 +53,6 @@ private:
 	};
 
 	QList<SystemTrayItem*> mItems;
-	// The seed reads explorer's list on another thread: what it reports may predate a delete.
 	QList<Deletion> deletions;
 	QTimer pruneTimer;
 

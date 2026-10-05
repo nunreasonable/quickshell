@@ -14,13 +14,6 @@
 
 namespace qs::service::upower {
 
-///! Provides access to Windows' aggregate battery status.
-/// Windows backend: `GetSystemPowerStatus`, refreshed on `WM_POWERBROADCAST`
-/// (`RegisterPowerSettingNotification` for `GUID_ACDC_POWER_SOURCE` and
-/// `GUID_BATTERY_PERCENTAGE_REMAINING`) and a low frequency safety-net poll.
-///
-/// Windows only ever exposes one aggregate battery, so @@displayDevice and @@devices
-/// (when a battery is present) describe the same device.
 class UPowerQml: public QObject {
 	Q_OBJECT;
 	QML_NAMED_ELEMENT(UPower);

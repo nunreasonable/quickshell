@@ -15,13 +15,8 @@ namespace qs::windows::services::mpris {
 
 class GsmtcBackend;
 
-///! Contains links to all GSMTC media sessions.
-/// Windows backend for `Quickshell.Services.Mpris`'s `Mpris` singleton, backed by
-/// GlobalSystemMediaTransportControlsSessionManager (Windows.Media.Control) instead of MPRIS
-/// over DBus. See @@MprisPlayer for the session -> player mapping.
 class Mpris: public QObject {
 	Q_OBJECT;
-	/// All connected media sessions.
 	Q_PROPERTY(UntypedObjectModel* players READ players CONSTANT);
 	QML_NAMED_ELEMENT(Mpris);
 	QML_SINGLETON;
@@ -33,7 +28,6 @@ public:
 
 	[[nodiscard]] UntypedObjectModel* players() { return &this->mPlayers; }
 
-	// --- Called by GsmtcBackend (GUI thread only) ---
 	void backendAddPlayer(
 	    quint64 sessionId,
 	    const QString& identity,

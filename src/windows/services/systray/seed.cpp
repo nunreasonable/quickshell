@@ -17,11 +17,6 @@
 #include "../../../core/logcat.hpp"
 #include "hook.hpp"
 
-// Explorer's ITrayNotify, the interface behind the notification area icon settings. Undocumented;
-// the Windows 8+ layout below is the same on Windows 10 and 11 (only Windows 7's ITrayNotify had
-// another IID and layout, and any change would come with a new IID: QueryInterface would just
-// fail). RegisterCallback reports every icon explorer has, overflow ones included, through Notify
-// before it returns.
 namespace {
 
 QS_LOGGING_CATEGORY(logTraySeed, "quickshell.windows.systray", QtWarningMsg);
@@ -52,7 +47,6 @@ public:
 	virtual HRESULT STDMETHODCALLTYPE DoAction(BOOL action) = 0;
 };
 
-// {25DEAD04-1EAC-4911-9E3A-AD0A4AB560FD}
 const CLSID CLSID_TRAY_NOTIFY =
     {0x25dead04, 0x1eac, 0x4911, {0x9e, 0x3a, 0xad, 0x0a, 0x4a, 0xb5, 0x60, 0xfd}};
 
@@ -86,7 +80,6 @@ public:
 	}
 
 	HRESULT STDMETHODCALLTYPE Notify(ULONG /*event*/, NotifyItem* item) override {
-		// Icons explorer only remembers from earlier sessions come without a window.
 		if (item == nullptr || item->hwnd == nullptr || !IsWindow(item->hwnd)) return S_OK;
 
 		qs::windows::services::systray::TrayIconMessage message;
@@ -147,15 +140,12 @@ bool seed(const qs::windows::services::systray::TrayIconSink& sink) {
 
 	hr = trayNotify->RegisterCallback(callback, &handle);
 	if (SUCCEEDED(hr)) {
-		// Everything is reported by now; staying registered would also take the slot from the
-		// settings page if explorer only keeps one callback.
 		trayNotify->UnregisterCallback(&handle);
 	} else {
 		qCInfo(logTraySeed) << "ITrayNotify::RegisterCallback failed:" << Qt::hex
 		                    << static_cast<quint32>(hr);
 	}
 
-	// Explorer may still hold a proxy to it.
 	CoDisconnectObject(callback, 0);
 	callback->Release();
 	trayNotify->Release();
@@ -168,8 +158,6 @@ bool seed(const qs::windows::services::systray::TrayIconSink& sink) {
 namespace qs::windows::services::systray {
 
 void seedFromExplorer(TrayIconSink sink, std::function<void(bool ok)> done) {
-	// A thread of its own: a busy explorer can take a while to answer COM calls, and the
-	// callbacks need a single threaded apartment.
 	std::thread([sink = std::move(sink), done = std::move(done)]() {
 		SetThreadDescription(GetCurrentThread(), L"qs tray seed");
 

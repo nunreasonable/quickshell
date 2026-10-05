@@ -11,9 +11,6 @@
 
 namespace qs::windows::services {
 
-// One hidden message-only window shared by every native service backend that needs an HWND
-// to receive window messages (RegisterPowerSettingNotification, AddClipboardFormatListener,
-// ...). Avoids each singleton creating and pumping its own top level window.
 class ServiceMessageWindow {
 public:
 	using Handler = std::function<void(WPARAM, LPARAM)>;
@@ -22,8 +19,6 @@ public:
 
 	[[nodiscard]] HWND hwnd() const { return this->mHwnd; }
 
-	// Appends a handler invoked for every message with id `msg`. Handlers are never removed
-	// (every subscriber here is a process-lifetime singleton).
 	void addHandler(UINT msg, Handler handler);
 
 private:
