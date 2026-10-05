@@ -1,5 +1,6 @@
 #include "panel_window.hpp"
 #include <algorithm>
+#include <utility>
 
 #include <qt_windows.h>
 
@@ -15,6 +16,7 @@
 #include <qrect.h>
 #include <qregion.h>
 #include <qscreen.h>
+#include <qtenvironmentvariables.h>
 #include <qtimer.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
@@ -26,6 +28,7 @@
 #include "../window/proxywindow.hpp"
 #include "appbar.hpp"
 #include "blur.hpp"
+#include "desktop_host.hpp"
 #include "input_mask.hpp"
 #include "util.hpp"
 #include "virtual_desktops.hpp"
@@ -34,7 +37,23 @@ namespace qs::windows {
 
 namespace {
 Q_LOGGING_CATEGORY(logPanel, "quickshell.windows.panel", QtWarningMsg);
+
+// SetParent leaves WS_CHILD / WS_POPUP alone; the window has to be switched by hand.
+void setChildStyle(HWND hwnd, bool child) {
+	auto style = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE));
+	auto newStyle = child ? ((style & ~static_cast<DWORD>(WS_POPUP)) | WS_CHILD)
+	                      : ((style & ~static_cast<DWORD>(WS_CHILD)) | WS_POPUP);
+	if (newStyle != style) SetWindowLongPtrW(hwnd, GWL_STYLE, static_cast<LONG_PTR>(newStyle));
 }
+
+// Diagnostics for Windows 11 24H2 and later, whose desktop windows have no redirection surface:
+// windows drawn through GDI only show up in there when layered. Qt draws through DXGI, which
+// shouldn't need it.
+bool forceLayeredDesktopPanels() {
+	static const bool force = qEnvironmentVariableIntValue("QS_DESKTOP_LAYERED") != 0;
+	return force;
+}
+} // namespace
 
 // Every visible panel, for operations that span windows: keeping Overlay panels above Top
 // panels and lowering Top panels while a fullscreen application is active.
@@ -64,7 +83,8 @@ public:
 		auto* desktops = VirtualDesktops::instance();
 
 		for (auto* panel: this->mPanels) {
-			if (panel->pinnedToAllDesktops) continue;
+			// Desktop panels are on every desktop with the desktop itself.
+			if (panel->pinnedToAllDesktops || panel->isEmbedded()) continue;
 			auto* hwnd = panel->hwnd();
 			if (hwnd == nullptr || desktops->isWindowOnCurrent(hwnd)) continue;
 			desktops->moveWindow(hwnd, desktops->currentIndex());
@@ -93,7 +113,7 @@ public:
 	// panel was placed.
 	void lowerBackgrounds() {
 		for (auto* panel: this->mPanels) {
-			if (panel->bLayer != PanelLayer::Background) continue;
+			if (panel->bLayer != PanelLayer::Background || panel->isEmbedded()) continue;
 			auto* hwnd = panel->hwnd();
 			if (hwnd == nullptr) continue;
 			SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -166,6 +186,24 @@ WinPanelWindow::WinPanelWindow(QObject* parent)
 	});
 
 	this->bcExclusionEdge.setBinding([this] { return this->bAnchors.value().exclusionEdge(); });
+
+	// Queued: lookups run from inside updateLayer, which must not re-enter itself.
+	auto* host = DesktopHost::instance();
+	auto queued = Qt::QueuedConnection;
+	QObject::connect(
+	    host,
+	    &DesktopHost::parentChanged,
+	    this,
+	    [this] {
+		    // A fresh lookup result: a handle refused earlier may since have been reused by an
+		    // unrelated window (handles are small integers recycled quickly), so don't let a
+		    // coincidental match keep refusing it forever.
+		    this->embedRefusedBy = nullptr;
+		    this->updateLayer();
+	    },
+	    queued
+	);
+	QObject::connect(host, &DesktopHost::parentMoved, this, &WinPanelWindow::placeEmbedded, queued);
 }
 
 WinPanelWindow::~WinPanelWindow() {
@@ -183,6 +221,10 @@ ProxiedWindow* WinPanelWindow::retrieveWindow(QObject* oldInstance) {
 	this->appBar.adopt(old->appBar);
 	// Same for the blur backdrop, which would otherwise flicker.
 	this->blur->adopt(old->blur);
+	// And the window stays inside the desktop.
+	this->mEmbedParent = old->mEmbedParent;
+	this->mEmbedInsertAfter = old->mEmbedInsertAfter;
+	this->mEmbedRect = old->mEmbedRect;
 
 	return old->disownWindow();
 }
@@ -208,16 +250,25 @@ void WinPanelWindow::connectWindow() {
 
 	// clang-format off
 	QObject::connect(this->window, &QQuickWindow::visibleChanged, this, &WinPanelWindow::onWindowVisibleChanged);
+	QObject::connect(this->window, &QWindow::screenChanged, this, &WinPanelWindow::onWindowScreenChanged);
 	QObject::connect(this->window, &QWindow::screenChanged, this, &WinPanelWindow::updateScreen);
 	QObject::connect(this->window, &ProxiedWindow::devicePixelRatioChanged, this, &WinPanelWindow::scheduleUpdateDimensions);
 	// clang-format on
 
 	this->updateScreen();
 
+	// A window kept across a reload is still inside the desktop (a new one is not).
+	if (this->hwnd() == nullptr) {
+		this->mEmbedParent = nullptr;
+		this->mEmbedInsertAfter = nullptr;
+	}
+
 	// Qt::Tool gives WS_EX_TOOLWINDOW: no taskbar button, no alt-tab entry, and the shell shows
 	// such windows on every virtual desktop, which is what a panel wants. (Real pinning through
 	// the virtual desktop interfaces is a later task.) Frameless: WS_POPUP without a caption.
 	this->window->setFlags(Qt::Tool | Qt::FramelessWindowHint);
+	// Qt just rewrote the style of the window it takes for a top level one.
+	if (this->hwnd() != nullptr) this->applyNativeStyles();
 	this->updateLayer();
 	this->updateFocus();
 
@@ -246,6 +297,12 @@ void WinPanelWindow::releaseNativeState() {
 	this->appBar.remove();
 	this->blur->release();
 	WinPanelStack::instance()->removePanel(this);
+
+	// The window itself stays where it is: it either goes to the next panel (reload) or is
+	// destroyed with its parent's region repainted by explorer.
+	this->mEmbedParent = nullptr;
+	this->mEmbedInsertAfter = nullptr;
+	this->destroyedHwnd = nullptr;
 }
 
 void WinPanelWindow::trySetWidth(qint32 implicitWidth) {
@@ -305,13 +362,25 @@ void WinPanelWindow::nativeInit() {
 }
 
 void WinPanelWindow::applyNativeStyles() {
+	auto* hwnd = this->hwnd();
 	// Qt::Tool already requests WS_EX_TOOLWINDOW; enforce it in case the flag mapping changes.
-	setExStyleBits(this->hwnd(), WS_EX_TOOLWINDOW, true);
+	setExStyleBits(hwnd, WS_EX_TOOLWINDOW, true);
+
+	if (this->mEmbedParent != nullptr) {
+		// Qt rewrites the styles of what it takes for a top level window as a popup's.
+		setChildStyle(hwnd, true);
+
+		if (forceLayeredDesktopPanels()) {
+			setExStyleBits(hwnd, WS_EX_LAYERED, true);
+			SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+		}
+	}
 }
 
 void WinPanelWindow::stickToAllDesktops() {
 	auto* hwnd = this->hwnd();
-	if (hwnd == nullptr || this->pinnedToAllDesktops) return;
+	// The virtual desktop manager only tracks top level windows.
+	if (hwnd == nullptr || this->pinnedToAllDesktops || this->mEmbedParent != nullptr) return;
 
 	auto* desktops = VirtualDesktops::instance();
 
@@ -321,7 +390,9 @@ void WinPanelWindow::stickToAllDesktops() {
 	// The shell only knows a window (and can pin it) once it was shown, so pin on the next turn.
 	QTimer::singleShot(0, this, [this] {
 		auto* hwnd = this->hwnd();
-		if (hwnd == nullptr || !this->window->isVisible() || this->pinnedToAllDesktops) return;
+		if (hwnd == nullptr || !this->window->isVisible() || this->pinnedToAllDesktops
+		    || this->mEmbedParent != nullptr)
+			return;
 
 		auto* desktops = VirtualDesktops::instance();
 		this->pinnedToAllDesktops = desktops->isWindowPinned(hwnd) || desktops->pinWindow(hwnd, true);
@@ -475,9 +546,18 @@ void WinPanelWindow::updateDimensions() {
 		geometry.setHeight(this->implicitHeight());
 	}
 
+	if (this->mEmbedParent != nullptr) this->mEmbedRect = mapper.toPhysical(geometry);
+
 	if (this->window->geometry() != geometry) {
 		qCDebug(logPanel) << "Placing" << this << "at" << geometry << "on" << screen->name();
 		this->window->setGeometry(geometry);
+	}
+
+	if (this->mEmbedParent != nullptr) {
+		// Also when only the parent moved, which Qt doesn't know about.
+		this->placeEmbedded();
+		// Started reserving space: a desktop panel can't.
+		if (!this->wantsEmbedding()) this->updateLayer();
 	}
 }
 
@@ -485,14 +565,24 @@ void WinPanelWindow::updateLayer() {
 	if (this->window == nullptr) return;
 
 	auto layer = this->bLayer.value();
+	auto* hwnd = this->hwnd();
+
+	// Before the flag change below: Qt restyles what it takes for a top level window, so a
+	// panel leaving the desktop (e.g. to Overlay) has to be one again by then.
+	if (hwnd != nullptr) this->updateEmbedding();
 
 	// Qt keeps WS_EX_TOPMOST in sync with this flag across its own style rewrites.
 	this->window->setFlag(Qt::WindowStaysOnTopHint, layer >= PanelLayer::Top);
 
-	auto* hwnd = this->hwnd();
 	if (hwnd == nullptr) return;
 
 	this->applyNativeStyles();
+
+	if (this->mEmbedParent != nullptr) {
+		// The z order inside the desktop is fixed by placeEmbedded.
+		InputMaskTracker::instance()->refresh();
+		return;
+	}
 
 	HWND insertAfter = nullptr;
 	switch (layer) {
@@ -517,14 +607,195 @@ void WinPanelWindow::updateLayer() {
 	InputMaskTracker::instance()->refresh();
 }
 
+bool WinPanelWindow::reservesSpace() const {
+	auto mode = this->bExclusionMode.value();
+	if (mode == ExclusionMode::Ignore) return false;
+	if (mode == ExclusionMode::Normal && this->bExclusiveZone.value() < 0) return false;
+	return this->bcExclusionEdge.value() != 0 && this->bcExclusiveZone.value() > 0;
+}
+
+bool WinPanelWindow::wantsEmbedding() const {
+	// Wallpapers and desktop widgets. Inside the desktop the icons view covers them, so
+	// anything that has to take input, or pushes windows away, stays a window.
+	return DesktopHost::instance()->enabled() && this->bLayer.value() <= PanelLayer::Bottom
+	    && this->bKeyboardFocus.value() == PanelKeyboardFocus::None && !this->reservesSpace();
+}
+
+void WinPanelWindow::updateEmbedding() {
+	auto* hwnd = this->hwnd();
+	if (hwnd == nullptr) return;
+
+	// Not where it was put: nothing left to undo.
+	if (this->mEmbedParent != nullptr && GetAncestor(hwnd, GA_PARENT) != this->mEmbedParent) {
+		this->mEmbedParent = nullptr;
+		this->mEmbedInsertAfter = nullptr;
+	}
+
+	auto* host = DesktopHost::instance();
+	auto* parent = this->wantsEmbedding() ? host->parentWindow() : nullptr;
+	// Refused once (DPI awareness or integrity mismatch): it would be refused again.
+	if (parent != nullptr && parent == this->embedRefusedBy) parent = nullptr;
+	auto* insertAfter = parent == nullptr ? nullptr : host->insertAfter();
+
+	if (parent == this->mEmbedParent && insertAfter == this->mEmbedInsertAfter) return;
+
+	if (parent != nullptr) this->embedInto(parent, insertAfter);
+	else this->unembed();
+}
+
+void WinPanelWindow::embedInto(HWND parent, HWND insertAfter) {
+	auto* hwnd = this->hwnd();
+	auto wasEmbedded = this->mEmbedParent != nullptr;
+
+	if (!wasEmbedded) {
+		// Placed by updateDimensions as a top level window: the same spot on screen.
+		RECT rect {};
+		if (GetWindowRect(hwnd, &rect)) this->mEmbedRect = toQRect(rect);
+		// Before SetParent, as documented, so it is never a popup with a parent.
+		setChildStyle(hwnd, true);
+	}
+
+	// Set first: SetParent's own messages already go to a child.
+	this->mEmbedParent = parent;
+	this->mEmbedInsertAfter = insertAfter;
+
+	SetLastError(0);
+	if (SetParent(hwnd, parent) == nullptr && GetLastError() != 0) {
+		qCWarning(logPanel) << "Could not put" << this << "into the desktop, error" << GetLastError()
+		                    << "- it stays a window";
+		this->embedRefusedBy = parent;
+		// Whatever it was before (a top level window, or inside the previous desktop window).
+		if (wasEmbedded) this->unembed();
+		else {
+			this->mEmbedParent = nullptr;
+			this->mEmbedInsertAfter = nullptr;
+			setChildStyle(hwnd, false);
+		}
+		return;
+	}
+
+	qCDebug(logPanel) << "Put" << this << "into the desktop window" << parent;
+
+	this->embedRefusedBy = nullptr;
+	// Left by the virtual desktop manager along with the top level window list.
+	this->pinnedToAllDesktops = false;
+	this->appBar.remove();
+	this->applyNativeStyles();
+	this->placeEmbedded();
+	// The blur backdrop is a top level window behind the panel: off inside the desktop.
+	this->blur->attach();
+}
+
+void WinPanelWindow::unembed() {
+	auto* hwnd = this->hwnd();
+	auto wasEmbedded = this->mEmbedParent != nullptr;
+	this->mEmbedParent = nullptr;
+	this->mEmbedInsertAfter = nullptr;
+	if (hwnd == nullptr || !wasEmbedded) return;
+
+	SetParent(hwnd, nullptr);
+	setChildStyle(hwnd, false);
+	if (forceLayeredDesktopPanels()) setExStyleBits(hwnd, WS_EX_LAYERED, false);
+
+	// The same spot on screen, now in screen coordinates. The caller restacks it.
+	UINT flags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED;
+	auto rect = this->mEmbedRect;
+	if (!rect.isValid()) flags |= SWP_NOMOVE | SWP_NOSIZE;
+	SetWindowPos(hwnd, nullptr, rect.x(), rect.y(), rect.width(), rect.height(), flags);
+
+	qCDebug(logPanel) << "Took" << this << "out of the desktop";
+
+	this->blur->attach();
+	if (this->window->isVisible()) this->stickToAllDesktops();
+}
+
+QRect WinPanelWindow::embeddedRect() const {
+	// Two points are mapped as a rect, so a mirrored (RTL) parent swaps the edges correctly.
+	auto rect = toRECT(this->mEmbedRect);
+	MapWindowPoints(HWND_DESKTOP, this->mEmbedParent, reinterpret_cast<POINT*>(&rect), 2); // NOLINT
+	return toQRect(rect);
+}
+
+void WinPanelWindow::placeEmbedded() {
+	auto* hwnd = this->hwnd();
+	if (hwnd == nullptr || this->mEmbedParent == nullptr || !this->mEmbedRect.isValid()) return;
+
+	auto rect = this->embeddedRect();
+	UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+	// Inside Progman, the icons view is a sibling and explorer may restack its children.
+	if (this->mEmbedInsertAfter == nullptr) flags |= SWP_NOZORDER;
+
+	this->placingEmbedded = true;
+	SetWindowPos(
+	    hwnd,
+	    this->mEmbedInsertAfter,
+	    rect.x(),
+	    rect.y(),
+	    rect.width(),
+	    rect.height(),
+	    flags
+	);
+	this->placingEmbedded = false;
+}
+
+void WinPanelWindow::onWindowScreenChanged() {
+	// Qt takes a child window's screen from its top level ancestor, the desktop window spanning
+	// every monitor, and switches it on geometry and DPI changes. The panel is placed on its
+	// own screen regardless, but QML reads `screen` and Qt the DPI from it: put it back.
+	// mTrackedScreen (not the base class's mScreen, which stays null unless QML sets `screen:`
+	// explicitly) is the screen updateDimensions() actually placed this panel on.
+	if (this->mEmbedParent == nullptr || this->mTrackedScreen == nullptr || this->screenRestorePending)
+	{
+		return;
+	}
+
+	if (this->window->screen() == this->mTrackedScreen) return;
+	this->screenRestorePending = true;
+
+	QTimer::singleShot(0, this, [this] {
+		this->screenRestorePending = false;
+
+		if (this->window != nullptr && this->mEmbedParent != nullptr && this->mTrackedScreen != nullptr
+		    && this->window->screen() != this->mTrackedScreen)
+		{
+			// Screens of one virtual desktop: the window is neither moved nor recreated.
+			this->window->setScreen(this->mTrackedScreen);
+		}
+	});
+}
+
+void WinPanelWindow::recreateDestroyedWindow() {
+	auto* dead = std::exchange(this->destroyedHwnd, nullptr);
+	// Qt clears its own handle once it has processed the WM_DESTROY (hwnd() goes back to
+	// nullptr), so the dead handle can't be matched against hwnd() here: that check never
+	// passed, leaving the panel stuck. A reload in between already cleared `dead` above, via
+	// releaseNativeState(), so there's nothing left to guard against but the handle lingering.
+	if (dead == nullptr || this->window == nullptr || IsWindow(dead)) return;
+
+	qCInfo(logPanel) << "The desktop went away with" << this << "inside, recreating its window";
+
+	auto visible = this->visibleWhenDestroyed;
+	this->deleteWindow();
+	this->createWindow();
+	// Comes back as a top level window; explorer's TaskbarCreated puts it into the new desktop.
+	if (visible) this->setVisible(true);
+}
+
 void WinPanelWindow::updateFocus() {
 	if (this->window == nullptr) return;
 
 	auto focus = this->bKeyboardFocus.value();
 
+	// Desktop panels take no focus: one that does leaves the desktop (before Qt restyles it),
+	// one that stopped may join it.
+	if (this->hwnd() != nullptr && this->wantsEmbedding() != (this->mEmbedParent != nullptr)) {
+		this->updateLayer();
+	}
+
 	// WS_EX_NOACTIVATE: the window receives mouse input but never becomes the active window,
 	// so the application underneath keeps keyboard focus.
 	this->window->setFlag(Qt::WindowDoesNotAcceptFocus, focus == PanelKeyboardFocus::None);
+	if (this->hwnd() != nullptr) this->applyNativeStyles();
 
 	if (focus == PanelKeyboardFocus::Exclusive && this->isVisibleDirect()) {
 		this->grabKeyboardFocus();
@@ -575,6 +846,50 @@ void WinPanelWindow::applyInputMask(const QRegion& region, bool hasMask) {
 
 bool WinPanelWindow::handleNativeMessage(MSG* msg, qintptr* result) {
 	if (this->window == nullptr) return false;
+
+	if (this->mEmbedParent != nullptr) {
+		switch (msg->message) {
+		case WM_WINDOWPOSCHANGING: {
+			auto* pos = reinterpret_cast<WINDOWPOS*>(msg->lParam); // NOLINT(performance-no-int-to-ptr)
+
+			// Qt places the window in screen coordinates and a child is placed in its parent's;
+			// also Qt's own idea of the screen comes from the parent, which spans all monitors.
+			// A desktop panel only ever goes where updateDimensions put it.
+			if (this->mEmbedRect.isValid()) {
+				auto rect = this->embeddedRect();
+
+				if (!(pos->flags & SWP_NOMOVE)) {
+					pos->x = rect.x();
+					pos->y = rect.y();
+				}
+
+				if (!(pos->flags & SWP_NOSIZE)) {
+					pos->cx = rect.width();
+					pos->cy = rect.height();
+				}
+			}
+
+			// Raising it (showing, Qt's restyling) would cover the icons.
+			if (!this->placingEmbedded) pos->flags |= SWP_NOZORDER;
+
+			// Kept from Qt: it takes a z order change of a window with a foreign parent for
+			// someone else embedding it, and from then on reports its geometry relative to the
+			// parent, which no longer matches the screen coordinates it places it in.
+			*result = 0;
+			return true;
+		}
+		case WM_DESTROY:
+			// Explorer went away (crash, restart) and took its desktop's child windows, this one
+			// included. Qt would keep rendering to the dead handle, so the window is replaced.
+			this->mEmbedParent = nullptr;
+			this->mEmbedInsertAfter = nullptr;
+			this->destroyedHwnd = msg->hwnd;
+			this->visibleWhenDestroyed = this->window->isVisible();
+			QTimer::singleShot(0, this, &WinPanelWindow::recreateDestroyedWindow);
+			return false;
+		default: break;
+		}
+	}
 
 	if (msg->message == WinAppBar::callbackMessage()) {
 		switch (msg->wParam) {

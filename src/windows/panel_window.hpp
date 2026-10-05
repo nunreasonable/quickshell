@@ -10,6 +10,7 @@
 #include <qproperty.h>
 #include <qqmlintegration.h>
 #include <qquickwindow.h>
+#include <qrect.h>
 #include <qregion.h>
 #include <qscreen.h>
 #include <qstring.h>
@@ -139,6 +140,9 @@ public:
 	// Called by WinProxiedWindow for every native message of the backing window.
 	bool handleNativeMessage(MSG* msg, qintptr* result);
 
+	// Inside the desktop, behind the icons (see DesktopHost), instead of a top level window.
+	[[nodiscard]] bool isEmbedded() const { return this->mEmbedParent != nullptr; }
+
 signals:
 	void layerChanged();
 	void namespaceChanged();
@@ -171,6 +175,15 @@ private:
 	void grabKeyboardFocus();
 	void scheduleFocusGrab();
 	void stickToAllDesktops();
+	[[nodiscard]] bool reservesSpace() const;
+	[[nodiscard]] bool wantsEmbedding() const;
+	void updateEmbedding();
+	void embedInto(HWND parent, HWND insertAfter);
+	void unembed();
+	void placeEmbedded();
+	[[nodiscard]] QRect embeddedRect() const;
+	void onWindowScreenChanged();
+	void recreateDestroyedWindow();
 
 	QPointer<QScreen> mTrackedScreen;
 	WinAppBar appBar;
@@ -179,6 +192,19 @@ private:
 	bool dimensionsUpdatePending = false;
 	bool focusGrabPending = false;
 	bool pinnedToAllDesktops = false;
+
+	// Desktop embedding. The rect is where the panel goes, in physical screen coordinates: Qt
+	// still takes the window for a top level one and places it in screen coordinates, which
+	// handleNativeMessage turns into the parent's client coordinates.
+	HWND mEmbedParent = nullptr;
+	HWND mEmbedInsertAfter = nullptr;
+	HWND embedRefusedBy = nullptr;
+	QRect mEmbedRect;
+	bool placingEmbedded = false;
+	bool screenRestorePending = false;
+	// Set when explorer destroyed the window along with its desktop.
+	HWND destroyedHwnd = nullptr;
+	bool visibleWhenDestroyed = false;
 
 	// clang-format off
 	Q_OBJECT_BINDABLE_PROPERTY_WITH_ARGS(WinPanelWindow, PanelLayer, bLayer, PanelLayer::Top, &WinPanelWindow::layerChanged);
