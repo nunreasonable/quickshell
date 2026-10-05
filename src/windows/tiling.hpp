@@ -135,7 +135,7 @@ private:
 		quint64 focusStamp = 0;
 	};
 
-	void start();
+	bool start();
 	void stop();
 	void manage(TrackedWindow* window);
 	void unmanage(TrackedWindow* window);
@@ -190,7 +190,8 @@ private:
 	qint32 mGapsOut = 5;
 	bool mPreserveSplit = true;
 	QStringList mExcluded;
-	QList<QRegularExpression> excludedPatterns;
+	QList<QRegularExpression> excludedPatterns; // process, app id or class
+	QList<QRegularExpression> excludedTitles;
 
 	// Node based so references stay valid while windows come and go.
 	std::unordered_map<TrackedWindow*, Managed> managed;
@@ -201,6 +202,7 @@ private:
 	TrackedWindow* dragging = nullptr;
 	quint64 focusCounter = 0;
 
+	HANDLE ownerMutex = nullptr;
 	QTimer syncTimer;
 	QTimer verifyTimer;
 	QTimer deadlineTimer;
@@ -238,8 +240,9 @@ class Tiling: public QObject {
 	/// Keep each split's direction once made (Hyprland's dwindle:preserve_split). When false a
 	/// split follows its area's aspect ratio unless togglesplit pinned it. Default true.
 	Q_PROPERTY(bool preserveSplit READ preserveSplit WRITE setPreserveSplit NOTIFY preserveSplitChanged);
-	/// Apps that always float: process names ("vlc" or "vlc.exe"), app ids (AppUserModelIDs)
-	/// or window classes, case insensitive, with * and ? wildcards.
+	/// Windows that always float: process names ("vlc" or "vlc.exe"), app ids
+	/// (AppUserModelIDs) or window classes, or window titles with a `title:` prefix
+	/// ("title:Picture-in-Picture*"). Case insensitive, whole string, * and ? wildcards.
 	Q_PROPERTY(QStringList excluded READ excluded WRITE setExcluded NOTIFY excludedChanged);
 	// clang-format on
 

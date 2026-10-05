@@ -221,7 +221,10 @@ void TilingManager::setEnabled(bool enabled) {
 	this->mEnabled = enabled;
 
 	if (enabled) {
-		this->start();
+		if (!this->start()) {
+			this->mEnabled = false;
+			return;
+		}
 	} else {
 		this->stop();
 	}
@@ -257,17 +260,24 @@ void TilingManager::setExcluded(const QStringList& excluded) {
 	this->mExcluded = excluded;
 
 	this->excludedPatterns.clear();
+	this->excludedTitles.clear();
+
 	for (const auto& entry: excluded) {
 		auto pattern = entry.trimmed();
+		auto byTitle = pattern.startsWith("title:", Qt::CaseInsensitive);
+		if (byTitle) pattern = pattern.mid(6).trimmed();
 		if (pattern.isEmpty()) continue;
 
-		this->excludedPatterns.append(QRegularExpression(
+		auto expression = QRegularExpression(
 		    QRegularExpression::wildcardToRegularExpression(
 		        pattern,
 		        QRegularExpression::NonPathWildcardConversion
 		    ),
 		    QRegularExpression::CaseInsensitiveOption
-		));
+		);
+
+		if (byTitle) this->excludedTitles.append(expression);
+		else this->excludedPatterns.append(expression);
 	}
 
 	this->markAll();
@@ -300,7 +310,18 @@ bool TilingManager::isTiled(TrackedWindow* window) const {
 
 // --- lifecycle ---------------------------------------------------------------------------------
 
-void TilingManager::start() {
+bool TilingManager::start() {
+	// Two tiling processes (the shell and, say, a settings window of the same config) would
+	// fight over every window. The first one to turn tiling on owns it for the session.
+	this->ownerMutex = CreateMutexW(nullptr, TRUE, L"Local\\QuickshellTiling");
+	if (this->ownerMutex == nullptr || GetLastError() == ERROR_ALREADY_EXISTS) {
+		qCWarning(logTiling) << "Another Quickshell process already tiles windows;"
+		                     << "tiling stays off in this one.";
+		if (this->ownerMutex != nullptr) CloseHandle(this->ownerMutex);
+		this->ownerMutex = nullptr;
+		return false;
+	}
+
 	this->tracker = WindowTracker::instance();
 	this->desktops = this->tracker->desktops();
 
@@ -367,6 +388,7 @@ void TilingManager::start() {
 
 	this->onActiveWindowChanged();
 	this->schedule();
+	return true;
 }
 
 void TilingManager::stop() {
@@ -397,6 +419,12 @@ void TilingManager::stop() {
 	this->verifyTimer.stop();
 	this->deadlineTimer.stop();
 
+	if (this->ownerMutex != nullptr) {
+		ReleaseMutex(this->ownerMutex);
+		CloseHandle(this->ownerMutex);
+		this->ownerMutex = nullptr;
+	}
+
 	for (auto* window: tiled) emit this->windowTilingChanged(window);
 }
 
@@ -418,6 +446,10 @@ void TilingManager::manage(TrackedWindow* window) {
 	QObject::connect(window, &TrackedWindow::fullscreenChanged, this, mark);
 	QObject::connect(window, &TrackedWindow::desktopChanged, this, mark);
 	QObject::connect(window, &TrackedWindow::screenChanged, this, mark);
+	// Title rules (a "Picture in picture" window, a settings window) can match later.
+	QObject::connect(window, &TrackedWindow::titleChanged, this, [this, window]() {
+		if (!this->excludedTitles.isEmpty()) this->markWindow(window);
+	});
 	QObject::connect(window, &TrackedWindow::rectChanged, this, [this, window]() {
 		this->onRectChanged(window);
 	});
@@ -490,6 +522,10 @@ bool TilingManager::floatsByRule(const Managed& m) const {
 }
 
 bool TilingManager::isExcluded(TrackedWindow* window) const {
+	for (const auto& pattern: this->excludedTitles) {
+		if (pattern.match(window->title()).hasMatch()) return true;
+	}
+
 	if (this->excludedPatterns.isEmpty()) return false;
 
 	auto exe = QFileInfo(window->exePath()).fileName();
