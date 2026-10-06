@@ -2,6 +2,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 
 #include <qt_windows.h>
@@ -62,6 +63,10 @@ public:
 	bool resizeTiled(TrackedWindow* window, qint32 dx, qint32 dy);
 	bool setFloating(TrackedWindow* window, bool floating, bool toggle);
 
+	bool beginEdgeDrag(TrackedWindow* window, bool left, bool top);
+	void edgeDrag(const QPoint& delta);
+	void endEdgeDrag();
+
 	static void resizeFloating(TrackedWindow* window, qint32 dx, qint32 dy, bool exact);
 	static void center(TrackedWindow* window);
 
@@ -93,6 +98,14 @@ private:
 	};
 
 	enum class Override : quint8 { None, Float, Tile };
+
+	struct EdgeDrag {
+		TrackedWindow* window = nullptr;
+		Layout* layout = nullptr;
+		QRect box;
+		std::optional<Edge> horizontal;
+		std::optional<Edge> vertical;
+	};
 
 	struct Managed {
 		TrackedWindow* window = nullptr;
@@ -175,6 +188,7 @@ private:
 	QSet<Layout*> dirtyLayouts;
 	QSet<TrackedWindow*> unverified;
 	TrackedWindow* dragging = nullptr;
+	EdgeDrag edgeDragState;
 	quint64 focusCounter = 0;
 
 	HANDLE ownerMutex = nullptr;

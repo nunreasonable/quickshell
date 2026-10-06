@@ -199,6 +199,25 @@ bool tryStartDetached(const QString& command) {
 	return false;
 }
 
+bool parseMouseKeys(const QString& text, KeyCombo& combo) {
+	combo = KeyCombo();
+	auto buttons = 0;
+
+	for (const auto& part: text.split('+')) {
+		auto token = part.trimmed();
+
+		if (auto bit = modifierFromName(token); bit != 0) {
+			combo.mods |= bit;
+		} else if (token.startsWith("mouse", Qt::CaseInsensitive)) {
+			buttons++;
+		} else {
+			return false;
+		}
+	}
+
+	return buttons == 1;
+}
+
 } // namespace
 
 uint8_t keyNameToVk(const QString& name) {
@@ -540,13 +559,15 @@ void HotkeyManager::parse(const QByteArray& data, const QString& path) {
 		bind.onRelease = object.value("onRelease").toBool();
 		bind.repeat = object.value("repeat").toBool();
 
+		auto action = object.value("action").toString();
+
 		QString error;
-		if (!parseKeys(bind.keys, bind.combo, error)) {
+		if (!parseKeys(bind.keys, bind.combo, error)
+		    && (action != "native" || !parseMouseKeys(bind.keys, bind.combo)))
+		{
 			qCWarning(logHotkeys).noquote() << where << "(" << bind.keys << "):" << error;
 			continue;
 		}
-
-		auto action = object.value("action").toString();
 
 		if (action == "global") {
 			bind.action = Bind::Action::Global;

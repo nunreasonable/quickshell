@@ -1,6 +1,7 @@
 #include "util.hpp"
 #include <cmath>
 
+#include <qbytearray.h>
 #include <qpoint.h>
 #include <qrect.h>
 #include <qscreen.h>
@@ -129,6 +130,57 @@ bool isOwnProcessWindow(HWND hwnd) {
 	DWORD pid = 0;
 	GetWindowThreadProcessId(hwnd, &pid);
 	return pid == GetCurrentProcessId();
+}
+
+namespace {
+
+DWORD tokenIntegrity(HANDLE token) {
+	DWORD size = 0;
+	GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0, &size);
+	if (size == 0) return 0;
+
+	auto buffer = QByteArray(static_cast<qsizetype>(size), '\0');
+	auto* label = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(buffer.data());
+	if (!GetTokenInformation(token, TokenIntegrityLevel, label, size, &size)) return 0;
+
+	auto* sid = label->Label.Sid;
+	auto count = *GetSidSubAuthorityCount(sid);
+	if (count == 0) return 0;
+	return *GetSidSubAuthority(sid, count - 1);
+}
+
+DWORD ownIntegrity() {
+	static const DWORD level = []() -> DWORD {
+		HANDLE token = nullptr;
+		if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+			return SECURITY_MANDATORY_MEDIUM_RID;
+		}
+		auto level = tokenIntegrity(token);
+		CloseHandle(token);
+		return level == 0 ? SECURITY_MANDATORY_MEDIUM_RID : level;
+	}();
+
+	return level;
+}
+
+} // namespace
+
+bool isMoreElevated(HWND hwnd) {
+	DWORD pid = 0;
+	GetWindowThreadProcessId(hwnd, &pid);
+	auto own = ownIntegrity();
+
+	auto* process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+	if (process == nullptr) return own < SECURITY_MANDATORY_HIGH_RID;
+
+	HANDLE token = nullptr;
+	auto opened = OpenProcessToken(process, TOKEN_QUERY, &token) != FALSE;
+	CloseHandle(process);
+	if (!opened) return own < SECURITY_MANDATORY_HIGH_RID;
+
+	auto level = tokenIntegrity(token);
+	CloseHandle(token);
+	return level > own;
 }
 
 bool isTrayHookWindow(HWND hwnd) {

@@ -218,6 +218,11 @@ bool DwindleLayout::moveEdge(Id id, Edge edge, int position) {
 	return true;
 }
 
+bool DwindleLayout::hasEdge(Id id, Edge edge) const {
+	auto* leaf = this->find(id);
+	return leaf != nullptr && this->dividerAncestor(leaf, edge) != nullptr;
+}
+
 bool DwindleLayout::resize(Id id, int dx, int dy) {
 	auto* leaf = this->find(id);
 	if (leaf == nullptr) return false;

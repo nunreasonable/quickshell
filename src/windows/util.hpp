@@ -47,6 +47,7 @@ bool forceForegroundWindow(HWND hwnd);
 DWORD windowsBuild();
 
 [[nodiscard]] bool isOwnProcessWindow(HWND hwnd);
+[[nodiscard]] bool isMoreElevated(HWND hwnd);
 
 inline constexpr const wchar_t* TRAY_HOOK_PROP = L"QuickshellTrayHook";
 [[nodiscard]] bool isTrayHookWindow(HWND hwnd);

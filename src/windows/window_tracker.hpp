@@ -132,6 +132,7 @@ public:
 	[[nodiscard]] static qsizetype screenIndex(QScreen* screen);
 
 	void rescan();
+	void noteMoveSize(HWND hwnd, bool started);
 
 signals:
 	void windowAdded(TrackedWindow* window);

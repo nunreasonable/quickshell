@@ -20,6 +20,7 @@ std::atomic<UINT> gMessageBase = 0;                          // NOLINT
 std::atomic<DWORD> gThreadId = 0;                            // NOLINT
 std::atomic<bool> gInstalled = false;                        // NOLINT
 std::atomic<bool> gForegroundBlocked = false; // NOLINT
+std::atomic<bool> gSuperChord = false;        // NOLINT
 
 std::thread* gThread = nullptr; // NOLINT
 
@@ -207,6 +208,7 @@ LRESULT onModifier(const HookSnapshot& snapshot, const KBDLLHOOKSTRUCT* info, ui
 
 	if (!up) {
 		if (isDown(vk)) return 0;
+		if (bit == ModSuper && !isDown(otherSide(info->vkCode))) gSuperChord.store(false);
 
 		if (gTapCandidate != 0) {
 			gTapCandidate = 0;
@@ -231,6 +233,7 @@ LRESULT onModifier(const HookSnapshot& snapshot, const KBDLLHOOKSTRUCT* info, ui
 	if (gTapCandidate != bit) return 0;
 	gTapCandidate = 0;
 	if (blocked) return 0;
+	if (bit == ModSuper && gSuperChord.load()) return 0;
 
 	auto masked = bit == ModSuper || bit == ModAlt;
 	if (masked) injectMaskedRelease(info);
@@ -409,6 +412,8 @@ bool KeyboardHook::foregroundBlocked() { return gForegroundBlocked.load(); }
 void KeyboardHook::setSnapshot(std::shared_ptr<const HookSnapshot> snapshot) {
 	gSnapshot.store(std::move(snapshot), std::memory_order_release);
 }
+
+void KeyboardHook::noteSuperChord() { gSuperChord.store(true); }
 
 bool KeyboardHook::sendKey(uint8_t vk) {
 	auto scan = static_cast<WORD>(MapVirtualKeyW(vk, MAPVK_VK_TO_VSC));

@@ -38,6 +38,10 @@ public:
 	void acquireCursorEvents();
 	void releaseCursorEvents();
 
+	void acquireHook();
+	void releaseHook();
+	[[nodiscard]] bool hookActive() const { return this->hookRunning; }
+
 signals:
 	void buttonPressed(QPoint position, quint32 time);
 	void cursorMoved(QPoint position);
@@ -67,6 +71,7 @@ private:
 	bool hookRunning = false;
 	bool hookFailed = false;
 	int cursorWatchers = 0;
+	int hookHolders = 0;
 	QTimer pollTimer;
 	QTimer lateReportTimer;
 };
