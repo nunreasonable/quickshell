@@ -153,7 +153,7 @@ bool isElevatedCached(HWND hwnd) {
 	return gHook.elevated;
 }
 
-HWND dragTarget(POINT point, bool resize) {
+HWND dragTarget(POINT point) {
 	auto* hit = WindowFromPhysicalPoint(point);
 	if (hit == nullptr) return nullptr;
 
@@ -166,12 +166,10 @@ HWND dragTarget(POINT point, bool resize) {
 	if ((style & WS_CHILD) != 0) return nullptr;
 
 	auto caption = (style & WS_CAPTION) == WS_CAPTION;
-	auto sizable = (style & WS_THICKFRAME) != 0;
-	if (!caption && !sizable) return nullptr;
+	if (!caption && (style & WS_THICKFRAME) == 0) return nullptr;
 	if ((exStyle & WS_EX_TOOLWINDOW) != 0 && (exStyle & WS_EX_APPWINDOW) == 0) return nullptr;
 
 	auto maximized = IsZoomed(hwnd) != FALSE;
-	if (resize && (!sizable || maximized)) return nullptr;
 	if (isShellWindow(hwnd)) return nullptr;
 
 	DWORD cloaked = 0;
@@ -299,7 +297,12 @@ void beginDrag(Drag& drag, HWND hwnd, bool resize, POINT point) {
 	drag.requested = drag.origin;
 
 	auto maximized = IsZoomed(hwnd) != FALSE;
-	if (resize && maximized) return;
+	auto sizable = (GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_THICKFRAME) != 0;
+
+	qCDebug(logSuperDrag) << (resize ? "Resize" : "Move") << "drag of" << hwnd << "from" << point.x
+	                      << point.y << "maximized" << maximized << "sizable" << sizable;
+
+	if (resize && (maximized || !sizable)) return;
 
 	drag.left = point.x < drag.origin.left + widthOf(drag.origin) / 2;
 	drag.top = point.y < drag.origin.top + heightOf(drag.origin) / 2;
@@ -342,6 +345,9 @@ void beginDrag(Drag& drag, HWND hwnd, bool resize, POINT point) {
 			drag.tiled = (result & STARTED_TILED_RESIZE) != 0;
 			drag.watched = (result & STARTED_WATCHED) != 0;
 		}
+
+		qCDebug(logSuperDrag) << "Shell answered" << (sent != 0) << "tiled" << drag.tiled << "watched"
+		                      << drag.watched;
 	}
 
 	if (!drag.tiled) {
@@ -657,7 +663,7 @@ bool SuperDragManager::onMouseHook(WPARAM message, const MSLLHOOKSTRUCT* info) {
 	if (message != WM_LBUTTONDOWN && !resize) return false;
 	if (!gEnabled.load(std::memory_order_relaxed) || !superAlone()) return false;
 
-	auto* hwnd = dragTarget(info->pt, resize);
+	auto* hwnd = dragTarget(info->pt);
 	if (hwnd == nullptr) return false;
 
 	gCursor.store(pack(info->pt));
