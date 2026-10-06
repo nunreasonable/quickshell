@@ -351,15 +351,10 @@ void beginDrag(Drag& drag, HWND hwnd, bool resize, POINT point) {
 	}
 
 	if (!drag.tiled) {
-		SetWindowPos(
-		    hwnd,
-		    HWND_TOP,
-		    0,
-		    0,
-		    0,
-		    0,
-		    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS
-		);
+		constexpr UINT raiseFlags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS;
+		auto topmost = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+		SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, raiseFlags);
+		if (!topmost) SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, raiseFlags);
 	}
 
 	if (maximized && !restoreUnderCursor(drag)) return;
