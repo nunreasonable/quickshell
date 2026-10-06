@@ -319,7 +319,11 @@ void TrackedWindow::activate() {
 	}
 }
 
-void TrackedWindow::close() { PostMessageW(this->mHwnd, WM_CLOSE, 0, 0); }
+void TrackedWindow::close() {
+	if (PostMessageW(this->mHwnd, WM_CLOSE, 0, 0)) return;
+	if (GetLastError() != ERROR_ACCESS_DENIED) return;
+	PostMessageW(this->mHwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+}
 
 void TrackedWindow::setMinimized(bool minimized) {
 	PostMessageW(this->mHwnd, WM_SYSCOMMAND, minimized ? SC_MINIMIZE : SC_RESTORE, 0);
@@ -593,7 +597,10 @@ void WindowTracker::flush() {
 	this->candidates.clear();
 
 	for (auto* hwnd: candidates) {
-		if (!this->byHwnd.contains(hwnd) && this->isEligible(hwnd)) this->addWindow(hwnd);
+		if (!this->byHwnd.contains(hwnd) && this->isEligible(hwnd)) {
+			this->addWindow(hwnd);
+			if (hwnd == GetForegroundWindow()) this->foregroundDirty = true;
+		}
 	}
 
 	auto dirty = std::move(this->dirty);
