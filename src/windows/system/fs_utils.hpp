@@ -18,6 +18,8 @@ public:
 
 	Q_INVOKABLE static QString classify(const QString& path);
 
+	Q_INVOKABLE static bool isAccessibleDir(const QString& path);
+
 	Q_INVOKABLE static QStringList listDir(const QString& path);
 
 	Q_INVOKABLE static QString findExecutable(const QString& name);
