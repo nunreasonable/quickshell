@@ -5,6 +5,7 @@
 #include <qstring.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
+#include <qvariant.h>
 
 namespace qs::windows::sys {
 
@@ -18,6 +19,7 @@ public:
 
 	Q_INVOKABLE static void sendKey(int keycode, bool down);
 	Q_INVOKABLE static void sendText(const QString& text);
+	Q_INVOKABLE static QVariantMap cursorPosition();
 };
 
 } // namespace qs::windows::sys
