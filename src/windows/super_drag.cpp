@@ -429,6 +429,20 @@ void updateDrag(Drag& drag, POINT point, bool force) {
 		target = resizedRect(drag, dx, dy);
 	} else {
 		OffsetRect(&target, dx, dy);
+
+		RECT current {};
+		auto originWidth = widthOf(drag.origin);
+		auto originHeight = heightOf(drag.origin);
+		if (GetWindowRect(drag.hwnd, &current) && originWidth > 0 && originHeight > 0
+		    && (widthOf(current) != originWidth || heightOf(current) != originHeight))
+		{
+			auto fx = static_cast<double>(drag.start.x - drag.origin.left) / originWidth;
+			auto fy = static_cast<double>(drag.start.y - drag.origin.top) / originHeight;
+			target.left = point.x - std::lround(fx * widthOf(current));
+			target.top = point.y - std::lround(fy * heightOf(current));
+			target.right = target.left + widthOf(current);
+			target.bottom = target.top + heightOf(current);
+		}
 	}
 
 	if (matchesRequest(drag, target)) {
