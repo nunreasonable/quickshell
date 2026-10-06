@@ -242,7 +242,7 @@ void AudioVisualizer::run(quint64 generation) {
 	}
 
 	visualizer::DefaultDeviceWatcher watcher;
-	watcher.start(enumerator.get(), deviceEvent);
+	auto watcherActive = watcher.start(enumerator.get(), deviceEvent);
 
 	auto serial = this->settingsSerial.load(std::memory_order_acquire);
 	auto settings = this->loadSettings();
@@ -257,6 +257,7 @@ void AudioVisualizer::run(quint64 generation) {
 
 	auto now = recorder::qpc100ns();
 	auto retryAt = now;
+	auto watcherRetryAt = watcherActive ? now + RETRY_INTERVAL : now;
 	auto lastAudio = now;
 	auto lastTick = now;
 	auto nextTick = now;
@@ -280,6 +281,11 @@ void AudioVisualizer::run(quint64 generation) {
 			} else {
 				retryAt = now + RETRY_INTERVAL;
 			}
+		}
+
+		if (!watcherActive && now >= watcherRetryAt) {
+			watcherActive = watcher.start(enumerator.get(), deviceEvent);
+			watcherRetryAt = now + RETRY_INTERVAL;
 		}
 
 		samples.clear();
