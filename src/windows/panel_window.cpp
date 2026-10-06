@@ -450,13 +450,35 @@ void WinPanelWindow::updateScreen() {
 
 	if (this->mTrackedScreen != nullptr) {
 		// clang-format off
-		QObject::connect(this->mTrackedScreen, &QScreen::geometryChanged, this, &WinPanelWindow::scheduleUpdateDimensions);
+		QObject::connect(this->mTrackedScreen, &QScreen::geometryChanged, this, &WinPanelWindow::onScreenScaleChanged);
 		QObject::connect(this->mTrackedScreen, &QScreen::availableGeometryChanged, this, &WinPanelWindow::scheduleUpdateDimensions);
-		QObject::connect(this->mTrackedScreen, &QScreen::logicalDotsPerInchChanged, this, &WinPanelWindow::scheduleUpdateDimensions);
+		QObject::connect(this->mTrackedScreen, &QScreen::logicalDotsPerInchChanged, this, &WinPanelWindow::onScreenScaleChanged);
+		QObject::connect(this->mTrackedScreen, &QScreen::physicalDotsPerInchChanged, this, &WinPanelWindow::onScreenScaleChanged);
 		// clang-format on
 	}
 
 	this->updateDimensions();
+}
+
+void WinPanelWindow::onScreenScaleChanged() {
+	if (this->mEmbedParent != nullptr && this->window != nullptr && this->mTrackedScreen != nullptr
+	    && !this->scaleRecreatePending
+	    && !qFuzzyCompare(this->window->devicePixelRatio(), this->mTrackedScreen->devicePixelRatio()))
+	{
+		this->scaleRecreatePending = true;
+		QTimer::singleShot(300, this, [this]() {
+			this->scaleRecreatePending = false;
+			if (this->window == nullptr || this->mEmbedParent == nullptr) return;
+
+			qCInfo(logPanel) << "Screen scale changed under" << this << "inside the desktop, recreating its window";
+			auto visible = this->window->isVisible();
+			this->deleteWindow();
+			this->createWindow();
+			if (visible) this->setVisible(true);
+		});
+	}
+
+	this->scheduleUpdateDimensions();
 }
 
 void WinPanelWindow::scheduleUpdateDimensions() {

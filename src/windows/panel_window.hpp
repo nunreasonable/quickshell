@@ -150,6 +150,7 @@ private slots:
 	void onWindowVisibleChanged();
 	void updateScreen();
 	void scheduleUpdateDimensions();
+	void onScreenScaleChanged();
 	void updateDimensions();
 
 private:
@@ -185,6 +186,7 @@ private:
 	PanelBlur* blur = nullptr;
 	QObject* mLayershellAttached = nullptr;
 	bool dimensionsUpdatePending = false;
+	bool scaleRecreatePending = false;
 	bool focusGrabPending = false;
 	bool pinnedToAllDesktops = false;
 
