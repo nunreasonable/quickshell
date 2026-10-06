@@ -9,6 +9,7 @@
 #include <qtimer.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
+#include <qwineventnotifier.h>
 
 namespace qs::windows {
 
@@ -39,11 +40,13 @@ signals:
 	void parentMoved();
 	void aboveIconsChanged();
 	void iconsRestacked();
+	void wallpaperChanged();
 
 private:
 	explicit DesktopHost(QObject* parent);
 
 	void ensureListener();
+	void watchWallpaperKey();
 	void scheduleRefresh(int delayMs = 0);
 	void refresh();
 	void lookup();
@@ -69,6 +72,9 @@ private:
 	HWND mIconsHost = nullptr;
 	QStringList mAboveIcons;
 	HWND listener = nullptr;
+	HKEY desktopKey = nullptr;
+	HANDLE desktopKeyEvent = nullptr;
+	QWinEventNotifier* desktopKeyNotifier = nullptr;
 	HWINEVENTHOOK hook = nullptr;
 	HWINEVENTHOOK moveHook = nullptr;
 	DWORD hookThread = 0;
@@ -102,6 +108,7 @@ signals:
 	void enabledChanged();
 	void activeChanged();
 	void aboveIconsChanged();
+	void wallpaperChanged();
 };
 
 } // namespace qs::windows

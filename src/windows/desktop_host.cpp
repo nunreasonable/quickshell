@@ -138,6 +138,9 @@ DesktopHost::DesktopHost(QObject* parent): QObject(parent) {
 DesktopHost::~DesktopHost() {
 	this->removeHook();
 	if (this->listener != nullptr) DestroyWindow(this->listener);
+	delete this->desktopKeyNotifier;
+	if (this->desktopKeyEvent != nullptr) CloseHandle(this->desktopKeyEvent);
+	if (this->desktopKey != nullptr) RegCloseKey(this->desktopKey);
 	if (gHost == this) gHost = nullptr;
 }
 
@@ -256,7 +259,25 @@ void DesktopHost::lookup() {
 	this->mIconsHost = iconsView == nullptr ? nullptr : GetAncestor(iconsView, GA_PARENT);
 }
 
+void DesktopHost::watchWallpaperKey() {
+	if (this->desktopKey == nullptr) {
+		if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\Desktop", 0, KEY_NOTIFY, &this->desktopKey) != ERROR_SUCCESS) {
+			this->desktopKey = nullptr;
+			return;
+		}
+		this->desktopKeyEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+		this->desktopKeyNotifier = new QWinEventNotifier(this->desktopKeyEvent, this);
+		QObject::connect(this->desktopKeyNotifier, &QWinEventNotifier::activated, this, [this]() {
+			this->watchWallpaperKey();
+			emit this->wallpaperChanged();
+		});
+	}
+
+	RegNotifyChangeKeyValue(this->desktopKey, FALSE, REG_NOTIFY_CHANGE_LAST_SET, this->desktopKeyEvent, TRUE);
+}
+
 void DesktopHost::ensureListener() {
+	this->watchWallpaperKey();
 	if (this->listener != nullptr) return;
 
 	auto* module = GetModuleHandleW(nullptr);
@@ -449,6 +470,7 @@ DesktopLayer::DesktopLayer(QObject* parent): QObject(parent) {
 	QObject::connect(host, &DesktopHost::enabledChanged, this, &DesktopLayer::enabledChanged);
 	QObject::connect(host, &DesktopHost::activeChanged, this, &DesktopLayer::activeChanged);
 	QObject::connect(host, &DesktopHost::aboveIconsChanged, this, &DesktopLayer::aboveIconsChanged);
+	QObject::connect(host, &DesktopHost::wallpaperChanged, this, &DesktopLayer::wallpaperChanged);
 }
 
 bool DesktopLayer::enabled() const { return DesktopHost::instance()->enabled(); }
