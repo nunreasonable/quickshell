@@ -2,11 +2,15 @@
 
 #include <qt_windows.h>
 
+#include <qguiapplication.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
+#include <qscreen.h>
 #include <qstring.h>
+#include <qvariant.h>
 
 #include "../../core/logcat.hpp"
+#include "../util.hpp"
 
 namespace qs::windows::sys {
 
@@ -85,6 +89,31 @@ void Input::sendText(const QString& text) {
 		INPUT batch[2] = {down, up};
 		SendInput(2, batch, sizeof(INPUT));
 	}
+}
+
+QVariantMap Input::cursorPosition() {
+	POINT point {};
+	if (!GetCursorPos(&point)) {
+		qCWarning(logInput) << "GetCursorPos failed:" << GetLastError();
+		return {};
+	}
+
+	auto* monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+	auto rects = monitorRects(monitor);
+	if (!rects.valid) return {};
+
+	for (auto* screen: QGuiApplication::screens()) {
+		if (monitorForScreen(screen) != monitor) continue;
+
+		auto dpr = screen->devicePixelRatio();
+		return {
+		    {"screen", screen->name()},
+		    {"x", (point.x - rects.monitor.left()) / dpr},
+		    {"y", (point.y - rects.monitor.top()) / dpr},
+		};
+	}
+
+	return {};
 }
 
 } // namespace qs::windows::sys

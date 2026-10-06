@@ -2,6 +2,8 @@
 
 #include <qt_windows.h>
 
+#include <qcolor.h>
+#include <qdatetime.h>
 #include <qdir.h>
 #include <qfileinfo.h>
 #include <qguiapplication.h>
@@ -13,6 +15,7 @@
 #include <qrect.h>
 #include <qscreen.h>
 #include <qstring.h>
+#include <qurl.h>
 
 #include "../capture.hpp"
 #include "../util.hpp"
@@ -23,7 +26,12 @@ namespace {
 Q_LOGGING_CATEGORY(logScreenshot, "quickshell.windows.screenshot", QtWarningMsg);
 
 constexpr int CAPTURE_TIMEOUT_MS = 2000;
+
+QString localPath(const QString& path) {
+	if (path.startsWith("file:", Qt::CaseInsensitive)) return QUrl(path).toLocalFile();
+	return path;
 }
+} // namespace
 
 bool Screenshot::captureScreen(const QString& screenName, const QString& path) {
 	QList<QScreen*> screens;
@@ -124,6 +132,49 @@ bool Screenshot::cropToFile(
 	}
 
 	return true;
+}
+
+bool Screenshot::loadPixels(const QString& path) {
+	auto info = QFileInfo(path);
+	if (!info.exists()) {
+		qCWarning(logScreenshot) << "pixelAt: no file at" << path;
+		this->releasePixels();
+		return false;
+	}
+
+	auto modified = info.lastModified();
+	auto size = info.size();
+	if (!this->pixels.isNull() && path == this->pixelsPath && modified == this->pixelsModified
+	    && size == this->pixelsFileSize)
+	{
+		return true;
+	}
+
+	QImage image(path);
+	if (image.isNull()) {
+		qCWarning(logScreenshot) << "pixelAt: cannot load" << path;
+		this->releasePixels();
+		return false;
+	}
+
+	this->pixels = image.convertToFormat(QImage::Format_RGB32);
+	this->pixelsPath = path;
+	this->pixelsModified = modified;
+	this->pixelsFileSize = size;
+	return true;
+}
+
+QString Screenshot::pixelAt(const QString& path, int x, int y) {
+	if (!this->loadPixels(localPath(path))) return QString();
+	if (!this->pixels.valid(x, y)) return QString();
+	return QColor::fromRgb(this->pixels.pixel(x, y)).name(QColor::HexRgb);
+}
+
+void Screenshot::releasePixels() {
+	this->pixels = QImage();
+	this->pixelsPath.clear();
+	this->pixelsModified = QDateTime();
+	this->pixelsFileSize = -1;
 }
 
 } // namespace qs::windows::sys
