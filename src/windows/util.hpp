@@ -53,6 +53,18 @@ inline constexpr const wchar_t* TRAY_HOOK_PROP = L"QuickshellTrayHook";
 
 [[nodiscard]] HWND explorerTaskbarWindow();
 
+class TrayHookYield {
+public:
+	TrayHookYield();
+	~TrayHookYield();
+	TrayHookYield(const TrayHookYield&) = delete;
+	TrayHookYield& operator=(const TrayHookYield&) = delete;
+	TrayHookYield(TrayHookYield&&) = delete;
+	TrayHookYield& operator=(TrayHookYield&&) = delete;
+};
+
+[[nodiscard]] bool trayHookYielding();
+
 void markNonRude(HWND hwnd);
 
 void applyPanelDwmAttributes(HWND hwnd);

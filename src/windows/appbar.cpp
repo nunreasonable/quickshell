@@ -35,6 +35,7 @@ UINT WinAppBar::taskbarCreatedMessage() {
 }
 
 bool WinAppBar::ensureRegistered(HWND hwnd) {
+	auto yield = TrayHookYield();
 	if (this->mRegistered && this->mHwnd == hwnd) return true;
 	if (this->mRegistered) this->remove();
 
@@ -51,6 +52,7 @@ bool WinAppBar::ensureRegistered(HWND hwnd) {
 }
 
 QRect WinAppBar::reserve(HWND hwnd, UINT edge, const QRect& monitor, qint32 size) {
+	auto yield = TrayHookYield();
 	if (hwnd == nullptr || size <= 0 || !monitor.isValid()) return {};
 	if (!this->ensureRegistered(hwnd)) return {};
 
@@ -86,6 +88,7 @@ QRect WinAppBar::reserve(HWND hwnd, UINT edge, const QRect& monitor, qint32 size
 
 void WinAppBar::remove() {
 	if (!this->mRegistered) return;
+	auto yield = TrayHookYield();
 
 	auto data = appBarData(this->mHwnd);
 	SHAppBarMessage(ABM_REMOVE, &data);
@@ -112,12 +115,14 @@ void WinAppBar::adopt(WinAppBar& other) {
 
 void WinAppBar::notifyActivate() {
 	if (!this->mRegistered) return;
+	auto yield = TrayHookYield();
 	auto data = appBarData(this->mHwnd);
 	SHAppBarMessage(ABM_ACTIVATE, &data);
 }
 
 void WinAppBar::notifyWindowPosChanged() {
 	if (!this->mRegistered) return;
+	auto yield = TrayHookYield();
 	auto data = appBarData(this->mHwnd);
 	SHAppBarMessage(ABM_WINDOWPOSCHANGED, &data);
 }

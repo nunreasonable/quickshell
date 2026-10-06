@@ -517,6 +517,7 @@ HWND HookWindow::explorerWindow() {
 }
 
 void HookWindow::keepFirst(bool report) {
+	if (trayHookYielding()) return;
 	auto* first = FindWindowW(TRAY_CLASS, nullptr);
 
 	if (!wantFront()) {

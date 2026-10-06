@@ -1,4 +1,6 @@
 #include "util.hpp"
+
+#include <atomic>
 #include <cmath>
 
 #include <qpoint.h>
@@ -134,6 +136,26 @@ bool isOwnProcessWindow(HWND hwnd) {
 bool isTrayHookWindow(HWND hwnd) {
 	return hwnd != nullptr && GetPropW(hwnd, TRAY_HOOK_PROP) != nullptr;
 }
+
+namespace {
+std::atomic<int> gTrayHookYields = 0; // NOLINT
+} // namespace
+
+bool trayHookYielding() { return gTrayHookYields.load() > 0; }
+
+TrayHookYield::TrayHookYield() {
+	if (gTrayHookYields.fetch_add(1) != 0) return;
+
+	auto* first = FindWindowW(L"Shell_TrayWnd", nullptr);
+	if (!isTrayHookWindow(first)) return;
+
+	auto* explorer = explorerTaskbarWindow();
+	if (explorer == nullptr) return;
+
+	SetWindowPos(first, explorer, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+}
+
+TrayHookYield::~TrayHookYield() { gTrayHookYields.fetch_sub(1); }
 
 HWND explorerTaskbarWindow() {
 	HWND hwnd = nullptr;
