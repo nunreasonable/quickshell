@@ -41,8 +41,13 @@ bool WinAppBar::ensureRegistered(HWND hwnd) {
 
 	auto data = appBarData(hwnd);
 	if (!SHAppBarMessage(ABM_NEW, &data)) {
-		qCWarning(logAppBar) << "Failed to register AppBar for window" << hwnd;
-		return false;
+		SHAppBarMessage(ABM_REMOVE, &data);
+		data = appBarData(hwnd);
+		if (!SHAppBarMessage(ABM_NEW, &data)) {
+			qCWarning(logAppBar) << "Failed to register AppBar for window" << hwnd;
+			return false;
+		}
+		qCDebug(logAppBar) << "Replaced a stale AppBar registration for" << hwnd;
 	}
 
 	this->mHwnd = hwnd;
