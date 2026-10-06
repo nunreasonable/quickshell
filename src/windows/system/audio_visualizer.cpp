@@ -34,6 +34,7 @@ constexpr int MAX_BARS = 1024;
 constexpr int MAX_FRAMERATE = 360;
 constexpr qint64 TICKS_PER_SECOND = 10'000'000;
 constexpr qint64 RETRY_INTERVAL = 10'000'000;
+constexpr qint64 LOST_RETRY_INTERVAL = 2'000'000;
 constexpr qint64 IDLE_INTERVAL = 1'000'000;
 constexpr qint64 SILENCE_GAP = 500'000;
 
@@ -285,7 +286,7 @@ void AudioVisualizer::run(quint64 generation) {
 		auto gotPackets = false;
 		if (source.isOpen() && !source.read(samples, &gotPackets)) {
 			source.close();
-			retryAt = now;
+			retryAt = now + LOST_RETRY_INTERVAL;
 		}
 
 		if (capturing != source.isOpen()) {
