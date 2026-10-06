@@ -38,6 +38,7 @@ public:
 	bool splitRatio(Id id, double value, bool exact);
 
 	bool moveEdge(Id id, Edge edge, int position);
+	[[nodiscard]] bool hasEdge(Id id, Edge edge) const;
 	bool resize(Id id, int dx, int dy);
 
 	void setPreserveSplit(bool preserve) { this->preserveSplit = preserve; }

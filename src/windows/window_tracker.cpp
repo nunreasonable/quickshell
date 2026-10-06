@@ -575,6 +575,10 @@ void WindowTracker::onEvent(DWORD event, HWND hwnd) {
 	this->schedule();
 }
 
+void WindowTracker::noteMoveSize(HWND hwnd, bool started) {
+	this->onEvent(started ? EVENT_SYSTEM_MOVESIZESTART : EVENT_SYSTEM_MOVESIZEEND, hwnd);
+}
+
 void WindowTracker::schedule() {
 	if (!this->flushTimer.isActive()) this->flushTimer.start();
 }

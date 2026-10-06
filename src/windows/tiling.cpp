@@ -106,53 +106,6 @@ void setRawRect(HWND hwnd, const QRect& rect) {
 	);
 }
 
-DWORD tokenIntegrity(HANDLE token) {
-	DWORD size = 0;
-	GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0, &size);
-	if (size == 0) return 0;
-
-	auto buffer = QByteArray(static_cast<qsizetype>(size), '\0');
-	auto* label = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(buffer.data());
-	if (!GetTokenInformation(token, TokenIntegrityLevel, label, size, &size)) return 0;
-
-	auto* sid = label->Label.Sid;
-	auto count = *GetSidSubAuthorityCount(sid);
-	if (count == 0) return 0;
-	return *GetSidSubAuthority(sid, count - 1);
-}
-
-DWORD ownIntegrity() {
-	static const DWORD level = []() -> DWORD {
-		HANDLE token = nullptr;
-		if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
-			return SECURITY_MANDATORY_MEDIUM_RID;
-		}
-		auto level = tokenIntegrity(token);
-		CloseHandle(token);
-		return level == 0 ? SECURITY_MANDATORY_MEDIUM_RID : level;
-	}();
-
-	return level;
-}
-
-bool isMoreElevated(HWND hwnd) {
-	DWORD pid = 0;
-	GetWindowThreadProcessId(hwnd, &pid);
-	auto own = ownIntegrity();
-
-	auto* process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-	if (process == nullptr) return own < SECURITY_MANDATORY_HIGH_RID;
-
-	HANDLE token = nullptr;
-	auto opened = OpenProcessToken(process, TOKEN_QUERY, &token) != FALSE;
-	CloseHandle(process);
-	if (!opened) return own < SECURITY_MANDATORY_HIGH_RID;
-
-	auto level = tokenIntegrity(token);
-	CloseHandle(token);
-	return level > own;
-}
-
 QPoint cursorPos() {
 	POINT point {};
 	GetCursorPos(&point);
@@ -383,6 +336,7 @@ void TilingManager::stop() {
 	this->dirtyLayouts.clear();
 	this->unverified.clear();
 	this->dragging = nullptr;
+	this->edgeDragState = EdgeDrag();
 	this->syncTimer.stop();
 	this->verifyTimer.stop();
 	this->deadlineTimer.stop();
@@ -963,7 +917,9 @@ void TilingManager::onDeadline() {
 void TilingManager::onMoveSizeStarted(TrackedWindow* window) {
 	auto iter = this->managed.find(window);
 	if (iter == this->managed.end() || iter->second.layout == nullptr) return;
-	if (this->stateOf(iter->second) != State::Tiled) return;
+
+	auto state = this->stateOf(iter->second);
+	if (state != State::Tiled && !(state == State::Suspended && window->maximized())) return;
 
 	this->dragging = window;
 	this->unverified.remove(window);
@@ -1292,6 +1248,71 @@ bool TilingManager::setFloating(TrackedWindow* window, bool floating, bool toggl
 	this->markWindow(window);
 	return true;
 }
+
+bool TilingManager::beginEdgeDrag(TrackedWindow* window, bool left, bool top) {
+	this->edgeDragState = EdgeDrag();
+
+	auto iter = this->managed.find(window);
+	if (iter == this->managed.end() || iter->second.layout == nullptr) return false;
+
+	auto& m = iter->second;
+	if (this->stateOf(m) != State::Tiled) return false;
+
+	auto* layout = m.layout;
+	auto id = idOf(window);
+	auto pick = [&](Edge preferred, Edge other) -> std::optional<Edge> {
+		if (layout->tree.hasEdge(id, preferred)) return preferred;
+		if (layout->tree.hasEdge(id, other)) return other;
+		return std::nullopt;
+	};
+
+	auto& drag = this->edgeDragState;
+	drag.window = window;
+	drag.layout = layout;
+	drag.box = layout->tree.box(id);
+	drag.horizontal = left ? pick(Edge::Left, Edge::Right) : pick(Edge::Right, Edge::Left);
+	drag.vertical = top ? pick(Edge::Top, Edge::Bottom) : pick(Edge::Bottom, Edge::Top);
+	return true;
+}
+
+void TilingManager::edgeDrag(const QPoint& delta) {
+	auto& drag = this->edgeDragState;
+	if (drag.window == nullptr) return;
+
+	auto iter = this->managed.find(drag.window);
+	if (iter == this->managed.end() || iter->second.layout != drag.layout
+	    || !this->layoutAlive(drag.layout))
+	{
+		drag = EdgeDrag();
+		return;
+	}
+
+	auto edgeOf = [&drag](Edge edge) {
+		switch (edge) {
+		case Edge::Left: return drag.box.left();
+		case Edge::Right: return rightOf(drag.box);
+		case Edge::Top: return drag.box.top();
+		case Edge::Bottom: return bottomOf(drag.box);
+		}
+		return 0;
+	};
+
+	auto& tree = drag.layout->tree;
+	auto id = idOf(drag.window);
+	auto changed = false;
+
+	if (drag.horizontal) {
+		changed |= tree.moveEdge(id, *drag.horizontal, edgeOf(*drag.horizontal) + delta.x());
+	}
+
+	if (drag.vertical) {
+		changed |= tree.moveEdge(id, *drag.vertical, edgeOf(*drag.vertical) + delta.y());
+	}
+
+	if (changed) this->markLayout(drag.layout);
+}
+
+void TilingManager::endEdgeDrag() { this->edgeDragState = EdgeDrag(); }
 
 void TilingManager::resizeFloating(TrackedWindow* window, qint32 dx, qint32 dy, bool exact) {
 	if (window == nullptr || window->screen() == nullptr) return;

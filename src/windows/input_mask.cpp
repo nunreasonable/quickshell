@@ -12,6 +12,7 @@
 #include <qwindow.h>
 #include <windowsx.h>
 
+#include "super_drag.hpp"
 #include "util.hpp"
 
 namespace qs::windows {
@@ -176,6 +177,17 @@ void InputMaskTracker::releaseCursorEvents() {
 	this->updateHookState();
 }
 
+void InputMaskTracker::acquireHook() {
+	this->hookHolders++;
+	this->updateHookState();
+}
+
+void InputMaskTracker::releaseHook() {
+	if (this->hookHolders <= 0) return;
+	this->hookHolders--;
+	this->updateHookState();
+}
+
 void InputMaskTracker::onButtonPressed(QPoint position, quint32 time) {
 	emit this->buttonPressed(position, time);
 }
@@ -229,7 +241,8 @@ void InputMaskTracker::evaluate(POINT cursor) {
 }
 
 void InputMaskTracker::updateHookState() {
-	auto needed = !this->entries.isEmpty() || buttonWatchers.load() > 0 || this->cursorWatchers > 0;
+	auto needed = !this->entries.isEmpty() || buttonWatchers.load() > 0 || this->cursorWatchers > 0
+	           || this->hookHolders > 0;
 
 	if (needed && !this->hookRunning && !this->hookFailed) {
 		if (this->messageWindow == nullptr || !this->startHook()) {
@@ -303,6 +316,7 @@ void InputMaskTracker::hookThreadMain(HANDLE readyEvent) {
 	}
 
 	UnhookWindowsHookEx(hook);
+	SuperDragManager::onHookStopped();
 }
 
 LRESULT CALLBACK InputMaskTracker::mouseHookProc(int code, WPARAM wParam, LPARAM lParam) {
@@ -317,6 +331,8 @@ LRESULT CALLBACK InputMaskTracker::mouseHookProc(int code, WPARAM wParam, LPARAM
 			if (target != nullptr) PostMessageW(target, WM_QS_CURSOR_MOVED, 0, 0);
 			else wakePending.store(false);
 		}
+
+		if (SuperDragManager::onMouseHook(wParam, info)) return 1;
 
 		auto button = wParam == WM_LBUTTONDOWN || wParam == WM_RBUTTONDOWN || wParam == WM_MBUTTONDOWN
 		           || wParam == WM_XBUTTONDOWN;
