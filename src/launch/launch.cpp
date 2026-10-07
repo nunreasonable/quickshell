@@ -311,7 +311,11 @@ int launch(const LaunchArgs& args, char** argv) {
 		QQmlDebuggingEnabler::enableDebugging(true);
 		auto wait = args.waitForDebug ? QQmlDebuggingEnabler::WaitForClient
 		                              : QQmlDebuggingEnabler::DoNotWaitForClient;
+#ifdef _WIN32
+		QQmlDebuggingEnabler::startTcpDebugServer(args.debugPort, wait, QStringLiteral("127.0.0.1"));
+#else
 		QQmlDebuggingEnabler::startTcpDebugServer(args.debugPort, wait);
+#endif
 	}
 
 	// This needs to run early to get the first connection to QGuiApplication::screenAdded() in Qs.
