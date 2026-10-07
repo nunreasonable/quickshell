@@ -77,7 +77,7 @@ void CALLBACK queueEvent(
 void eventThreadMain(HANDLE readyEvent) {
 	MSG msg {};
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
-	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+	prioritizeInputThread(THREAD_PRIORITY_HIGHEST);
 
 	std::vector<HWINEVENTHOOK> hooks;
 	auto hook = [&hooks](DWORD min, DWORD max) {

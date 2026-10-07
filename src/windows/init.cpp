@@ -13,6 +13,7 @@
 #include "../core/plugin.hpp"
 #include "desktopentry_backend.hpp"
 #include "panel_window.hpp"
+#include "util.hpp"
 
 namespace {
 
@@ -96,6 +97,7 @@ class WindowsPlugin: public QsEnginePlugin {
 	bool applies() override { return QGuiApplication::platformName() == "windows"; }
 
 	void init() override {
+		qs::windows::optOutOfProcessPowerThrottling();
 		loadBundledFonts();
 		addBundledIconPath();
 		qs::windows::WindowsDesktopEntryBackend::install();

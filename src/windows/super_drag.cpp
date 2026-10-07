@@ -608,6 +608,7 @@ void SuperDragManager::workerMain(HANDLE readyEvent) {
 	MSG msg {};
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 	SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+	prioritizeInputThread(THREAD_PRIORITY_HIGHEST);
 	gWorkerId.store(GetCurrentThreadId());
 	SetEvent(readyEvent);
 

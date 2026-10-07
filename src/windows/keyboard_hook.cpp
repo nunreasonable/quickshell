@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include "input_mask.hpp"
+#include "util.hpp"
 
 namespace qs::windows::hotkeys {
 
@@ -317,7 +318,7 @@ void hookThreadMain(HANDLE readyEvent) {
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 	gThreadId.store(GetCurrentThreadId());
 
-	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+	prioritizeInputThread(THREAD_PRIORITY_TIME_CRITICAL);
 
 	auto* hook = SetWindowsHookExW(WH_KEYBOARD_LL, &hookProc, GetModuleHandleW(nullptr), 0);
 	HWINEVENTHOOK foregroundHook = nullptr;

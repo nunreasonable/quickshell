@@ -17,6 +17,8 @@ struct MonitorRects {
 };
 
 [[nodiscard]] HMONITOR monitorForScreen(QScreen* screen);
+void prioritizeInputThread(int priority);
+void optOutOfProcessPowerThrottling();
 [[nodiscard]] MonitorRects monitorRects(HMONITOR monitor);
 
 class ScreenMapper {

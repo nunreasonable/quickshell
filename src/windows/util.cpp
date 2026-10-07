@@ -247,4 +247,22 @@ void setExStyleBits(HWND hwnd, LONG_PTR bits, bool enabled) {
 	if (newStyle != style) SetWindowLongPtrW(hwnd, GWL_EXSTYLE, newStyle);
 }
 
+void prioritizeInputThread(int priority) {
+	SetThreadPriority(GetCurrentThread(), priority);
+
+	THREAD_POWER_THROTTLING_STATE state {};
+	state.Version = THREAD_POWER_THROTTLING_CURRENT_VERSION;
+	state.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+	state.StateMask = 0;
+	SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling, &state, sizeof(state));
+}
+
+void optOutOfProcessPowerThrottling() {
+	PROCESS_POWER_THROTTLING_STATE state {};
+	state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+	state.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED;
+	state.StateMask = 0;
+	SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, sizeof(state));
+}
+
 } // namespace qs::windows

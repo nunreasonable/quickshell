@@ -300,7 +300,7 @@ void InputMaskTracker::hookThreadMain(HANDLE readyEvent) {
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 	hookThreadId.store(GetCurrentThreadId());
 
-	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+	prioritizeInputThread(THREAD_PRIORITY_TIME_CRITICAL);
 
 	auto* hook =
 	    SetWindowsHookExW(WH_MOUSE_LL, &InputMaskTracker::mouseHookProc, GetModuleHandleW(nullptr), 0);
