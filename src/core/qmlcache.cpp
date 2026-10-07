@@ -1,7 +1,9 @@
 #include "qmlcache.hpp"
-#include <cstdlib>
+#include <array>
 #include <cstring>
 #include <mutex>
+#include <new>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -31,19 +33,19 @@ namespace {
 
 QS_LOGGING_CATEGORY(logQmlCache, "quickshell.qmlcache", QtInfoMsg);
 
-constexpr char BUNDLE_MAGIC[8] = {'q', 's', 'q', 'm', 'l', 'c', 'b', '1'};
+constexpr std::array<char, 8> BUNDLE_MAGIC = {'q', 's', 'q', 'm', 'l', 'c', 'b', '1'};
 constexpr quint32 BUNDLE_FORMAT = 1;
 constexpr qint64 BUNDLE_MAX_SIZE = qint64(1) << 30;
-constexpr quint32 UNIT_ALIGNMENT = 16;
+constexpr std::align_val_t BUNDLE_ALIGNMENT {16};
 
 struct BundleHeader {
-	char magic[8];
+	std::array<char, 8> magic;
 	quint32_le format;
 	quint32_le count;
-	char qtVersion[16];
+	std::array<char, 16> qtVersion;
 	quint32_le stringsOffset;
 	quint32_le stringsSize;
-	quint32_le reserved[2];
+	std::array<quint32_le, 2> reserved;
 };
 
 static_assert(sizeof(BundleHeader) == 48);
@@ -53,12 +55,14 @@ struct BundleEntry {
 	quint32_le pathSize;
 	quint32_le unitOffset;
 	quint32_le unitSize;
-	char sourceMd5[16];
+	std::array<char, 16> sourceMd5;
 };
 
 static_assert(sizeof(BundleEntry) == 32);
 
-const QQmlPrivate::AOTCompiledFunction NO_AOT_FUNCTIONS[] = {{0, 0, nullptr, nullptr}};
+const std::array<QQmlPrivate::AOTCompiledFunction, 1> NO_AOT_FUNCTIONS = {
+    {{0, 0, nullptr, nullptr}}
+};
 
 struct Unit {
 	QQmlPrivate::CachedQmlUnit cached {};
@@ -66,9 +70,8 @@ struct Unit {
 };
 
 struct Bundle {
-	char* data = nullptr;
 	std::vector<Unit> units;
-	QHash<QString, qsizetype> index;
+	QHash<QString, size_t> index;
 };
 
 struct BundleKey {
@@ -88,7 +91,7 @@ struct State {
 	QSet<QString> intercepts;
 };
 
-State& state() {
+State& globalState() {
 	static auto* state = new State();
 	return *state;
 }
@@ -103,23 +106,18 @@ bool rangeInside(quint64 offset, quint64 size, quint64 total) {
 	return offset <= total && size <= total - offset;
 }
 
-bool validUnit(const char* data, qint64 total, const BundleEntry& entry, QString* error) {
-	if (!rangeInside(entry.unitOffset, entry.unitSize, total)) {
-		*error = QStringLiteral("unit outside the file");
-		return false;
-	}
-
-	if ((reinterpret_cast<quintptr>(data) + entry.unitOffset) % UNIT_ALIGNMENT != 0) {
+bool validUnit(std::span<const char> bytes, QString* error) {
+	if (reinterpret_cast<quintptr>(bytes.data()) % static_cast<quintptr>(BUNDLE_ALIGNMENT) != 0) {
 		*error = QStringLiteral("misaligned unit");
 		return false;
 	}
 
-	if (entry.unitSize < sizeof(QV4::CompiledData::Unit)) {
+	if (bytes.size() < sizeof(QV4::CompiledData::Unit)) {
 		*error = QStringLiteral("truncated unit");
 		return false;
 	}
 
-	const auto* unit = reinterpret_cast<const QV4::CompiledData::Unit*>(data + entry.unitOffset);
+	const auto* unit = reinterpret_cast<const QV4::CompiledData::Unit*>(bytes.data());
 
 	if (std::memcmp(unit->magic, QV4::CompiledData::magic_str, sizeof(unit->magic)) != 0) {
 		*error = QStringLiteral("bad unit magic");
@@ -133,7 +131,7 @@ bool validUnit(const char* data, qint64 total, const BundleEntry& entry, QString
 		return false;
 	}
 
-	if (unit->unitSize != entry.unitSize) {
+	if (unit->unitSize != bytes.size()) {
 		*error = QStringLiteral("unit size mismatch");
 		return false;
 	}
@@ -151,16 +149,16 @@ bool validUnit(const char* data, qint64 total, const BundleEntry& entry, QString
 	return true;
 }
 
-Bundle* parseBundle(char* data, qint64 size, QString* error) {
-	if (size < qint64(sizeof(BundleHeader))) {
+Bundle* parseBundle(std::span<const char> data, QString* error) {
+	if (data.size() < sizeof(BundleHeader)) {
 		*error = QStringLiteral("file too small");
 		return nullptr;
 	}
 
-	BundleHeader header {};
-	std::memcpy(&header, data, sizeof(header));
+	auto header = BundleHeader();
+	std::memcpy(&header, data.data(), sizeof(header));
 
-	if (std::memcmp(header.magic, BUNDLE_MAGIC, sizeof(BUNDLE_MAGIC)) != 0) {
+	if (header.magic != BUNDLE_MAGIC) {
 		*error = QStringLiteral("bad magic");
 		return nullptr;
 	}
@@ -170,57 +168,65 @@ Bundle* parseBundle(char* data, qint64 size, QString* error) {
 		return nullptr;
 	}
 
-	auto qtVersion =
-	    QString::fromLatin1(header.qtVersion, qstrnlen(header.qtVersion, sizeof(header.qtVersion)));
+	auto qtVersion = QString::fromLatin1(
+	    header.qtVersion.data(),
+	    static_cast<qsizetype>(qstrnlen(header.qtVersion.data(), header.qtVersion.size()))
+	);
+
 	if (qtVersion != QLatin1StringView(qVersion())) {
 		*error = QStringLiteral("built for Qt %1, running Qt %2")
 		             .arg(qtVersion, QString::fromLatin1(qVersion()));
 		return nullptr;
 	}
 
-	const auto total = quint64(size);
 	const quint64 count = header.count;
-	if (!rangeInside(sizeof(BundleHeader), count * sizeof(BundleEntry), total)
-	    || !rangeInside(header.stringsOffset, header.stringsSize, total))
+	if (!rangeInside(sizeof(BundleHeader), count * sizeof(BundleEntry), data.size())
+	    || !rangeInside(header.stringsOffset, header.stringsSize, data.size()))
 	{
 		*error = QStringLiteral("index outside the file");
 		return nullptr;
 	}
 
-	auto* bundle = new Bundle();
-	bundle->data = data;
-	bundle->units.resize(count);
-	bundle->index.reserve(static_cast<qsizetype>(count));
-
-	const char* strings = data + header.stringsOffset;
+	auto strings = data.subspan(header.stringsOffset, header.stringsSize);
+	auto units = std::vector<Unit>(count);
+	auto index = QHash<QString, size_t>();
+	index.reserve(static_cast<qsizetype>(count));
 
 	for (quint64 i = 0; i != count; i++) {
-		BundleEntry entry {};
-		std::memcpy(&entry, data + sizeof(BundleHeader) + i * sizeof(BundleEntry), sizeof(entry));
+		auto entry = BundleEntry();
+		auto entryBytes = data.subspan(sizeof(BundleHeader) + i * sizeof(BundleEntry), sizeof(entry));
+		std::memcpy(&entry, entryBytes.data(), sizeof(entry));
 
-		if (!rangeInside(entry.pathOffset, entry.pathSize, header.stringsSize)) {
+		if (!rangeInside(entry.pathOffset, entry.pathSize, strings.size())) {
 			*error = QStringLiteral("path outside the string table");
-			delete bundle;
 			return nullptr;
 		}
 
-		auto path = QString::fromUtf8(strings + entry.pathOffset, entry.pathSize);
+		auto pathBytes = strings.subspan(entry.pathOffset, entry.pathSize);
+		auto path = QString::fromUtf8(pathBytes.data(), static_cast<qsizetype>(pathBytes.size()));
+
+		if (!rangeInside(entry.unitOffset, entry.unitSize, data.size())) {
+			*error = path % QStringLiteral(": unit outside the file");
+			return nullptr;
+		}
+
+		auto unitBytes = data.subspan(entry.unitOffset, entry.unitSize);
 
 		QString unitError;
-		if (!validUnit(data, size, entry, &unitError)) {
+		if (!validUnit(unitBytes, &unitError)) {
 			*error = path % QStringLiteral(": ") % unitError;
-			delete bundle;
 			return nullptr;
 		}
 
-		auto& unit = bundle->units[i];
-		unit.cached.qmlData = reinterpret_cast<const QV4::CompiledData::Unit*>(data + entry.unitOffset);
-		unit.cached.aotCompiledFunctions = NO_AOT_FUNCTIONS;
-		unit.sourceMd5 = QByteArray(entry.sourceMd5, sizeof(entry.sourceMd5));
-		bundle->index.insert(path, static_cast<qsizetype>(i));
+		auto& unit = units[i];
+		unit.cached.qmlData = reinterpret_cast<const QV4::CompiledData::Unit*>(unitBytes.data());
+		unit.cached.aotCompiledFunctions = NO_AOT_FUNCTIONS.data();
+		unit.sourceMd5 =
+		    QByteArray(entry.sourceMd5.data(), static_cast<qsizetype>(entry.sourceMd5.size()));
+		index.insert(path, static_cast<size_t>(i));
 	}
 
-	return bundle;
+	return new Bundle {.units = std::move(units), .index = std::move(index)};
 }
 
 Bundle* loadBundle(const QString& path) {
@@ -236,20 +242,24 @@ Bundle* loadBundle(const QString& path) {
 		return nullptr;
 	}
 
-	auto* data = static_cast<char*>(std::malloc(static_cast<size_t>(size)));
+	auto* data =
+	    static_cast<char*>(::operator new(static_cast<size_t>(size), BUNDLE_ALIGNMENT, std::nothrow));
+
 	if (!data) return nullptr;
 
-	if (file.read(data, size) != size) {
+	auto bytes = std::span<char>(data, static_cast<size_t>(size));
+
+	if (file.read(bytes.data(), size) != size) {
 		qCWarning(logQmlCache) << "Could not read QML bundle" << path << file.errorString();
-		std::free(data);
+		::operator delete(data, BUNDLE_ALIGNMENT);
 		return nullptr;
 	}
 
 	QString error;
-	auto* bundle = parseBundle(data, size, &error);
+	auto* bundle = parseBundle(bytes, &error);
 	if (!bundle) {
 		qCWarning(logQmlCache).noquote() << "Ignoring QML bundle" << path << "-" << error;
-		std::free(data);
+		::operator delete(data, BUNDLE_ALIGNMENT);
 		return nullptr;
 	}
 
@@ -258,14 +268,15 @@ Bundle* loadBundle(const QString& path) {
 }
 
 const QQmlPrivate::CachedQmlUnit* lookup(const QUrl& url) {
-	if (url.scheme() != QLatin1StringView("qs") || url.hasFragment() || url.hasQuery()) return nullptr;
+	if (url.scheme() != QLatin1StringView("qs")) return nullptr;
+	if (url.hasFragment() || url.hasQuery()) return nullptr;
 
 	auto path = url.path();
 	if (!path.startsWith(QLatin1StringView("@/qs/"))) return nullptr;
 
 	auto relative = QDir::cleanPath(path.sliced(5));
 
-	auto& state = qs::qmlcache::state();
+	auto& state = globalState();
 	auto locker = QMutexLocker(&state.mutex);
 
 	if (!state.bundle) return nullptr;
@@ -325,7 +336,7 @@ void activate(
 		}
 	}
 
-	auto& state = qs::qmlcache::state();
+	auto& state = globalState();
 	auto active = false;
 
 	{
