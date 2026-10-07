@@ -39,6 +39,8 @@ qt_add_library(quickshell-windows STATIC
 	system/terminal_colors.cpp
 	system/terminal_colors_math.cpp
 	image/image_tools.cpp
+	image/image_tools_backend.cpp
+	image/image_tools_worker.cpp
 	image/thumbnailer.cpp
 	system/ocr.cpp
 	system/ocr_backend.cpp

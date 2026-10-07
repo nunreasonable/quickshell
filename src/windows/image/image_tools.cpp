@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -14,6 +15,8 @@
 #include <qrect.h>
 #include <qrgb.h>
 #include <qsize.h>
+
+#include "image_tools_backend.hpp"
 
 namespace qs::windows::image {
 
@@ -123,6 +126,12 @@ QString dominantColorOfRegion(const QImage& color, const QRect& rect) {
 }
 
 } // namespace
+
+ImageTools::ImageTools(QObject* parent)
+    : QObject(parent)
+    , mBackend(std::make_unique<ImageToolsBackend>(this)) {}
+
+ImageTools::~ImageTools() = default;
 
 QVariantMap ImageTools::leastBusyRegion(
     const QString& imagePath,
@@ -350,6 +359,35 @@ QSize ImageTools::imageSize(const QString& imagePath) {
 
 	if (reader.transformation().testFlag(QImageIOHandler::TransformationRotate90)) size.transpose();
 	return size;
+}
+
+int ImageTools::requestLeastBusyRegion(
+    const QString& imagePath,
+    int width,
+    int height,
+    int screenWidth,
+    int screenHeight,
+    int horizontalPadding,
+    int verticalPadding,
+    bool busiest
+) {
+	auto requestId = this->mNextRequestId++;
+	this->mBackend->requestLeastBusyRegion(
+	    requestId,
+	    imagePath,
+	    width,
+	    height,
+	    screenWidth,
+	    screenHeight,
+	    horizontalPadding,
+	    verticalPadding,
+	    busiest
+	);
+	return requestId;
+}
+
+void ImageTools::backendDone(int requestId, const QVariantMap& result) {
+	emit this->leastBusyRegionReady(requestId, result);
 }
 
 } // namespace qs::windows::image
