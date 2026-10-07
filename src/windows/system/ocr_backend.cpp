@@ -16,17 +16,22 @@ OcrBackend::OcrBackend(Ocr* frontend) {
 
 	QObject::connect(&this->mThread, &QThread::started, this->mWorker, &OcrWorker::start);
 	QObject::connect(&this->mThread, &QThread::finished, this->mWorker, &OcrWorker::shutdown);
-
-	this->mThread.start();
 }
 
 OcrBackend::~OcrBackend() {
-	this->mThread.quit();
-	this->mThread.wait();
+	if (this->mThread.isRunning()) {
+		this->mThread.quit();
+		this->mThread.wait();
+	}
 	delete this->mWorker;
 }
 
 void OcrBackend::requestRecognize(int requestId, const QString& path) {
+	if (!this->mStarted) {
+		this->mStarted = true;
+		this->mThread.start();
+	}
+
 	auto* worker = this->mWorker;
 	QMetaObject::invokeMethod(
 	    worker,
