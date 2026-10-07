@@ -13,9 +13,12 @@
 #include <qlogging.h>
 #include <qloggingcategory.h>
 #include <qpointer.h>
+#include <qrunnable.h>
 #include <qstandardpaths.h>
 #include <qstring.h>
+#include <qthreadpool.h>
 
+#include "../../core/backgroundpool.hpp"
 #include "../../core/logcat.hpp"
 #include "../services/message_window.hpp"
 
@@ -63,8 +66,12 @@ QString flattenForPreview(QString text) {
 
 Clipboard::Clipboard(QObject* parent): QObject(parent) {
 	static int instances = 0; // NOLINT
-	if (instances == 0) pruneStaleCaches();
+	auto isFirstInstance = instances == 0;
 	this->mCacheDir = cacheRoot() + QStringLiteral("/%1-%2").arg(GetCurrentProcessId()).arg(instances++);
+
+	if (isFirstInstance) {
+		BackgroundThreadPool::instance()->start(QRunnable::create(&pruneStaleCaches));
+	}
 
 	auto* window = qs::windows::services::ServiceMessageWindow::instance();
 
