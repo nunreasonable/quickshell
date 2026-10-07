@@ -3,6 +3,7 @@
 #include <qlogging.h>
 #include <qloggingcategory.h>
 #include <qobject.h>
+#include <qpointer.h>
 #include <qt_windows.h>
 #include <qtimer.h>
 
@@ -39,9 +40,9 @@ UPowerQml::UPowerQml(QObject* parent): QObject(parent) {
 
 	auto* window = qs::windows::services::ServiceMessageWindow::instance();
 
-	window->addHandler(WM_POWERBROADCAST, [this](WPARAM wParam, LPARAM /*lParam*/) {
-		if (wParam == PBT_POWERSETTINGCHANGE) {
-			this->refresh();
+	window->addHandler(WM_POWERBROADCAST, [self = QPointer(this)](WPARAM wParam, LPARAM /*lParam*/) {
+		if (self && wParam == PBT_POWERSETTINGCHANGE) {
+			self->refresh();
 		}
 	});
 
