@@ -16,9 +16,11 @@
 
 namespace {
 
-void loadBundledFonts() {
-	auto dir = QDir(QCoreApplication::applicationDirPath() + "/fonts");
-	if (!dir.exists()) return;
+constexpr const char* PERUSER_FONT_PREFIX = "jetbrainsmononerdfont-";
+constexpr const char* PERUSER_FONT_FAMILY = "JetBrainsMono Nerd Font";
+
+bool allPeruserFontsPresent(const QDir& dir, const QDir& userFontsDir) {
+	if (!userFontsDir.exists()) return false;
 
 	auto iter = QDirIterator(
 	    dir.path(),
@@ -26,16 +28,56 @@ void loadBundledFonts() {
 	    QDir::Files,
 	    QDirIterator::Subdirectories
 	);
+	auto any = false;
 
 	while (iter.hasNext()) {
-		auto path = iter.next();
-		if (QFontDatabase::addApplicationFont(path) == -1) {
-			qWarning() << "Failed to load bundled font" << path;
-		}
+		iter.next();
+		auto name = iter.fileName();
+		if (!name.startsWith(PERUSER_FONT_PREFIX, Qt::CaseInsensitive)) continue;
+		any = true;
+		if (!userFontsDir.exists(name)) return false;
 	}
 
-	QFont::insertSubstitution("JetBrains Mono NF", "JetBrainsMono Nerd Font");
-	QFont::insertSubstitution("JetBrains Mono", "JetBrainsMono Nerd Font");
+	return any;
+}
+
+void loadBundledFonts() {
+	auto dir = QDir(QCoreApplication::applicationDirPath() + "/fonts");
+	if (!dir.exists()) return;
+
+	auto userFontsDir = QDir(qEnvironmentVariable("LocalAppData") + "/Microsoft/Windows/Fonts");
+	auto skipPeruser = allPeruserFontsPresent(dir, userFontsDir);
+
+	enum class Select { All, PeruserOnly, ExceptPeruser };
+
+	auto load = [&](Select which) {
+		auto iter = QDirIterator(
+		    dir.path(),
+		    {"*.ttf", "*.otf", "*.ttc"},
+		    QDir::Files,
+		    QDirIterator::Subdirectories
+		);
+
+		while (iter.hasNext()) {
+			auto path = iter.next();
+			auto isPeruser = iter.fileName().startsWith(PERUSER_FONT_PREFIX, Qt::CaseInsensitive);
+			if (which == Select::PeruserOnly && !isPeruser) continue;
+			if (which == Select::ExceptPeruser && isPeruser) continue;
+
+			if (QFontDatabase::addApplicationFont(path) == -1) {
+				qWarning() << "Failed to load bundled font" << path;
+			}
+		}
+	};
+
+	load(skipPeruser ? Select::ExceptPeruser : Select::All);
+
+	if (skipPeruser && !QFontDatabase::families().contains(QString(PERUSER_FONT_FAMILY))) {
+		load(Select::PeruserOnly);
+	}
+
+	QFont::insertSubstitution("JetBrains Mono NF", PERUSER_FONT_FAMILY);
+	QFont::insertSubstitution("JetBrains Mono", PERUSER_FONT_FAMILY);
 }
 
 void addBundledIconPath() {
