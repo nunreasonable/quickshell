@@ -41,10 +41,6 @@ public:
 
 	Q_INVOKABLE static QSize imageSize(const QString& imagePath);
 
-	/// Asynchronous counterpart of `leastBusyRegion`. Runs on a dedicated worker thread,
-	/// caches results by (path, mtime, size, parameters) and coalesces concurrent requests
-	/// for the same key into a single computation. Returns a request id; the result for it
-	/// arrives later via `leastBusyRegionReady`.
 	Q_INVOKABLE int requestLeastBusyRegion(
 	    const QString& imagePath,
 	    int width,
