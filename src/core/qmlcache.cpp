@@ -258,7 +258,7 @@ Bundle* loadBundle(const QString& path) {
 }
 
 const QQmlPrivate::CachedQmlUnit* lookup(const QUrl& url) {
-	if (url.scheme() != QLatin1StringView("qs")) return nullptr;
+	if (url.scheme() != QLatin1StringView("qs") || url.hasFragment() || url.hasQuery()) return nullptr;
 
 	auto path = url.path();
 	if (!path.startsWith(QLatin1StringView("@/qs/"))) return nullptr;
