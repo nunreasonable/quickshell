@@ -24,7 +24,8 @@ QS_LOGGING_CATEGORY(logDesktop, "quickshell.windows.desktop", QtWarningMsg);
 constexpr const wchar_t* LISTENER_CLASS = L"QuickshellDesktopListener";
 
 constexpr UINT SPAWN_WORKERW = 0x052C;
-constexpr UINT SPAWN_TIMEOUT_MS = 1000;
+constexpr UINT SPAWN_TIMEOUT_MS = 150;
+constexpr int SPAWN_RETRY_MS = 500;
 
 constexpr int SETTLE_MS = 500;
 
@@ -217,11 +218,13 @@ void DesktopHost::lookup() {
 
 	Lookup found;
 	auto* progman = FindWindowW(L"Progman", nullptr);
+	auto neededSpawn = false;
 
 	if (progman != nullptr) {
 		found = findWorkerW(progman);
 
 		if (found.parent == nullptr) {
+			neededSpawn = true;
 			DWORD_PTR result = 0;
 			auto flags = SMTO_NORMAL | SMTO_ABORTIFHUNG;
 			SendMessageTimeoutW(progman, SPAWN_WORKERW, 0xD, 0x1, flags, SPAWN_TIMEOUT_MS, &result);
@@ -233,7 +236,15 @@ void DesktopHost::lookup() {
 			}
 		}
 
-		if (found.parent == nullptr) found = findProgman(progman);
+		auto gotWorkerW = found.parent != nullptr;
+		if (!gotWorkerW) found = findProgman(progman);
+
+		if (gotWorkerW) {
+			this->spawnRetriesLeft = 4;
+		} else if (neededSpawn && this->spawnRetriesLeft > 0) {
+			this->spawnRetriesLeft--;
+			this->scheduleRefresh(SPAWN_RETRY_MS);
+		}
 	}
 
 	auto* iconsView = progman == nullptr ? nullptr : findIconsView(progman);
