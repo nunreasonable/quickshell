@@ -44,8 +44,11 @@ SystemStats::SystemStats(QObject* parent): QObject(parent) {
 	QObject::connect(&this->timer, &QTimer::timeout, this, &SystemStats::sample);
 
 	if (this->mActive) {
-		this->sample();
-		this->timer.start();
+		QTimer::singleShot(0, this, [this]() {
+			if (!this->mActive) return;
+			this->sample();
+			this->timer.start();
+		});
 	}
 }
 
