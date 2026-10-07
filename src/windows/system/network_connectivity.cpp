@@ -7,6 +7,7 @@
 #include <qloggingcategory.h>
 #include <qmetaobject.h>
 #include <qmutex.h>
+#include <qtimer.h>
 
 #include <winsock2.h>
 #include <ws2ipdef.h>
@@ -122,6 +123,10 @@ NetworkConnectivityBackend::~NetworkConnectivityBackend() {
 }
 
 void NetworkConnectivityBackend::start() {
+	QTimer::singleShot(0, this, &NetworkConnectivityBackend::performStart);
+}
+
+void NetworkConnectivityBackend::performStart() {
 	if (!ensureComInitialized()) return;
 
 	auto hr = CoCreateInstance(
