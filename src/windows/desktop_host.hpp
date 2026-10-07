@@ -80,6 +80,7 @@ private:
 	DWORD hookThread = 0;
 	bool movePending = false;
 	bool restackPending = false;
+	int spawnRetriesLeft = 4;
 	QTimer refreshTimer;
 };
 
