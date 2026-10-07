@@ -2,10 +2,12 @@
 
 #include <unordered_map>
 
+#include <qcoreapplication.h>
 #include <qhash.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
 #include <qmetaobject.h>
+#include <qpointer.h>
 #include <qrunnable.h>
 #include <qstringbuilder.h>
 #include <qstringview.h>
@@ -121,8 +123,8 @@ void NetworkWifiBackend::closeHandle() {
 }
 
 void NetworkWifiBackend::start() {
-	auto* self = this;
-	auto* task = QRunnable::create([self]() {
+	auto guard = QPointer<NetworkWifiBackend>(this);
+	auto* task = QRunnable::create([guard]() {
 		HANDLE handle = nullptr;
 		DWORD negotiatedVersion = 0;
 		auto result = WlanOpenHandle(2, nullptr, &negotiatedVersion, &handle);
@@ -143,9 +145,13 @@ void NetworkWifiBackend::start() {
 		}
 
 		QMetaObject::invokeMethod(
-		    self,
-		    [self, result, handle, guid, hasAdapter]() {
-			    self->finishOpen(result, handle, guid, hasAdapter);
+		    QCoreApplication::instance(),
+		    [guard, result, handle, guid, hasAdapter]() {
+			    if (guard == nullptr) {
+				    if (handle != nullptr) WlanCloseHandle(handle, nullptr);
+				    return;
+			    }
+			    guard->finishOpen(result, handle, guid, hasAdapter);
 		    },
 		    Qt::QueuedConnection
 		);

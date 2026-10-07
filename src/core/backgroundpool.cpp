@@ -5,7 +5,7 @@
 QThreadPool* BackgroundThreadPool::instance() {
 	static auto* pool = []() {
 		auto* pool = new QThreadPool(); // NOLINT
-		pool->setMaxThreadCount(1);
+		pool->setMaxThreadCount(2);
 		return pool;
 	}();
 

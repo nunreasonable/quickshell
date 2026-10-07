@@ -10,10 +10,12 @@
 #include <oleauto.h>
 #include <wbemidl.h>
 
+#include <qcoreapplication.h>
 #include <qguiapplication.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
 #include <qmetaobject.h>
+#include <qpointer.h>
 #include <qrunnable.h>
 #include <qscreen.h>
 #include <qthreadpool.h>
@@ -296,8 +298,8 @@ void Brightness::query(const QString& screenName) {
 	auto knownDdc = cachedRoute == -1;
 	auto wmiCandidateIndex = cachedRoute >= 0 ? cachedRoute : this->nextWmiInstanceIndex;
 
-	auto* self = this;
-	auto* task = QRunnable::create([self, screenName, hMonitor, resolved, knownDdc, wmiCandidateIndex]() {
+	auto guard = QPointer<Brightness>(this);
+	auto* task = QRunnable::create([guard, screenName, hMonitor, resolved, knownDdc, wmiCandidateIndex]() {
 		auto brightness = 0.0;
 		auto available = false;
 		auto isDdc = false;
@@ -318,8 +320,10 @@ void Brightness::query(const QString& screenName) {
 		}
 
 		QMetaObject::invokeMethod(
-		    self,
-		    [self, screenName, available, isDdc, brightness, usedWmiIndex]() {
+		    QCoreApplication::instance(),
+		    [guard, screenName, available, isDdc, brightness, usedWmiIndex]() {
+			    auto* self = guard.data();
+			    if (self == nullptr) return;
 			    if (!self->screenRoute.contains(screenName)) {
 				    if (isDdc) {
 					    self->screenRoute.insert(screenName, -1);
@@ -342,14 +346,16 @@ void Brightness::probe(const QString& screenName) {
 	auto cachedRoute = this->screenRoute.value(screenName, -2);
 	auto wmiCandidateIndex = cachedRoute >= 0 ? cachedRoute : this->nextWmiInstanceIndex;
 
-	auto* self = this;
-	auto* task = QRunnable::create([self, screenName, cachedRoute, wmiCandidateIndex]() {
+	auto guard = QPointer<Brightness>(this);
+	auto* task = QRunnable::create([guard, screenName, cachedRoute, wmiCandidateIndex]() {
 		auto brightness = 1.0;
 		auto internal = cachedRoute != -1 && queryWmiBrightness(wmiCandidateIndex, brightness);
 
 		QMetaObject::invokeMethod(
-		    self,
-		    [self, screenName, internal, brightness, wmiCandidateIndex]() {
+		    QCoreApplication::instance(),
+		    [guard, screenName, internal, brightness, wmiCandidateIndex]() {
+			    auto* self = guard.data();
+			    if (self == nullptr) return;
 			    if (internal && !self->screenRoute.contains(screenName)) {
 				    self->screenRoute.insert(screenName, wmiCandidateIndex);
 				    self->nextWmiInstanceIndex =
@@ -385,8 +391,8 @@ void Brightness::setBrightness(const QString& screenName, bool isDdc, qreal valu
 		return;
 	}
 
-	auto* self = this;
-	auto* task = QRunnable::create([self, screenName, hMonitor, isDdc, wmiIndex, clamped]() {
+	auto guard = QPointer<Brightness>(this);
+	auto* task = QRunnable::create([guard, screenName, hMonitor, isDdc, wmiIndex, clamped]() {
 		auto ok = false;
 		if (isDdc) {
 			ok = ddcSet(hMonitor, clamped);
@@ -395,8 +401,10 @@ void Brightness::setBrightness(const QString& screenName, bool isDdc, qreal valu
 		}
 
 		QMetaObject::invokeMethod(
-		    self,
-		    [self, screenName, isDdc, clamped, ok]() {
+		    QCoreApplication::instance(),
+		    [guard, screenName, isDdc, clamped, ok]() {
+			    auto* self = guard.data();
+			    if (self == nullptr) return;
 			    if (isDdc && !ok) {
 				    qCInfo(logBrightness) << screenName
 				                          << "doesn't take DDC/CI brightness; dimming it in software";
