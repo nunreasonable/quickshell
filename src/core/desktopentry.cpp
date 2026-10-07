@@ -21,6 +21,7 @@
 #include <ranges>
 
 #include "../io/processcore.hpp"
+#include "backgroundpool.hpp"
 #include "desktopentrymonitor.hpp"
 #include "logcat.hpp"
 #include "model.hpp"
@@ -442,7 +443,7 @@ void DesktopEntryManager::scanDesktopEntries() {
 	this->scanInProgress = true;
 	this->scanQueued = false;
 	auto* scanner = new DesktopEntryScanner(this);
-	QThreadPool::globalInstance()->start(scanner);
+	BackgroundThreadPool::instance()->start(scanner);
 }
 
 DesktopEntryManager* DesktopEntryManager::instance() {
@@ -510,7 +511,7 @@ void DesktopEntryManager::handleFileChanges() {
 	this->scanInProgress = true;
 	this->scanQueued = false;
 	auto* scanner = new DesktopEntryScanner(this);
-	QThreadPool::globalInstance()->start(scanner);
+	BackgroundThreadPool::instance()->start(scanner);
 }
 
 const QStringList& DesktopEntryManager::desktopPaths() {

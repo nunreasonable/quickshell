@@ -43,6 +43,7 @@ qt_add_library(quickshell-core STATIC
 	iconprovider.cpp
 	scriptmodel.cpp
 	colorquantizer.cpp
+	backgroundpool.cpp
 	toolsupport.cpp
 	streamreader.cpp
 	debuginfo.cpp
