@@ -13,6 +13,8 @@
 namespace qs::windows::sys {
 
 Network::Network(QObject* parent): QObject(parent) {
+	this->bWifiStatus = QStringLiteral("disabled");
+
 	this->mWifi = std::make_unique<NetworkWifiBackend>(this);
 	this->mConnectivity = std::make_unique<NetworkConnectivityBackend>(this);
 

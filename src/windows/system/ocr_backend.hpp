@@ -24,6 +24,7 @@ public:
 private:
 	QThread mThread;
 	OcrWorker* mWorker = nullptr;
+	bool mStarted = false;
 };
 
 } // namespace qs::windows::sys

@@ -6,11 +6,14 @@
 #include <qlogging.h>
 #include <qloggingcategory.h>
 #include <qmetaobject.h>
+#include <qrunnable.h>
 #include <qstringbuilder.h>
 #include <qstringview.h>
+#include <qthreadpool.h>
 
 #include <shellapi.h>
 
+#include "../../core/backgroundpool.hpp"
 #include "../../core/logcat.hpp"
 #include "network.hpp"
 
@@ -118,14 +121,49 @@ void NetworkWifiBackend::closeHandle() {
 }
 
 void NetworkWifiBackend::start() {
-	DWORD negotiatedVersion = 0;
-	auto result = WlanOpenHandle(2, nullptr, &negotiatedVersion, &this->mHandle);
-	if (result != ERROR_SUCCESS) {
-		qCDebug(logWifi) << "WlanOpenHandle failed (no WLAN service/adapter?):" << result;
-		this->mHandle = nullptr;
+	auto* self = this;
+	auto* task = QRunnable::create([self]() {
+		HANDLE handle = nullptr;
+		DWORD negotiatedVersion = 0;
+		auto result = WlanOpenHandle(2, nullptr, &negotiatedVersion, &handle);
+
+		GUID guid {};
+		auto hasAdapter = false;
+		if (result == ERROR_SUCCESS && handle != nullptr) {
+			PWLAN_INTERFACE_INFO_LIST ifaceList = nullptr;
+			if (WlanEnumInterfaces(handle, nullptr, &ifaceList) == ERROR_SUCCESS
+			    && ifaceList != nullptr)
+			{
+				if (ifaceList->dwNumberOfItems > 0) {
+					guid = ifaceList->InterfaceInfo[0].InterfaceGuid;
+					hasAdapter = true;
+				}
+				WlanFreeMemory(ifaceList);
+			}
+		}
+
+		QMetaObject::invokeMethod(
+		    self,
+		    [self, result, handle, guid, hasAdapter]() {
+			    self->finishOpen(result, handle, guid, hasAdapter);
+		    },
+		    Qt::QueuedConnection
+		);
+	});
+
+	BackgroundThreadPool::instance()->start(task);
+}
+
+void NetworkWifiBackend::finishOpen(DWORD openResult, HANDLE handle, GUID guid, bool hasAdapter) {
+	if (openResult != ERROR_SUCCESS || handle == nullptr) {
+		qCDebug(logWifi) << "WlanOpenHandle failed (no WLAN service/adapter?):" << openResult;
 		this->mOwner->backendSetWifiAdapterPresent(false);
 		return;
 	}
+
+	this->mHandle = handle;
+	this->mInterfaceGuid = guid;
+	this->mHasAdapter = hasAdapter;
 
 	WlanRegisterNotification(
 	    this->mHandle,
@@ -136,16 +174,6 @@ void NetworkWifiBackend::start() {
 	    nullptr,
 	    nullptr
 	);
-
-	PWLAN_INTERFACE_INFO_LIST ifaceList = nullptr;
-	result = WlanEnumInterfaces(this->mHandle, nullptr, &ifaceList);
-	if (result == ERROR_SUCCESS && ifaceList != nullptr) {
-		if (ifaceList->dwNumberOfItems > 0) {
-			this->mInterfaceGuid = ifaceList->InterfaceInfo[0].InterfaceGuid;
-			this->mHasAdapter = true;
-		}
-		WlanFreeMemory(ifaceList);
-	}
 
 	this->mOwner->backendSetWifiAdapterPresent(this->mHasAdapter);
 	if (this->mHasAdapter) {

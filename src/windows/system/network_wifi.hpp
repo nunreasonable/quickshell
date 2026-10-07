@@ -53,6 +53,7 @@ public:
 
 private:
 	void closeHandle();
+	void finishOpen(DWORD openResult, HANDLE handle, GUID guid, bool hasAdapter);
 	static void WINAPI notificationCallback(PWLAN_NOTIFICATION_DATA data, PVOID context);
 	void handleAcmNotification(DWORD code);
 	void handleMsmNotification(DWORD code);

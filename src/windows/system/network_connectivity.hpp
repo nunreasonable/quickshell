@@ -28,6 +28,8 @@ public:
 	void handleInterfaceChanged();
 
 private:
+	void performStart();
+
 	Network* mOwner;
 	INetworkListManager* mManager = nullptr;
 	void* mConnectivitySink = nullptr;

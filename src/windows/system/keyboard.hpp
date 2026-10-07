@@ -50,6 +50,7 @@ signals:
 	void activeChanged();
 
 private:
+	void initDeferred();
 	void refreshLayoutList();
 
 	bool mActive = true;
