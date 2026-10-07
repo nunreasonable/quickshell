@@ -135,7 +135,9 @@ void walkDir(const QString& displayDir, int depthRemaining, WalkContext& ctx) {
 		auto attrs = findData.dwFileAttributes;
 		if ((attrs & FILE_ATTRIBUTE_HIDDEN) != 0) continue;
 		if ((attrs & FILE_ATTRIBUTE_SYSTEM) != 0) continue;
-		if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0) continue;
+		if ((attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && IsReparseTagNameSurrogate(findData.dwReserved0)) {
+			continue;
+		}
 		if (name[0] == L'.') continue;
 
 		auto isDir = (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
