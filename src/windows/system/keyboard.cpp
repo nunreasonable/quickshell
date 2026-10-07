@@ -69,6 +69,13 @@ void CALLBACK winEventProc(
 Keyboard::Keyboard(QObject* parent): QObject(parent) {
 	g_instance = this;
 
+	this->pollTimer.setInterval(500);
+	QObject::connect(&this->pollTimer, &QTimer::timeout, this, &Keyboard::refresh);
+
+	QTimer::singleShot(0, this, &Keyboard::initDeferred);
+}
+
+void Keyboard::initDeferred() {
 	this->hook = SetWinEventHook(
 	    EVENT_SYSTEM_FOREGROUND,
 	    EVENT_SYSTEM_FOREGROUND,
@@ -85,8 +92,6 @@ Keyboard::Keyboard(QObject* parent): QObject(parent) {
 	this->refreshLayoutList();
 	this->refresh();
 
-	this->pollTimer.setInterval(500);
-	QObject::connect(&this->pollTimer, &QTimer::timeout, this, &Keyboard::refresh);
 	if (this->mActive) this->pollTimer.start();
 }
 
