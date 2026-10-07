@@ -202,6 +202,15 @@ bool Wallpaper::setAccentColor(const QString& hex) {
 	DWORD colorizationColor = 0xC4000000u | (static_cast<DWORD>(color.red()) << 16)
 	                         | (static_cast<DWORD>(color.green()) << 8) | static_cast<DWORD>(color.blue());
 
+	DWORD current = 0;
+	auto unchanged = readDword(HKEY_CURRENT_USER, kDwmKey, L"AccentColor", current)
+	              && current == accentColor
+	              && readDword(HKEY_CURRENT_USER, kDwmKey, L"ColorizationColor", current)
+	              && current == colorizationColor
+	              && readDword(HKEY_CURRENT_USER, kDwmKey, L"ColorizationAfterglow", current)
+	              && current == colorizationColor;
+	if (unchanged) return true;
+
 	auto ok1 = writeDword(HKEY_CURRENT_USER, kDwmKey, L"AccentColor", accentColor);
 	auto ok2 = writeDword(HKEY_CURRENT_USER, kDwmKey, L"ColorizationColor", colorizationColor);
 	auto ok3 = writeDword(HKEY_CURRENT_USER, kDwmKey, L"ColorizationAfterglow", colorizationColor);
