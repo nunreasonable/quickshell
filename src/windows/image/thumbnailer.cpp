@@ -16,6 +16,8 @@
 #include <qthreadpool.h>
 #include <quuid.h>
 
+#include "../../core/backgroundpool.hpp"
+
 namespace qs::windows::image {
 
 namespace {
@@ -103,7 +105,7 @@ void Thumbnailer::generate(const QString& sourcePath, const QString& outputPath,
 
 	auto* task = new ThumbnailTask(this, sourcePath, outputPath, maxSize); // NOLINT
 	task->setAutoDelete(true);
-	QThreadPool::globalInstance()->start(task);
+	BackgroundThreadPool::instance()->start(task);
 }
 
 } // namespace qs::windows::image
