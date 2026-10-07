@@ -1,5 +1,7 @@
 #include "wallpaper.hpp"
 
+#include <thread>
+
 #include <qcolor.h>
 #include <qcoreapplication.h>
 #include <qdir.h>
@@ -26,16 +28,18 @@ const wchar_t* const kPersonalizeKey =
 const wchar_t* const kDwmKey = L"Software\\Microsoft\\Windows\\DWM";
 
 void broadcastSettingChange(const wchar_t* setting) {
-	DWORD_PTR result = 0;
-	SendMessageTimeoutW(
-	    HWND_BROADCAST,
-	    WM_SETTINGCHANGE,
-	    0,
-	    reinterpret_cast<LPARAM>(setting),
-	    SMTO_ABORTIFHUNG,
-	    2000,
-	    &result
-	);
+	std::thread([setting] {
+		DWORD_PTR result = 0;
+		SendMessageTimeoutW(
+		    HWND_BROADCAST,
+		    WM_SETTINGCHANGE,
+		    0,
+		    reinterpret_cast<LPARAM>(setting),
+		    SMTO_ABORTIFHUNG,
+		    2000,
+		    &result
+		);
+	}).detach();
 }
 
 bool readDword(HKEY root, const wchar_t* subkey, const wchar_t* name, DWORD& out) {
