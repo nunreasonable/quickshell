@@ -18,6 +18,7 @@
 #include <qscreen.h>
 #include <qthreadpool.h>
 
+#include "../../core/backgroundpool.hpp"
 #include "../../core/logcat.hpp"
 #include "../util.hpp"
 #include "gamma.hpp"
@@ -334,7 +335,7 @@ void Brightness::query(const QString& screenName) {
 		);
 	});
 
-	QThreadPool::globalInstance()->start(task);
+	BackgroundThreadPool::instance()->start(task);
 }
 
 void Brightness::probe(const QString& screenName) {
@@ -362,7 +363,7 @@ void Brightness::probe(const QString& screenName) {
 		);
 	});
 
-	QThreadPool::globalInstance()->start(task);
+	BackgroundThreadPool::instance()->start(task);
 }
 
 void Brightness::setBrightness(const QString& screenName, bool isDdc, qreal value) {
@@ -411,7 +412,7 @@ void Brightness::setBrightness(const QString& screenName, bool isDdc, qreal valu
 		);
 	});
 
-	QThreadPool::globalInstance()->start(task);
+	BackgroundThreadPool::instance()->start(task);
 }
 
 } // namespace qs::windows::sys
