@@ -55,4 +55,9 @@ QString FsUtils::findExecutable(const QString& name) {
 	return QStandardPaths::findExecutable(name);
 }
 
+bool FsUtils::makePath(const QString& path) {
+	if (path.isEmpty()) return false;
+	return QDir().mkpath(path);
+}
+
 } // namespace qs::windows::sys
