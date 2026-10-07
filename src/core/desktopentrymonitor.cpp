@@ -1,21 +1,28 @@
 #include "desktopentrymonitor.hpp"
 
+#include <qcoreapplication.h>
 #include <qdir.h>
 #include <qfileinfo.h>
 #include <qfilesystemwatcher.h>
+#include <qmetaobject.h>
 #include <qobject.h>
+#include <qpointer.h>
+#include <qrunnable.h>
 #include <qstring.h>
+#include <qstringlist.h>
+#include <qthreadpool.h>
 #include <qtmetamacros.h>
 
+#include "backgroundpool.hpp"
 #include "desktopentry.hpp"
 
 namespace {
-void addPathAndParents(QFileSystemWatcher& watcher, const QString& path) {
-	watcher.addPath(path);
+void addPathAndParents(QStringList& paths, const QString& path) {
+	paths.append(path);
 
 	auto p = QFileInfo(path).absolutePath();
 	while (!p.isEmpty()) {
-		watcher.addPath(p);
+		paths.append(p);
 		const auto parent = QFileInfo(p).dir().absolutePath();
 		if (parent == p) break;
 		p = parent;
@@ -44,21 +51,35 @@ DesktopEntryMonitor::DesktopEntryMonitor(QObject* parent): QObject(parent) {
 }
 
 void DesktopEntryMonitor::startMonitoring() {
-	for (const auto& path: DesktopEntryManager::desktopPaths()) {
-		if (!QDir(path).exists()) continue;
-		addPathAndParents(this->watcher, path);
-		this->scanAndWatch(path);
-	}
+	auto guard = QPointer(this);
+
+	BackgroundThreadPool::instance()->start(QRunnable::create([guard] {
+		QStringList paths;
+		for (const auto& path: DesktopEntryManager::desktopPaths()) {
+			if (!QDir(path).exists()) continue;
+			addPathAndParents(paths, path);
+			DesktopEntryMonitor::scanAndWatch(paths, path);
+		}
+		paths.removeDuplicates();
+
+		QMetaObject::invokeMethod(
+		    QCoreApplication::instance(),
+		    [guard, paths] {
+			    if (guard != nullptr && !paths.isEmpty()) guard->watcher.addPaths(paths);
+		    },
+		    Qt::QueuedConnection
+		);
+	}));
 }
 
-void DesktopEntryMonitor::scanAndWatch(const QString& dirPath) {
+void DesktopEntryMonitor::scanAndWatch(QStringList& paths, const QString& dirPath) {
 	auto dir = QDir(dirPath);
 	if (!dir.exists()) return;
 
-	this->watcher.addPath(dirPath);
+	paths.append(dirPath);
 
 	auto subdirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks);
-	for (const auto& subdir: subdirs) this->watcher.addPath(subdir.absoluteFilePath());
+	for (const auto& subdir: subdirs) paths.append(subdir.absoluteFilePath());
 }
 
 void DesktopEntryMonitor::onDirectoryChanged(const QString& /*path*/) {

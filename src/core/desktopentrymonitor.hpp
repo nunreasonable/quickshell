@@ -25,7 +25,7 @@ private slots:
 
 private:
 	void startMonitoring();
-	void scanAndWatch(const QString& dirPath);
+	static void scanAndWatch(QStringList& paths, const QString& dirPath);
 
 	QFileSystemWatcher watcher;
 	QTimer debounceTimer;
