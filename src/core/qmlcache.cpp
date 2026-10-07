@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 #include <private/qv4compileddata_p.h>
@@ -304,35 +305,44 @@ void activate(
 	static const bool disabled = qEnvironmentVariableIsSet("QS_DISABLE_QMLCACHE");
 	if (disabled) return;
 
+	auto key = BundleKey();
+	if (configRoot.isAbsolute()) {
+		auto path = configRoot.filePath(QStringLiteral(".qmlcache/bundle.bin"));
+		auto info = QFileInfo(path);
+		if (info.isFile()) key = {.path = path, .size = info.size(), .modified = info.lastModified()};
+	}
+
+	auto hashes = QHash<QString, QByteArray>();
+	auto intercepts = QSet<QString>();
+	if (!key.path.isEmpty()) {
+		hashes.reserve(fileHashes.size());
+		for (auto it = fileHashes.constBegin(); it != fileHashes.constEnd(); ++it) {
+			hashes.insert(QDir::cleanPath(it.key()), it.value());
+		}
+
+		for (auto it = fileIntercepts.constBegin(); it != fileIntercepts.constEnd(); ++it) {
+			intercepts.insert(QDir::cleanPath(it.key()));
+		}
+	}
+
 	auto& state = qs::qmlcache::state();
-	auto locker = QMutexLocker(&state.mutex);
+	auto active = false;
 
-	state.root = configRoot;
-	state.hashes.clear();
-	state.intercepts.clear();
+	{
+		auto locker = QMutexLocker(&state.mutex);
 
-	if (!configRoot.isAbsolute()) {
-		state.key = BundleKey();
-		state.bundle = nullptr;
-		return;
+		if (key != state.key) {
+			state.key = key;
+			state.bundle = key.path.isEmpty() ? nullptr : loadBundle(key.path);
+		}
+
+		state.root = configRoot;
+		state.hashes = std::move(hashes);
+		state.intercepts = std::move(intercepts);
+		active = state.bundle != nullptr;
 	}
 
-	auto path = configRoot.filePath(QStringLiteral(".qmlcache/bundle.bin"));
-	auto info = QFileInfo(path);
-
-	if (!info.isFile()) {
-		state.key = BundleKey();
-		state.bundle = nullptr;
-		return;
-	}
-
-	auto key = BundleKey {.path = path, .size = info.size(), .modified = info.lastModified()};
-	if (key != state.key) {
-		state.key = key;
-		state.bundle = loadBundle(path);
-	}
-
-	if (!state.bundle) return;
+	if (!active) return;
 
 	static std::once_flag registered;
 	std::call_once(registered, [] {
@@ -343,15 +353,6 @@ void activate(
 
 		QQmlPrivate::qmlregister(QQmlPrivate::QmlUnitCacheHookRegistration, &registration);
 	});
-
-	state.hashes.reserve(fileHashes.size());
-	for (auto it = fileHashes.constBegin(); it != fileHashes.constEnd(); ++it) {
-		state.hashes.insert(QDir::cleanPath(it.key()), it.value());
-	}
-
-	for (auto it = fileIntercepts.constBegin(); it != fileIntercepts.constEnd(); ++it) {
-		state.intercepts.insert(QDir::cleanPath(it.key()));
-	}
 }
 
 } // namespace qs::qmlcache
