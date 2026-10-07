@@ -20,6 +20,7 @@ qt_add_library(quickshell-windows STATIC
 	appicon.cpp
 	system/session.cpp
 	system/system_stats.cpp
+	system/system_monitor.cpp
 	system/brightness.cpp
 	system/keyboard.cpp
 	system/clipboard.cpp
