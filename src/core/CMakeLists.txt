@@ -18,6 +18,7 @@ qt_add_library(quickshell-core STATIC
 	scan.cpp
 	scanenv.cpp
 	qsintercept.cpp
+	qmlcache.cpp
 	incubator.cpp
 	lazyloader.cpp
 	easingcurve.cpp

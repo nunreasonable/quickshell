@@ -25,6 +25,7 @@
 #include "incubator.hpp"
 #include "logcat.hpp"
 #include "plugin.hpp"
+#include "qmlcache.hpp"
 #include "qsintercept.hpp"
 #include "reload.hpp"
 #include "scan.hpp"
@@ -48,6 +49,8 @@ EngineGeneration::EngineGeneration(const QDir& rootPath, QmlScanner scanner)
 
 	this->engine->addUrlInterceptor(&this->urlInterceptor);
 	this->engine->addImportPath("qs:@/");
+
+	qs::qmlcache::activate(this->rootPath, this->scanner.fileHashes, this->scanner.fileIntercepts);
 
 	this->engine->setNetworkAccessManagerFactory(&this->interceptNetFactory);
 	this->incubationController.initLoop();
