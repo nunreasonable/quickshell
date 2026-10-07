@@ -4,6 +4,7 @@
 #include <qcontainerfwd.h>
 #include <qdir.h>
 #include <qhash.h>
+#include <qset.h>
 #include <qjsengine.h>
 #include <qloggingcategory.h>
 #include <qvector.h>
@@ -21,7 +22,7 @@ public:
 	void scanDir(const QDir& dir);
 	void scanQmlRoot(const QString& path);
 
-	QVector<QDir> scannedDirs;
+	QSet<QString> scannedDirs;
 	QVector<QString> scannedFiles;
 	QHash<QString, QByteArray> fileHashes;
 	QHash<QString, QString> fileIntercepts;

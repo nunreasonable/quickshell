@@ -42,8 +42,10 @@ bool QmlScanner::hasFileContentChanged(const QString& path) const {
 }
 
 void QmlScanner::scanDir(const QDir& dir) {
-	if (this->scannedDirs.contains(dir)) return;
-	this->scannedDirs.push_back(dir);
+	auto dirKey = dir.canonicalPath();
+	if (dirKey.isEmpty()) dirKey = QDir::cleanPath(dir.absolutePath());
+	if (this->scannedDirs.contains(dirKey)) return;
+	this->scannedDirs.insert(dirKey);
 
 	const auto& path = dir.path();
 
