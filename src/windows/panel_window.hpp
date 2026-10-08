@@ -153,6 +153,7 @@ private slots:
 	void scheduleUpdateDimensions();
 	void onScreenScaleChanged();
 	void updateDimensions();
+	void onWindowExposed();
 
 private:
 	[[nodiscard]] HWND hwnd() const;
@@ -164,6 +165,10 @@ private:
 	void updateFocus();
 	void updateFocusCb() { this->updateFocus(); }
 	void updateDimensionsCb() { this->updateDimensions(); }
+	void updateFocusFlag();
+	void applyFocusFlag();
+	void focusWhenExposed();
+	void takeFocusOnExpose();
 	void grabKeyboardFocus();
 	void scheduleFocusGrab();
 	void stickToAllDesktops();
@@ -189,8 +194,15 @@ private:
 	bool dimensionsUpdatePending = false;
 	bool scaleRecreatePending = false;
 	bool focusGrabPending = false;
+	bool focusFlagPending = false;
+	bool focusOnExpose = false;
+	quint32 focusRequest = 0;
+	bool maskRouted = false;
+	bool appBarDeferred = false;
 	bool pinnedToAllDesktops = false;
 	HWND pinFailedHwnd = nullptr;
+	HWND stuckHwnd = nullptr;
+	qsizetype stuckDesktop = -1;
 
 	HWND mEmbedParent = nullptr;
 	HWND mEmbedInsertAfter = nullptr;

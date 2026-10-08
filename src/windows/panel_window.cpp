@@ -1,6 +1,7 @@
 #include "panel_window.hpp"
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 #include <utility>
 
 #include <qt_windows.h>
@@ -54,6 +55,46 @@ bool forceLayeredDesktopPanels() {
 
 constexpr int MAX_RESTACKS = 20;
 constexpr DWORD RESTACK_WINDOW_MS = 5000;
+constexpr int FOCUS_EXPOSE_FALLBACK_MS = 500;
+
+bool overlaps(HWND a, HWND b) {
+	RECT ra {};
+	RECT rb {};
+	RECT shared {};
+	if (!GetWindowRect(a, &ra) || !GetWindowRect(b, &rb)) return true;
+	return IntersectRect(&shared, &ra, &rb) != FALSE;
+}
+
+bool onTopOfOthers(HWND hwnd, QList<HWND>& ownAbove) {
+	if ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0) return false;
+
+	for (auto* above = GetWindow(hwnd, GW_HWNDPREV); above != nullptr;
+	     above = GetWindow(above, GW_HWNDPREV))
+	{
+		if (isOwnProcessWindow(above)) ownAbove.append(above);
+		else if (IsWindowVisible(above)) return false;
+	}
+
+	return true;
+}
+
+template <typename Pred>
+bool onlyBelow(HWND hwnd, Pred allowed) {
+	for (auto* below = GetWindow(hwnd, GW_HWNDNEXT); below != nullptr;
+	     below = GetWindow(below, GW_HWNDNEXT))
+	{
+		if (!allowed(below)) return false;
+	}
+
+	return true;
+}
+
+bool positionUnchanged(const WINDOWPOS* pos) {
+	constexpr UINT unchanged = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER;
+	constexpr UINT shownOrHidden = SWP_SHOWWINDOW | SWP_HIDEWINDOW;
+	return pos != nullptr && (pos->flags & unchanged) == unchanged
+	    && (pos->flags & shownOrHidden) == 0;
+}
 
 QRegion toPhysicalRegion(const QRegion& region, qreal dpr) {
 	QRegion physical;
@@ -107,8 +148,10 @@ public:
 		for (auto* panel: this->mPanels) {
 			if (panel->pinnedToAllDesktops || panel->isEmbedded()) continue;
 			auto* hwnd = panel->hwnd();
-			if (hwnd == nullptr || desktops->isWindowOnCurrent(hwnd)) continue;
-			desktops->moveWindow(hwnd, desktops->currentIndex());
+			if (hwnd == nullptr) continue;
+			if (!desktops->isWindowOnCurrent(hwnd)) desktops->moveWindow(hwnd, desktops->currentIndex());
+			panel->stuckHwnd = hwnd;
+			panel->stuckDesktop = desktops->currentIndex();
 		}
 	}
 
@@ -118,20 +161,59 @@ public:
 
 	void removePanel(WinPanelWindow* panel) { this->mPanels.removeOne(panel); }
 
-	void raiseOverlays() {
-		for (auto* panel: this->mPanels) {
-			if (panel->bLayer != PanelLayer::Overlay) continue;
-			auto* hwnd = panel->hwnd();
-			if (hwnd == nullptr) continue;
-			SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+	void restack(HWND hwnd, HWND insertAfter, bool raiseOverlays) {
+		constexpr UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+
+		QList<HWND> ownAbove;
+		auto inPlace = false;
+		if (insertAfter == HWND_TOPMOST) inPlace = onTopOfOthers(hwnd, ownAbove);
+		else if (insertAfter == HWND_BOTTOM) inPlace = onlyBelow(hwnd, &isOwnProcessWindow);
+
+		QList<HWND> overlays;
+		if (raiseOverlays && insertAfter == HWND_TOPMOST) {
+			for (auto* panel: this->mPanels | std::views::reverse) {
+				if (panel->bLayer != PanelLayer::Overlay) continue;
+				auto* overlay = panel->hwnd();
+				if (overlay == nullptr || overlay == hwnd || !IsWindowVisible(overlay)) continue;
+				if (inPlace && ownAbove.contains(overlay)) continue;
+				if (overlaps(hwnd, overlay)) overlays.append(overlay);
+			}
 		}
+
+		if (overlays.isEmpty()) {
+			if (!inPlace) SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0, flags);
+			return;
+		}
+
+		auto* batch = BeginDeferWindowPos(static_cast<int>(overlays.length()) + 1);
+		auto* previous = HWND_TOPMOST;
+
+		for (auto* overlay: overlays) {
+			if (batch != nullptr) batch = DeferWindowPos(batch, overlay, previous, 0, 0, 0, 0, flags);
+			previous = overlay;
+		}
+
+		if (batch != nullptr && !inPlace) {
+			batch = DeferWindowPos(batch, hwnd, previous, 0, 0, 0, 0, flags);
+		}
+
+		if (batch != nullptr && EndDeferWindowPos(batch)) return;
+
+		if (!inPlace) SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0, flags);
+		for (auto* overlay: overlays) SetWindowPos(overlay, HWND_TOPMOST, 0, 0, 0, 0, flags);
 	}
 
 	void lowerBackgrounds() {
+		auto isBackground = [this](HWND hwnd) {
+			return std::ranges::any_of(this->mPanels, [hwnd](WinPanelWindow* panel) {
+				return panel->bLayer == PanelLayer::Background && panel->hwnd() == hwnd;
+			});
+		};
+
 		for (auto* panel: this->mPanels) {
 			if (panel->bLayer != PanelLayer::Background || panel->isEmbedded()) continue;
 			auto* hwnd = panel->hwnd();
-			if (hwnd == nullptr) continue;
+			if (hwnd == nullptr || onlyBelow(hwnd, isBackground)) continue;
 			SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 		}
 	}
@@ -265,6 +347,7 @@ void WinPanelWindow::connectWindow() {
 
 	// clang-format off
 	QObject::connect(this->window, &QQuickWindow::visibleChanged, this, &WinPanelWindow::onWindowVisibleChanged);
+	QObject::connect(this->window, &ProxiedWindow::exposed, this, &WinPanelWindow::onWindowExposed);
 	QObject::connect(this->window, &QWindow::screenChanged, this, &WinPanelWindow::onWindowScreenChanged);
 	QObject::connect(this->window, &QWindow::screenChanged, this, &WinPanelWindow::updateScreen);
 	QObject::connect(this->window, &ProxiedWindow::devicePixelRatioChanged, this, &WinPanelWindow::scheduleUpdateDimensions);
@@ -288,7 +371,13 @@ void WinPanelWindow::connectWindow() {
 		this->mAppliedRegion = QRegion();
 	}
 
-	this->window->setFlags(Qt::Tool | Qt::FramelessWindowHint);
+	Qt::WindowFlags flags = Qt::Tool | Qt::FramelessWindowHint;
+	if (this->bLayer.value() >= PanelLayer::Top) flags |= Qt::WindowStaysOnTopHint;
+	if (this->bKeyboardFocus.value() == PanelKeyboardFocus::None) {
+		flags |= Qt::WindowDoesNotAcceptFocus;
+	}
+
+	this->window->setFlags(flags);
 	if (this->hwnd() != nullptr) this->applyNativeStyles();
 	this->updateLayer();
 	this->updateFocus();
@@ -324,18 +413,26 @@ void WinPanelWindow::releaseNativeState() {
 	this->mRegionApplied = false;
 	this->mButtonHeld = false;
 	this->destroyedHwnd = nullptr;
+	this->maskRouted = false;
+	this->focusOnExpose = false;
 }
 
 void WinPanelWindow::trySetWidth(qint32 implicitWidth) {
 	if (!this->bAnchors.value().horizontalConstraint()) {
-		this->ProxyWindowBase::trySetWidth(implicitWidth);
+		if (this->hwnd() == nullptr || this->mTrackedScreen == nullptr) {
+			this->ProxyWindowBase::trySetWidth(implicitWidth);
+		}
+
 		this->updateDimensions();
 	}
 }
 
 void WinPanelWindow::trySetHeight(qint32 implicitHeight) {
 	if (!this->bAnchors.value().verticalConstraint()) {
-		this->ProxyWindowBase::trySetHeight(implicitHeight);
+		if (this->hwnd() == nullptr || this->mTrackedScreen == nullptr) {
+			this->ProxyWindowBase::trySetHeight(implicitHeight);
+		}
+
 		this->updateDimensions();
 	}
 }
@@ -399,8 +496,16 @@ void WinPanelWindow::stickToAllDesktops() {
 	if (hwnd == nullptr || this->pinnedToAllDesktops || this->mEmbedParent != nullptr) return;
 
 	auto* desktops = VirtualDesktops::instance();
+	auto current = desktops->currentIndex();
 
-	if (!desktops->isWindowOnCurrent(hwnd)) desktops->moveWindow(hwnd, desktops->currentIndex());
+	if (this->stuckHwnd == hwnd && this->stuckDesktop != current
+	    && !desktops->isWindowOnCurrent(hwnd))
+	{
+		desktops->moveWindow(hwnd, current);
+	}
+
+	this->stuckHwnd = hwnd;
+	this->stuckDesktop = current;
 
 	QTimer::singleShot(0, this, [this] {
 		auto* hwnd = this->hwnd();
@@ -428,23 +533,13 @@ void WinPanelWindow::onWindowVisibleChanged() {
 	if (this->window->isVisible()) {
 		startup::watchWindow(this->window);
 		WinPanelStack::instance()->addPanel(this);
+		this->updateFocusFlag();
 		this->updateDimensions();
 		this->updateLayer();
 		this->stickToAllDesktops();
-
-		if (this->bKeyboardFocus == PanelKeyboardFocus::Exclusive) {
-			this->grabKeyboardFocus();
-		} else if (this->bKeyboardFocus == PanelKeyboardFocus::OnDemand) {
-			QTimer::singleShot(50, this, [this]() {
-				if (this->window == nullptr || !this->isVisibleDirect()
-				    || this->bKeyboardFocus != PanelKeyboardFocus::OnDemand)
-					return;
-
-				qCDebug(logPanel) << "Taking keyboard focus for" << this << "as it is shown";
-				this->grabKeyboardFocus();
-			});
-		}
+		this->focusWhenExposed();
 	} else {
+		this->focusOnExpose = false;
 		this->appBar.remove();
 		WinPanelStack::instance()->removePanel(this);
 	}
@@ -530,6 +625,18 @@ void WinPanelWindow::updateDimensions() {
 	auto wantsAppBar = !ignoreZones && edge != 0 && zone > 0 && hwnd != nullptr && rects.valid
 	                && this->window->isVisible();
 
+	if (wantsAppBar && !startup::settled()) {
+		wantsAppBar = false;
+
+		if (!this->appBarDeferred) {
+			this->appBarDeferred = true;
+			startup::afterFirstFrame(this, [this]() {
+				this->appBarDeferred = false;
+				this->scheduleUpdateDimensions();
+			});
+		}
+	}
+
 	if (wantsAppBar) {
 		UINT abEdge = ABE_TOP;
 		switch (edge) {
@@ -613,7 +720,10 @@ void WinPanelWindow::updateLayer() {
 
 	if (hwnd != nullptr) this->updateEmbedding();
 
-	this->window->setFlag(Qt::WindowStaysOnTopHint, layer >= PanelLayer::Top);
+	auto onTop = layer >= PanelLayer::Top;
+	if (this->window->flags().testFlag(Qt::WindowStaysOnTopHint) != onTop) {
+		this->window->setFlag(Qt::WindowStaysOnTopHint, onTop);
+	}
 
 	if (hwnd == nullptr) return;
 
@@ -634,10 +744,9 @@ void WinPanelWindow::updateLayer() {
 	case PanelLayer::Overlay: insertAfter = HWND_TOPMOST; break;
 	}
 
-	SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-
-	if (layer == PanelLayer::Bottom) WinPanelStack::instance()->lowerBackgrounds();
-	if (layer != PanelLayer::Overlay) WinPanelStack::instance()->raiseOverlays();
+	auto* stack = WinPanelStack::instance();
+	stack->restack(hwnd, insertAfter, layer != PanelLayer::Overlay);
+	if (layer == PanelLayer::Bottom) stack->lowerBackgrounds();
 
 	InputMaskTracker::instance()->refresh();
 }
@@ -903,14 +1012,66 @@ void WinPanelWindow::updateFocus() {
 		this->updateLayer();
 	}
 
-	this->window->setFlag(Qt::WindowDoesNotAcceptFocus, focus == PanelKeyboardFocus::None);
-	if (this->hwnd() != nullptr) this->applyNativeStyles();
+	this->updateFocusFlag();
 
 	if (focus == PanelKeyboardFocus::Exclusive && this->isVisibleDirect()) {
-		this->grabKeyboardFocus();
+		this->focusWhenExposed();
 	}
 
 	InputMaskTracker::instance()->refresh();
+}
+
+void WinPanelWindow::updateFocusFlag() {
+	auto noFocus = this->bKeyboardFocus.value() == PanelKeyboardFocus::None;
+	if (this->window->flags().testFlag(Qt::WindowDoesNotAcceptFocus) == noFocus) return;
+
+	if (!noFocus || this->window->handle() == nullptr) {
+		this->applyFocusFlag();
+		return;
+	}
+
+	if (this->focusFlagPending || !this->window->isVisible()) return;
+	this->focusFlagPending = true;
+
+	QTimer::singleShot(0, this, [this]() {
+		this->focusFlagPending = false;
+		if (this->window != nullptr && this->window->isVisible()) this->applyFocusFlag();
+	});
+}
+
+void WinPanelWindow::applyFocusFlag() {
+	auto noFocus = this->bKeyboardFocus.value() == PanelKeyboardFocus::None;
+	if (this->window->flags().testFlag(Qt::WindowDoesNotAcceptFocus) == noFocus) return;
+
+	this->window->setFlag(Qt::WindowDoesNotAcceptFocus, noFocus);
+	if (this->hwnd() != nullptr) this->applyNativeStyles();
+}
+
+void WinPanelWindow::focusWhenExposed() {
+	if (this->focusOnExpose) return;
+	this->focusOnExpose = true;
+
+	auto request = ++this->focusRequest;
+	auto delay = this->window->isExposed() ? 0 : FOCUS_EXPOSE_FALLBACK_MS;
+
+	QTimer::singleShot(delay, this, [this, request]() {
+		if (this->focusOnExpose && request == this->focusRequest) this->takeFocusOnExpose();
+	});
+}
+
+void WinPanelWindow::onWindowExposed() {
+	if (this->focusOnExpose && this->window->isExposed()) this->takeFocusOnExpose();
+}
+
+void WinPanelWindow::takeFocusOnExpose() {
+	this->focusOnExpose = false;
+
+	if (this->window == nullptr || !this->isVisibleDirect()
+	    || this->bKeyboardFocus == PanelKeyboardFocus::None)
+		return;
+
+	qCDebug(logPanel) << "Taking keyboard focus for" << this << "as it is shown";
+	this->grabKeyboardFocus();
 }
 
 void WinPanelWindow::grabKeyboardFocus() {
@@ -944,9 +1105,12 @@ void WinPanelWindow::scheduleFocusGrab() {
 void WinPanelWindow::applyInputMask(const QRegion& region, bool hasMask) {
 	if (this->window == nullptr) return;
 
+	if (this->maskRouted && hasMask == this->mHasInputMask && region == this->mInputMask) return;
+
 	this->mInputMask = region;
 	this->mHasInputMask = hasMask;
 	this->routeInputMask();
+	this->maskRouted = true;
 
 	this->blur->setInputMask(region, hasMask);
 }
@@ -1014,7 +1178,11 @@ bool WinPanelWindow::handleNativeMessage(MSG* msg, qintptr* result) {
 
 	if (msg->message == WinAppBar::callbackMessage()) {
 		switch (msg->wParam) {
-		case ABN_POSCHANGED: this->scheduleUpdateDimensions(); break;
+		case ABN_STATECHANGE:
+		case ABN_POSCHANGED:
+			this->appBar.invalidatePosition();
+			this->scheduleUpdateDimensions();
+			break;
 		case ABN_FULLSCREENAPP: {
 			auto active = msg->lParam != 0;
 			if (active && isOwnProcessWindow(GetForegroundWindow())) active = false;
@@ -1045,11 +1213,19 @@ bool WinPanelWindow::handleNativeMessage(MSG* msg, qintptr* result) {
 			this->scheduleFocusGrab();
 		}
 		break;
-	case WM_WINDOWPOSCHANGED:
-		this->appBar.notifyWindowPosChanged();
-		InputMaskTracker::instance()->refresh();
+	case WM_WINDOWPOSCHANGED: {
+		auto* pos = reinterpret_cast<WINDOWPOS*>(msg->lParam); // NOLINT(performance-no-int-to-ptr)
+
+		if (!positionUnchanged(pos)) {
+			this->appBar.notifyWindowPosChanged();
+			InputMaskTracker::instance()->refresh();
+		}
+
 		this->blur->syncPlacement();
 		break;
+	}
+	case WM_DISPLAYCHANGE:
+	case WM_DPICHANGED: this->appBar.invalidatePosition(); break;
 	case WM_SETTINGCHANGE:
 	case WM_THEMECHANGED:
 	case WM_SYSCOLORCHANGE:

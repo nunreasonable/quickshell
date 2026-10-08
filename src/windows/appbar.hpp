@@ -26,6 +26,7 @@ public:
 	void remove();
 
 	void invalidate();
+	void invalidatePosition();
 
 	void adopt(WinAppBar& other);
 
@@ -39,6 +40,9 @@ private:
 	bool mRegistered = false;
 	UINT mEdge = 0;
 	QRect mReserved;
+	QRect mMonitor;
+	qint32 mSize = 0;
+	bool mPositionValid = false;
 };
 
 } // namespace qs::windows

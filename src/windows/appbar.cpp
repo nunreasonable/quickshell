@@ -53,12 +53,20 @@ bool WinAppBar::ensureRegistered(HWND hwnd) {
 	this->mHwnd = hwnd;
 	this->mRegistered = true;
 	this->mReserved = QRect();
+	this->mPositionValid = false;
 	return true;
 }
 
 QRect WinAppBar::reserve(HWND hwnd, UINT edge, const QRect& monitor, qint32 size) {
-	auto yield = TrayHookYield();
 	if (hwnd == nullptr || size <= 0 || !monitor.isValid()) return {};
+
+	if (this->mPositionValid && this->mRegistered && this->mHwnd == hwnd && this->mEdge == edge
+	    && this->mMonitor == monitor && this->mSize == size)
+	{
+		return this->mReserved;
+	}
+
+	auto yield = TrayHookYield();
 	if (!this->ensureRegistered(hwnd)) return {};
 
 	auto data = appBarData(hwnd);
@@ -88,8 +96,13 @@ QRect WinAppBar::reserve(HWND hwnd, UINT edge, const QRect& monitor, qint32 size
 		qCDebug(logAppBar) << "Reserved" << this->mReserved << "on edge" << edge << "for" << hwnd;
 	}
 
+	this->mMonitor = monitor;
+	this->mSize = size;
+	this->mPositionValid = true;
 	return this->mReserved;
 }
+
+void WinAppBar::invalidatePosition() { this->mPositionValid = false; }
 
 void WinAppBar::remove() {
 	if (!this->mRegistered) return;
@@ -105,6 +118,9 @@ void WinAppBar::invalidate() {
 	this->mHwnd = nullptr;
 	this->mEdge = 0;
 	this->mReserved = QRect();
+	this->mMonitor = QRect();
+	this->mSize = 0;
+	this->mPositionValid = false;
 }
 
 void WinAppBar::adopt(WinAppBar& other) {
@@ -115,6 +131,9 @@ void WinAppBar::adopt(WinAppBar& other) {
 	this->mRegistered = other.mRegistered;
 	this->mEdge = other.mEdge;
 	this->mReserved = other.mReserved;
+	this->mMonitor = other.mMonitor;
+	this->mSize = other.mSize;
+	this->mPositionValid = other.mPositionValid;
 	other.invalidate();
 }
 
