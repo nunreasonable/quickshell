@@ -28,11 +28,16 @@ void addPathAndParents(QStringList& paths, const QString& path) {
 		p = parent;
 	}
 }
+
+constexpr int DEBOUNCE_MS = 100;
+constexpr int BACKEND_DEBOUNCE_MS = 1000;
 } // namespace
 
 DesktopEntryMonitor::DesktopEntryMonitor(QObject* parent): QObject(parent) {
 	this->debounceTimer.setSingleShot(true);
-	this->debounceTimer.setInterval(100);
+	this->debounceTimer.setInterval(
+	    DesktopEntryManager::backend() != nullptr ? BACKEND_DEBOUNCE_MS : DEBOUNCE_MS
+	);
 
 	QObject::connect(
 	    &this->watcher,
@@ -53,11 +58,13 @@ DesktopEntryMonitor::DesktopEntryMonitor(QObject* parent): QObject(parent) {
 void DesktopEntryMonitor::startMonitoring() {
 	auto guard = QPointer(this);
 
-	BackgroundThreadPool::instance()->start(QRunnable::create([guard] {
+	auto watchParents = DesktopEntryManager::backend() == nullptr;
+
+	BackgroundThreadPool::instance()->start(QRunnable::create([guard, watchParents] {
 		QStringList paths;
 		for (const auto& path: DesktopEntryManager::desktopPaths()) {
 			if (!QDir(path).exists()) continue;
-			addPathAndParents(paths, path);
+			if (watchParents) addPathAndParents(paths, path);
 			DesktopEntryMonitor::scanAndWatch(paths, path);
 		}
 		paths.removeDuplicates();
