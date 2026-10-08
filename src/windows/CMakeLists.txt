@@ -120,8 +120,25 @@ qs_module_pch(quickshell-windows SET large)
 
 target_link_libraries(quickshell PRIVATE quickshell-windowsplugin quickshell-windows-init)
 
+set(QS_WINDOWS_DELAYLOAD
+	mfplat
+	mfreadwrite
+	dxva2
+	pdh
+	winmm
+	CoreMessaging
+	wlanapi
+	iphlpapi
+	version
+	powrprof
+	d3d11
+	dxgi
+)
+
 foreach(exe quickshell quickshell-gui)
 	if (TARGET ${exe})
-		target_link_options(${exe} PRIVATE /DELAYLOAD:mfplat.dll /DELAYLOAD:mfreadwrite.dll)
+		foreach(dll ${QS_WINDOWS_DELAYLOAD})
+			target_link_options(${exe} PRIVATE /DELAYLOAD:${dll}.dll)
+		endforeach()
 	endif()
 endforeach()
