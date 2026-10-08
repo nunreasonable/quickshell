@@ -360,6 +360,7 @@ void DesktopEntryScanner::run() {
 	auto scanResults = QList<ParsedDesktopEntryData>();
 
 	if (auto* backend = DesktopEntryManager::backend()) {
+		auto scope = BackgroundWorkScope();
 		scanResults = backend->scan();
 	} else {
 		const auto& desktopPaths = DesktopEntryManager::desktopPaths();
