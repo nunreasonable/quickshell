@@ -37,13 +37,14 @@ public:
 	void handleDeviceRemoved(const QString& deviceId);
 	void handleDeviceStateChanged(const QString& deviceId, quint32 newState);
 	void adoptNewSession(const QString& endpointId, IAudioSessionControl* control);
-	void handleSessionVolumeChanged(const QString& sessionKey, float volume, bool muted);
+	void handleSessionVolumeChanged(const QString& sessionKey);
 	void handleSessionStateChanged(const QString& sessionKey, int newState);
 	void handleSessionDisconnected(const QString& sessionKey);
 
 private:
 	struct EndpointEntry {
 		PwNode* node = nullptr;
+		IMMDevice* device = nullptr;
 		IAudioSessionManager2* sessionManager = nullptr;
 		void* sessionNotification = nullptr;
 		int flow = 0;
@@ -57,8 +58,11 @@ private:
 		bool capturing = false;
 	};
 
+	void startDeferred();
+	void addDefaultEndpoint(int flow);
 	void enumerateExistingDevices(int flow);
 	PwNode* createEndpointNode(IMMDevice* device, int flow);
+	void attachSessions(const QString& deviceId);
 	void removeEndpoint(const QString& deviceId);
 	void enumerateSessionsFor(const QString& endpointId);
 	void addSessionNode(const QString& endpointId, IAudioSessionControl* control);
@@ -71,6 +75,7 @@ private:
 	void* notificationClient = nullptr;
 	void* policyConfig = nullptr;
 	bool policyConfigAttempted = false;
+	bool sessionsEnabled = false;
 
 	QHash<QString, EndpointEntry> endpoints;
 	QHash<QString, SessionEntry> sessions;

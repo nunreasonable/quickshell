@@ -24,6 +24,7 @@
 #include <initguid.h>
 #include <functiondiscoverykeys_devpkey.h>
 
+#include "../../startup.hpp"
 #include "com_util.hpp"
 #include "pipewire.hpp"
 #include "policy_config.hpp"
@@ -95,37 +96,21 @@ public:
 
 	HRESULT STDMETHODCALLTYPE OnDeviceStateChanged(LPCWSTR deviceId, DWORD newState) override {
 		auto id = QString::fromWCharArray(deviceId);
-		if (auto* backend = this->target()) {
-			QMetaObject::invokeMethod(
-			    backend,
-			    [backend, id, newState]() { backend->handleDeviceStateChanged(id, newState); },
-			    Qt::QueuedConnection
-			);
-		}
+		this->post([id, newState](PwBackend* backend) {
+			backend->handleDeviceStateChanged(id, newState);
+		});
 		return S_OK;
 	}
 
 	HRESULT STDMETHODCALLTYPE OnDeviceAdded(LPCWSTR deviceId) override {
 		auto id = QString::fromWCharArray(deviceId);
-		if (auto* backend = this->target()) {
-			QMetaObject::invokeMethod(
-			    backend,
-			    [backend, id]() { backend->handleDeviceAdded(id); },
-			    Qt::QueuedConnection
-			);
-		}
+		this->post([id](PwBackend* backend) { backend->handleDeviceAdded(id); });
 		return S_OK;
 	}
 
 	HRESULT STDMETHODCALLTYPE OnDeviceRemoved(LPCWSTR deviceId) override {
 		auto id = QString::fromWCharArray(deviceId);
-		if (auto* backend = this->target()) {
-			QMetaObject::invokeMethod(
-			    backend,
-			    [backend, id]() { backend->handleDeviceRemoved(id); },
-			    Qt::QueuedConnection
-			);
-		}
+		this->post([id](PwBackend* backend) { backend->handleDeviceRemoved(id); });
 		return S_OK;
 	}
 
@@ -134,15 +119,9 @@ public:
 		auto id = defaultDeviceId != nullptr ? QString::fromWCharArray(defaultDeviceId) : QString();
 		auto flowInt = static_cast<int>(flow);
 		auto roleInt = static_cast<int>(role);
-		if (auto* backend = this->target()) {
-			QMetaObject::invokeMethod(
-			    backend,
-			    [backend, flowInt, roleInt, id]() {
-				    backend->handleDefaultDeviceChanged(flowInt, roleInt, id);
-			    },
-			    Qt::QueuedConnection
-			);
-		}
+		this->post([flowInt, roleInt, id](PwBackend* backend) {
+			backend->handleDefaultDeviceChanged(flowInt, roleInt, id);
+		});
 		return S_OK;
 	}
 
@@ -191,17 +170,10 @@ public:
 		newSession->AddRef();
 
 		auto endpointId = this->mEndpointId;
-		if (auto* backend = this->target()) {
-			QMetaObject::invokeMethod(
-			    backend,
-			    [backend, newSession, endpointId]() {
-				    backend->adoptNewSession(endpointId, newSession);
-			    },
-			    Qt::QueuedConnection
-			);
-		} else {
-			newSession->Release();
-		}
+		auto posted = this->post([newSession, endpointId](PwBackend* backend) {
+			backend->adoptNewSession(endpointId, newSession);
+		});
+		if (!posted) newSession->Release();
 
 		return S_OK;
 	}
@@ -243,44 +215,25 @@ public:
 	}
 
 	HRESULT STDMETHODCALLTYPE
-	OnSimpleVolumeChanged(float newVolume, BOOL newMute, LPCGUID /*eventContext*/) override {
+	OnSimpleVolumeChanged(float /*newVolume*/, BOOL /*newMute*/, LPCGUID /*eventContext*/) override {
 		auto key = this->mSessionKey;
-		auto muted = newMute != FALSE;
-		if (auto* backend = this->target()) {
-			QMetaObject::invokeMethod(
-			    backend,
-			    [backend, key, newVolume, muted]() {
-				    backend->handleSessionVolumeChanged(key, newVolume, muted);
-			    },
-			    Qt::QueuedConnection
-			);
-		}
+		this->post([key](PwBackend* backend) { backend->handleSessionVolumeChanged(key); });
 		return S_OK;
 	}
 
 	HRESULT STDMETHODCALLTYPE OnStateChanged(AudioSessionState newState) override {
 		auto key = this->mSessionKey;
 		auto state = static_cast<int>(newState);
-		if (auto* backend = this->target()) {
-			QMetaObject::invokeMethod(
-			    backend,
-			    [backend, key, state]() { backend->handleSessionStateChanged(key, state); },
-			    Qt::QueuedConnection
-			);
-		}
+		this->post([key, state](PwBackend* backend) {
+			backend->handleSessionStateChanged(key, state);
+		});
 		return S_OK;
 	}
 
 	HRESULT STDMETHODCALLTYPE
 	OnSessionDisconnected(AudioSessionDisconnectReason /*reason*/) override {
 		auto key = this->mSessionKey;
-		if (auto* backend = this->target()) {
-			QMetaObject::invokeMethod(
-			    backend,
-			    [backend, key]() { backend->handleSessionDisconnected(key); },
-			    Qt::QueuedConnection
-			);
-		}
+		this->post([key](PwBackend* backend) { backend->handleSessionDisconnected(key); });
 		return S_OK;
 	}
 
@@ -358,17 +311,43 @@ void PwBackend::start() {
 		return;
 	}
 
-	this->enumerateExistingDevices(eRender);
-	this->enumerateExistingDevices(eCapture);
-
 	auto* notify = new MMNotificationClient(this);
 	this->enumerator->RegisterEndpointNotificationCallback(notify);
 	this->notificationClient = notify;
 
-	this->refreshDefault(eRender);
-	this->refreshDefault(eCapture);
+	this->addDefaultEndpoint(eRender);
+	this->addDefaultEndpoint(eCapture);
 
 	this->owner->backendSetReady(true);
+
+	startup::afterFirstFrame(this, [this]() { this->startDeferred(); });
+}
+
+void PwBackend::startDeferred() {
+	this->sessionsEnabled = true;
+	const auto knownEndpoints = this->endpoints.keys();
+	for (const auto& id: knownEndpoints) {
+		this->attachSessions(id);
+	}
+
+	this->enumerateExistingDevices(eRender);
+	this->enumerateExistingDevices(eCapture);
+
+	this->refreshDefault(eRender);
+	this->refreshDefault(eCapture);
+}
+
+void PwBackend::addDefaultEndpoint(int flow) {
+	IMMDevice* device = nullptr;
+	auto hr =
+	    this->enumerator->GetDefaultAudioEndpoint(static_cast<EDataFlow>(flow), eConsole, &device);
+	if (FAILED(hr) || device == nullptr) return;
+
+	auto* node = this->createEndpointNode(device, flow);
+	device->Release();
+
+	if (flow == eRender) this->owner->backendSetDefaultSink(node);
+	else this->owner->backendSetDefaultSource(node);
 }
 
 void PwBackend::enumerateExistingDevices(int flow) {
@@ -444,48 +423,48 @@ PwNode* PwBackend::createEndpointNode(IMMDevice* device, int flow) {
 		qCWarning(logPwBackend) << "Activate(IAudioEndpointVolume) failed for" << deviceId;
 	}
 
-	IAudioMeterInformation* meter = nullptr;
-	if (SUCCEEDED(device->Activate(
-	        __uuidof(IAudioMeterInformation),
-	        CLSCTX_ALL,
-	        nullptr,
-	        reinterpret_cast<void**>(&meter)
-	    ))
-	    && meter != nullptr)
-	{
-		node->setMeterInformation(meter);
-	}
-
+	node->setMeterDevice(device);
 	node->setReady(true);
 
 	EndpointEntry entry;
 	entry.node = node;
+	entry.device = device;
 	entry.flow = flow;
+	device->AddRef();
+
+	this->endpoints.insert(deviceId, entry);
+	this->owner->backendAddNode(node);
+
+	if (this->sessionsEnabled) this->attachSessions(deviceId);
+
+	return node;
+}
+
+void PwBackend::attachSessions(const QString& deviceId) {
+	auto it = this->endpoints.find(deviceId);
+	if (it == this->endpoints.end()) return;
+	auto& entry = it.value();
+	if (entry.sessionManager != nullptr || entry.device == nullptr) return;
 
 	IAudioSessionManager2* sessionManager = nullptr;
-	if (SUCCEEDED(device->Activate(
+	if (FAILED(entry.device->Activate(
 	        __uuidof(IAudioSessionManager2),
 	        CLSCTX_ALL,
 	        nullptr,
 	        reinterpret_cast<void**>(&sessionManager)
 	    ))
-	    && sessionManager != nullptr)
+	    || sessionManager == nullptr)
 	{
-		entry.sessionManager = sessionManager;
-
-		auto* notify = new SessionNotificationClient(this, deviceId);
-		sessionManager->RegisterSessionNotification(notify);
-		entry.sessionNotification = notify;
-	} else {
 		qCWarning(logPwBackend) << "Activate(IAudioSessionManager2) failed for" << deviceId;
+		return;
 	}
 
-	this->endpoints.insert(deviceId, entry);
-	this->owner->backendAddNode(node);
+	auto* notify = new SessionNotificationClient(this, deviceId);
+	sessionManager->RegisterSessionNotification(notify);
+	entry.sessionManager = sessionManager;
+	entry.sessionNotification = notify;
 
-	if (entry.sessionManager != nullptr) this->enumerateSessionsFor(deviceId);
-
-	return node;
+	this->enumerateSessionsFor(deviceId);
 }
 
 void PwBackend::removeEndpoint(const QString& deviceId) {
@@ -510,6 +489,7 @@ void PwBackend::removeEndpoint(const QString& deviceId) {
 		entry.sessionManager->Release();
 	}
 
+	if (entry.device != nullptr) entry.device->Release();
 	if (entry.node != nullptr) this->owner->backendRemoveNode(entry.node);
 }
 
@@ -641,11 +621,11 @@ void PwBackend::addSessionNode(const QString& endpointId, IAudioSessionControl* 
 	props[QStringLiteral("node.name")] = processBaseNoExt;
 	node->setProperties(props);
 
-	node->audio()->bindSession(simpleVolume);
-	node->setReady(true);
-
 	auto* events = new SessionEventsCallback(this, sessionKey);
 	ctrl2->RegisterAudioSessionNotification(events);
+
+	node->audio()->bindSession(simpleVolume);
+	node->setReady(true);
 
 	SessionEntry entry;
 	entry.node = node;
@@ -758,6 +738,8 @@ void PwBackend::setPreferredDefault(PwNode* node, bool isSink) {
 void PwBackend::handleDefaultDeviceChanged(int flow, int role, const QString& deviceId) {
 	if (role != eConsole) return;
 
+	if (!deviceId.isEmpty() && !this->endpoints.contains(deviceId)) this->handleDeviceAdded(deviceId);
+
 	PwNode* node = nullptr;
 	if (!deviceId.isEmpty()) {
 		auto it = this->endpoints.find(deviceId);
@@ -813,10 +795,10 @@ void PwBackend::handleDeviceStateChanged(const QString& deviceId, quint32 newSta
 	}
 }
 
-void PwBackend::handleSessionVolumeChanged(const QString& sessionKey, float volume, bool muted) {
+void PwBackend::handleSessionVolumeChanged(const QString& sessionKey) {
 	auto it = this->sessions.find(sessionKey);
 	if (it == this->sessions.end() || it.value().node == nullptr) return;
-	it.value().node->audio()->applyVolumeMuted(volume, muted);
+	it.value().node->audio()->refreshFromDevice();
 }
 
 void PwBackend::handleSessionStateChanged(const QString& sessionKey, int newState) {

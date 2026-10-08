@@ -15,6 +15,7 @@
 struct IAudioEndpointVolume;
 struct ISimpleAudioVolume;
 struct IAudioMeterInformation;
+struct IMMDevice;
 
 namespace qs::windows::services::pipewire {
 
@@ -50,7 +51,7 @@ public:
 	[[nodiscard]] QVector<float> volumes() const;
 	void setVolumes(const QVector<float>& volumes);
 
-	void applyVolumeMuted(float volume, bool muted);
+	void refreshFromDevice();
 
 signals:
 	void mutedChanged();
@@ -59,9 +60,15 @@ signals:
 	void volumesChanged();
 
 private:
+	void readState();
+	[[nodiscard]] float readVolume() const;
+
 	IAudioEndpointVolume* mEndpointVolume = nullptr;
 	ISimpleAudioVolume* mSessionVolume = nullptr;
 	void* mEndpointCallback = nullptr;
+	bool mMuted = false;
+	float mVolume = 0.0F;
+	QVector<float> mVolumes;
 };
 
 class PwNode: public QObject {
@@ -115,8 +122,8 @@ public:
 	[[nodiscard]] const QString& backendKey() const { return this->mBackendKey; }
 	void setBackendKey(const QString& key) { this->mBackendKey = key; }
 
-	void setMeterInformation(IAudioMeterInformation* meter);
-	[[nodiscard]] IAudioMeterInformation* meterInformation() const { return this->mMeter; }
+	void setMeterDevice(IMMDevice* device);
+	[[nodiscard]] IAudioMeterInformation* meterInformation();
 
 signals:
 	void propertiesChanged();
@@ -132,6 +139,7 @@ private:
 	PwNodeAudio* mAudio = nullptr;
 	bool mReady = false;
 	QString mBackendKey;
+	IMMDevice* mMeterDevice = nullptr;
 	IAudioMeterInformation* mMeter = nullptr;
 };
 

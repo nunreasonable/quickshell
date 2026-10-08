@@ -1,6 +1,10 @@
 #pragma once
 
+#include <utility>
+
+#include <qmetaobject.h>
 #include <qmutex.h>
+#include <qnamespace.h>
 
 namespace qs::windows::services::pipewire {
 
@@ -15,9 +19,18 @@ public:
 	}
 
 protected:
-	[[nodiscard]] T* target() {
+	template <typename Fn>
+	bool post(Fn&& fn) {
 		QMutexLocker locker(&this->mMutex);
-		return this->mTarget;
+		auto* target = this->mTarget;
+		if (target == nullptr) return false;
+
+		QMetaObject::invokeMethod(
+		    target,
+		    [target, fn = std::forward<Fn>(fn)]() { fn(target); },
+		    Qt::QueuedConnection
+		);
+		return true;
 	}
 
 private:

@@ -1,4 +1,5 @@
 #include "pw_node.hpp"
+#include <utility>
 
 #include <qcontainerfwd.h>
 #include <qlogging.h>
@@ -12,6 +13,7 @@
 
 #include <audioclient.h>
 #include <endpointvolume.h>
+#include <mmdeviceapi.h>
 
 #include "com_util.hpp"
 
@@ -52,18 +54,7 @@ public:
 	HRESULT STDMETHODCALLTYPE OnNotify(PAUDIO_VOLUME_NOTIFICATION_DATA data) override {
 		if (data == nullptr) return S_OK;
 
-		auto* target = this->target();
-		if (target == nullptr) return S_OK;
-
-		auto volume = data->fMasterVolume;
-		auto muted = data->bMuted != FALSE;
-
-		QMetaObject::invokeMethod(
-		    target,
-		    [target, volume, muted]() { target->applyVolumeMuted(volume, muted); },
-		    Qt::QueuedConnection
-		);
-
+		this->post([](PwNodeAudio* audio) { audio->refreshFromDevice(); });
 		return S_OK;
 	}
 
@@ -100,27 +91,44 @@ void PwNodeAudio::bindEndpoint(IAudioEndpointVolume* endpointVolume) {
 	}
 
 	this->mEndpointCallback = callback;
+	this->readState();
 }
 
 void PwNodeAudio::bindSession(ISimpleAudioVolume* sessionVolume) {
 	this->mSessionVolume = sessionVolume;
+	this->readState();
 }
 
-bool PwNodeAudio::isMuted() const {
-	if (this->mEndpointVolume != nullptr) {
-		BOOL muted = FALSE;
-		this->mEndpointVolume->GetMute(&muted);
-		return muted != FALSE;
-	}
-
-	if (this->mSessionVolume != nullptr) {
-		BOOL muted = FALSE;
-		this->mSessionVolume->GetMute(&muted);
-		return muted != FALSE;
-	}
-
-	return false;
+float PwNodeAudio::readVolume() const {
+	auto level = 0.0F;
+	if (this->mEndpointVolume != nullptr) this->mEndpointVolume->GetMasterVolumeLevelScalar(&level);
+	else if (this->mSessionVolume != nullptr) this->mSessionVolume->GetMasterVolume(&level);
+	return level;
 }
+
+void PwNodeAudio::readState() {
+	BOOL muted = FALSE;
+	if (this->mEndpointVolume != nullptr) this->mEndpointVolume->GetMute(&muted);
+	else if (this->mSessionVolume != nullptr) this->mSessionVolume->GetMute(&muted);
+
+	this->mMuted = muted != FALSE;
+	this->mVolume = this->readVolume();
+	this->mVolumes.clear();
+
+	UINT count = 0;
+	if (this->mEndpointVolume == nullptr || FAILED(this->mEndpointVolume->GetChannelCount(&count))) {
+		return;
+	}
+
+	this->mVolumes.reserve(static_cast<qsizetype>(count));
+	for (UINT i = 0; i < count; i++) {
+		auto level = 0.0F;
+		this->mEndpointVolume->GetChannelVolumeLevelScalar(i, &level);
+		this->mVolumes.append(level);
+	}
+}
+
+bool PwNodeAudio::isMuted() const { return this->mMuted; }
 
 void PwNodeAudio::setMuted(bool muted) {
 	HRESULT hr = S_OK;
@@ -137,24 +145,11 @@ void PwNodeAudio::setMuted(bool muted) {
 		return;
 	}
 
+	this->mMuted = muted;
 	emit this->mutedChanged();
 }
 
-float PwNodeAudio::volume() const {
-	if (this->mEndpointVolume != nullptr) {
-		float level = 0.0F;
-		this->mEndpointVolume->GetMasterVolumeLevelScalar(&level);
-		return level;
-	}
-
-	if (this->mSessionVolume != nullptr) {
-		float level = 0.0F;
-		this->mSessionVolume->GetMasterVolume(&level);
-		return level;
-	}
-
-	return 0.0F;
-}
+float PwNodeAudio::volume() const { return this->mVolume; }
 
 void PwNodeAudio::setVolume(float volume) {
 	if (volume < 0.0F) volume = 0.0F;
@@ -174,35 +169,15 @@ void PwNodeAudio::setVolume(float volume) {
 		return;
 	}
 
+	this->mVolume = this->readVolume();
 	emit this->volumeChanged();
 }
 
 QVector<PwAudioChannel::Enum> PwNodeAudio::channels() const {
-	if (this->mEndpointVolume == nullptr) return {};
-
-	UINT count = 0;
-	if (FAILED(this->mEndpointVolume->GetChannelCount(&count))) return {};
-
-	return QVector<PwAudioChannel::Enum>(static_cast<qsizetype>(count), PwAudioChannel::Unknown);
+	return QVector<PwAudioChannel::Enum>(this->mVolumes.size(), PwAudioChannel::Unknown);
 }
 
-QVector<float> PwNodeAudio::volumes() const {
-	if (this->mEndpointVolume == nullptr) return {};
-
-	UINT count = 0;
-	if (FAILED(this->mEndpointVolume->GetChannelCount(&count))) return {};
-
-	QVector<float> volumes;
-	volumes.reserve(static_cast<qsizetype>(count));
-
-	for (UINT i = 0; i < count; i++) {
-		float level = 0.0F;
-		this->mEndpointVolume->GetChannelVolumeLevelScalar(i, &level);
-		volumes.append(level);
-	}
-
-	return volumes;
-}
+QVector<float> PwNodeAudio::volumes() const { return this->mVolumes; }
 
 void PwNodeAudio::setVolumes(const QVector<float>& volumes) {
 	if (this->mEndpointVolume == nullptr) return;
@@ -214,16 +189,19 @@ void PwNodeAudio::setVolumes(const QVector<float>& volumes) {
 		this->mEndpointVolume->SetChannelVolumeLevelScalar(static_cast<UINT>(i), level, nullptr);
 	}
 
+	this->readState();
 	emit this->volumesChanged();
 	emit this->volumeChanged();
 }
 
-void PwNodeAudio::applyVolumeMuted(float volume, bool muted) {
-	Q_UNUSED(volume);
-	Q_UNUSED(muted);
+void PwNodeAudio::refreshFromDevice() {
+	auto channelCount = this->mVolumes.size();
+	this->readState();
+
 	emit this->volumeChanged();
 	emit this->mutedChanged();
 	emit this->volumesChanged();
+	if (this->mVolumes.size() != channelCount) emit this->channelsChanged();
 }
 
 PwNode::PwNode(QObject* parent): QObject(parent) {
@@ -232,6 +210,7 @@ PwNode::PwNode(QObject* parent): QObject(parent) {
 
 PwNode::~PwNode() {
 	if (this->mMeter != nullptr) this->mMeter->Release();
+	if (this->mMeterDevice != nullptr) this->mMeterDevice->Release();
 }
 
 void PwNode::setProperties(const QVariantMap& properties) {
@@ -246,6 +225,32 @@ void PwNode::setReady(bool ready) {
 	emit this->readyChanged();
 }
 
-void PwNode::setMeterInformation(IAudioMeterInformation* meter) { this->mMeter = meter; }
+void PwNode::setMeterDevice(IMMDevice* device) {
+	if (this->mMeterDevice != nullptr) this->mMeterDevice->Release();
+	this->mMeterDevice = device;
+	if (device != nullptr) device->AddRef();
+}
+
+IAudioMeterInformation* PwNode::meterInformation() {
+	if (this->mMeter != nullptr || this->mMeterDevice == nullptr) return this->mMeter;
+
+	auto* device = std::exchange(this->mMeterDevice, nullptr);
+	IAudioMeterInformation* meter = nullptr;
+	auto hr = device->Activate(
+	    __uuidof(IAudioMeterInformation),
+	    CLSCTX_ALL,
+	    nullptr,
+	    reinterpret_cast<void**>(&meter)
+	);
+	device->Release();
+
+	if (FAILED(hr) || meter == nullptr) {
+		qCDebug(logPwNode) << "Activate(IAudioMeterInformation) failed for" << this->mBackendKey;
+		return nullptr;
+	}
+
+	this->mMeter = meter;
+	return meter;
+}
 
 } // namespace qs::windows::services::pipewire
