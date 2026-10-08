@@ -17,6 +17,7 @@
 
 #include "../core/logcat.hpp"
 #include "input_mask.hpp"
+#include "startup.hpp"
 #include "util.hpp"
 
 namespace qs::windows {
@@ -34,6 +35,43 @@ constexpr int CHECK_REVEALED_MS = 250;
 constexpr int CHECK_CONCEALED_MS = 2000;
 constexpr qint64 BURST_MS = 1000;
 constexpr int BURST_MAX_HIDES = 10;
+constexpr int STALE_AUTOHIDE_CHECK_MS = 15000;
+
+constexpr auto STATE_KEY = L"Software\\Quickshell";
+constexpr auto AUTOHIDE_OWNED_VALUE = L"TaskbarAutoHideOwned";
+
+bool autoHideOwned() {
+	DWORD value = 0;
+	DWORD size = sizeof(value);
+	auto status = RegGetValueW(
+	    HKEY_CURRENT_USER,
+	    STATE_KEY,
+	    AUTOHIDE_OWNED_VALUE,
+	    RRF_RT_REG_DWORD,
+	    nullptr,
+	    &value,
+	    &size
+	);
+
+	return status == ERROR_SUCCESS && value != 0;
+}
+
+void setAutoHideOwned(bool owned) {
+	if (!owned) {
+		RegDeleteKeyValueW(HKEY_CURRENT_USER, STATE_KEY, AUTOHIDE_OWNED_VALUE);
+		return;
+	}
+
+	DWORD value = 1;
+	RegSetKeyValueW(
+	    HKEY_CURRENT_USER,
+	    STATE_KEY,
+	    AUTOHIDE_OWNED_VALUE,
+	    REG_DWORD,
+	    &value,
+	    sizeof(value)
+	);
+}
 
 bool isTaskbarWindow(HWND hwnd) {
 	if (isTrayHookWindow(hwnd)) return false;
@@ -46,7 +84,7 @@ bool isTaskbarWindow(HWND hwnd) {
 void showAllTaskbars() {
 	EnumWindows(
 	    [](HWND hwnd, LPARAM /*param*/) -> BOOL {
-		    if (isTaskbarWindow(hwnd)) ShowWindow(hwnd, SW_SHOWNA);
+		    if (isTaskbarWindow(hwnd)) ShowWindowAsync(hwnd, SW_SHOWNA);
 		    return TRUE;
 	    },
 	    0
@@ -122,15 +160,16 @@ TaskbarManager* TaskbarManager::instance() {
 TaskbarManager::TaskbarManager(QObject* parent): QObject(parent) {
 	QObject::connect(&this->checkTimer, &QTimer::timeout, this, &TaskbarManager::onCheck);
 
-	QObject::connect(
-	    QCoreApplication::instance(),
-	    &QCoreApplication::aboutToQuit,
-	    this,
-	    &TaskbarManager::disable
-	);
+	QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this]() {
+		this->disable(false);
+	});
+
+	startup::afterFirstFrame(this, [this]() {
+		QTimer::singleShot(STALE_AUTOHIDE_CHECK_MS, this, &TaskbarManager::releaseStaleAutoHide);
+	});
 }
 
-TaskbarManager::~TaskbarManager() { this->disable(); }
+TaskbarManager::~TaskbarManager() { this->disable(false); }
 
 void TaskbarManager::setHoverOnly(bool hoverOnly) {
 	if (hoverOnly == this->mHoverOnly) return;
@@ -139,7 +178,7 @@ void TaskbarManager::setHoverOnly(bool hoverOnly) {
 	if (hoverOnly) {
 		this->enable();
 	} else {
-		this->disable();
+		this->disable(true);
 	}
 
 	emit this->hoverOnlyChanged();
@@ -147,17 +186,33 @@ void TaskbarManager::setHoverOnly(bool hoverOnly) {
 
 void TaskbarManager::restoreForCrash() {
 	if (gConcealing.load()) showAllTaskbars();
-	if (gTurnedOnAutoHide.load()) setAutoHide(false);
+}
+
+void TaskbarManager::releaseStaleAutoHide() {
+	if (this->mHoverOnly || gTurnedOnAutoHide.load() || !autoHideOwned()) return;
+
+	if ((appBarState() & ABS_AUTOHIDE) != 0) {
+		setAutoHide(false);
+		qCInfo(logTaskbar) << "Hover only mode is off; turned taskbar auto-hide back off.";
+	}
+
+	setAutoHideOwned(false);
 }
 
 void TaskbarManager::enable() {
 	if (this->enabled) return;
 	this->enabled = true;
 
+	auto owned = autoHideOwned();
+
 	if ((appBarState() & ABS_AUTOHIDE) == 0) {
 		setAutoHide(true);
 		gTurnedOnAutoHide.store(true);
-		qCInfo(logTaskbar) << "Turned on taskbar auto-hide for hover only mode (undone on exit).";
+		if (!owned) setAutoHideOwned(true);
+		qCInfo(logTaskbar) << "Turned on taskbar auto-hide for hover only mode"
+		                   << "(undone when hover only mode is turned off).";
+	} else if (owned) {
+		gTurnedOnAutoHide.store(true);
 	}
 
 	this->findBars();
@@ -176,7 +231,7 @@ void TaskbarManager::enable() {
 	else this->conceal();
 }
 
-void TaskbarManager::disable() {
+void TaskbarManager::disable(bool restoreAutoHide) {
 	if (!this->enabled) return;
 	this->enabled = false;
 	this->revealed = false;
@@ -190,7 +245,14 @@ void TaskbarManager::disable() {
 	showAllTaskbars();
 	gConcealing.store(false);
 
-	if (gTurnedOnAutoHide.exchange(false)) setAutoHide(false);
+	if (!restoreAutoHide) return;
+
+	if (gTurnedOnAutoHide.exchange(false)) {
+		setAutoHide(false);
+		qCInfo(logTaskbar) << "Hover only mode turned off; turned taskbar auto-hide back off.";
+	}
+
+	setAutoHideOwned(false);
 }
 
 void TaskbarManager::findBars() {
@@ -393,13 +455,13 @@ void TaskbarManager::onBarShown(HWND hwnd) {
 	}
 	if (++this->burstHides > BURST_MAX_HIDES) return;
 
-	if (IsWindowVisible(hwnd)) ShowWindow(hwnd, SW_HIDE);
+	if (IsWindowVisible(hwnd)) ShowWindowAsync(hwnd, SW_HIDE);
 }
 
 void TaskbarManager::reveal() {
 	if (this->bars.isEmpty()) this->findBars();
 
-	for (const auto& bar: this->bars) ShowWindow(bar.hwnd, SW_SHOWNA);
+	for (const auto& bar: this->bars) ShowWindowAsync(bar.hwnd, SW_SHOWNA);
 
 	this->revealed = true;
 	this->leftAt = 0;
@@ -408,7 +470,7 @@ void TaskbarManager::reveal() {
 
 void TaskbarManager::conceal() {
 	for (const auto& bar: this->bars) {
-		if (IsWindowVisible(bar.hwnd)) ShowWindow(bar.hwnd, SW_HIDE);
+		if (IsWindowVisible(bar.hwnd)) ShowWindowAsync(bar.hwnd, SW_HIDE);
 	}
 
 	this->revealed = false;
@@ -437,7 +499,7 @@ void TaskbarManager::onCheck() {
 
 	if (!this->revealed) {
 		for (const auto& bar: this->bars) {
-			if (IsWindowVisible(bar.hwnd)) ShowWindow(bar.hwnd, SW_HIDE);
+			if (IsWindowVisible(bar.hwnd)) ShowWindowAsync(bar.hwnd, SW_HIDE);
 		}
 
 		return;

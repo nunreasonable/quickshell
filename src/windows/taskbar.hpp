@@ -42,7 +42,8 @@ private:
 	};
 
 	void enable();
-	void disable();
+	void disable(bool restoreAutoHide);
+	void releaseStaleAutoHide();
 	void findBars();
 	void onCursorMoved(QPoint position);
 	void onCheck();
