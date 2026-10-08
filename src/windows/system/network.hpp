@@ -85,6 +85,8 @@ public:
 	Q_INVOKABLE static void openLocationSettings();
 	Q_INVOKABLE void setWifiListVisible(bool visible);
 
+	[[nodiscard]] bool wifiListVisible() const { return this->mWifiListVisible; }
+
 	void backendSetHasInternet(bool hasInternet);
 	void backendSetEthernetConnected(bool connected);
 	void backendSetWifiAdapterPresent(bool present);

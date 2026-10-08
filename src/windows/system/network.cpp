@@ -73,6 +73,7 @@ void Network::setWifiListVisible(bool visible) {
 	this->mWifiListVisible = visible;
 
 	if (visible) {
+		this->mWifi->refreshAvailableNetworks();
 		this->mWifi->scan();
 		this->mScanTimer.start();
 	} else {
@@ -127,6 +128,11 @@ void Network::backendSetCurrentConnection(
 	this->bActiveBssid = connected ? bssid : QString();
 	this->bActiveSignalQuality = connected ? signalQuality : 0;
 	this->bActiveSecurity = connected ? security : QString();
+
+	if (connected && !this->mWifiListVisible) {
+		auto* net = this->findNetwork(ssid);
+		if (net != nullptr && net->bindableActive().value()) net->setStrength(signalQuality);
+	}
 
 	if (connected && ssid == this->bWifiConnectingSsid.value()) {
 		this->bWifiConnecting = false;

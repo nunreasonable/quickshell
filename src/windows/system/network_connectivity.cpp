@@ -7,7 +7,6 @@
 #include <qloggingcategory.h>
 #include <qmetaobject.h>
 #include <qmutex.h>
-#include <qtimer.h>
 
 #include <winsock2.h>
 #include <ws2ipdef.h>
@@ -18,6 +17,7 @@
 #include <ocidl.h>
 
 #include "../../core/logcat.hpp"
+#include "../startup.hpp"
 #include "network.hpp"
 
 namespace qs::windows::sys {
@@ -123,7 +123,7 @@ NetworkConnectivityBackend::~NetworkConnectivityBackend() {
 }
 
 void NetworkConnectivityBackend::start() {
-	QTimer::singleShot(0, this, &NetworkConnectivityBackend::performStart);
+	startup::afterFirstFrame(this, [this]() { this->performStart(); });
 }
 
 void NetworkConnectivityBackend::performStart() {

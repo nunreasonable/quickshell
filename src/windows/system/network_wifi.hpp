@@ -52,6 +52,7 @@ public:
 	void forgetNetwork(const QString& ssid, const QString& profileName);
 
 private:
+	void open();
 	void closeHandle();
 	void finishOpen(DWORD openResult, HANDLE handle, GUID guid, bool hasAdapter);
 	static void WINAPI notificationCallback(PWLAN_NOTIFICATION_DATA data, PVOID context);
@@ -61,6 +62,7 @@ private:
 	Network* mOwner;
 	HANDLE mHandle = nullptr;
 	bool mHasAdapter = false;
+	bool mScanRequested = false;
 	GUID mInterfaceGuid {};
 };
 

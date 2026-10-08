@@ -17,6 +17,7 @@
 
 #include "../../core/backgroundpool.hpp"
 #include "../../core/logcat.hpp"
+#include "../startup.hpp"
 #include "network.hpp"
 
 namespace qs::windows::sys {
@@ -123,6 +124,10 @@ void NetworkWifiBackend::closeHandle() {
 }
 
 void NetworkWifiBackend::start() {
+	startup::afterFirstFrame(this, [this]() { this->open(); });
+}
+
+void NetworkWifiBackend::open() {
 	auto guard = QPointer<NetworkWifiBackend>(this);
 	auto* task = QRunnable::create([guard]() {
 		HANDLE handle = nullptr;
@@ -256,9 +261,11 @@ void NetworkWifiBackend::scan() {
 	if (!this->mHasAdapter) return;
 
 	this->mOwner->backendSetWifiScanning(true);
+	this->mScanRequested = true;
 	auto result = WlanScan(this->mHandle, &this->mInterfaceGuid, nullptr, nullptr, nullptr);
 	if (result != ERROR_SUCCESS) {
 		qCDebug(logWifi) << "WlanScan failed:" << result;
+		this->mScanRequested = false;
 		this->mOwner->backendSetWifiScanning(false);
 	}
 }
@@ -506,9 +513,15 @@ void NetworkWifiBackend::handleAcmNotification(DWORD code) {
 	switch (code) {
 	case wlan_notification_acm_scan_complete:
 		this->mOwner->backendSetWifiScanning(false);
-		this->refreshAvailableNetworks();
+		if (this->mScanRequested || this->mOwner->wifiListVisible()) {
+			this->mScanRequested = false;
+			this->refreshAvailableNetworks();
+		}
 		break;
-	case wlan_notification_acm_scan_fail: this->mOwner->backendSetWifiScanning(false); break;
+	case wlan_notification_acm_scan_fail:
+		this->mScanRequested = false;
+		this->mOwner->backendSetWifiScanning(false);
+		break;
 	case wlan_notification_acm_disconnecting:
 	case wlan_notification_acm_disconnected:
 		this->refreshCurrentConnection();
