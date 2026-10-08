@@ -33,5 +33,7 @@ struct BlurShapeResult {
 };
 
 [[nodiscard]] BlurShapeResult collectBlurShapes(QQuickWindow* window, const BlurShapeQuery& query);
+[[nodiscard]] bool itemTreeDirty(QQuickWindow* window);
+[[nodiscard]] bool framePending(QQuickWindow* window);
 
 } // namespace qs::windows

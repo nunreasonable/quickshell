@@ -33,6 +33,7 @@
 #include "../core/generation.hpp"
 #include "blur_shapes.hpp"
 #include "panel_window.hpp"
+#include "startup.hpp"
 #include "util.hpp"
 
 #include <unknwn.h>
@@ -183,6 +184,7 @@ private:
 		QRect shape;
 		int diameter = 0;
 		bool hasRegion = false;
+		RECT placed {};
 	};
 
 	HWND mHwnd = nullptr;
@@ -206,6 +208,7 @@ private:
 	wuc::CompositionBrush brush {nullptr};
 	wuc::CompositionBrush tint {nullptr};
 	std::vector<Slot> visuals;
+	QList<BlurShape> applied;
 };
 
 bool BackdropWindow::registerClass() {
@@ -444,7 +447,10 @@ bool BackdropWindow::setShapes(const QList<BlurShape>& shapes) {
 		}
 
 		for (size_t i = 0; i < count; i++) {
-			const auto& shape = shapes.at(static_cast<qsizetype>(i));
+			auto index = static_cast<qsizetype>(i);
+			const auto& shape = shapes.at(index);
+			if (index < this->applied.size() && this->applied.at(index).fuzzyEquals(shape)) continue;
+
 			auto& slot = this->visuals.at(i);
 
 			auto size = float2(static_cast<float>(shape.rect.width()), static_cast<float>(shape.rect.height()));
@@ -464,9 +470,11 @@ bool BackdropWindow::setShapes(const QList<BlurShape>& shapes) {
 		}
 	} catch (const winrt::hresult_error& e) {
 		qCWarning(logBlur) << "Updating the blur shapes failed:" << hresultString(e);
+		this->applied.clear();
 		return false;
 	}
 
+	this->applied = shapes;
 	if (!this->layered) this->updateRegion(shapes);
 	return true;
 }
@@ -633,12 +641,19 @@ void BackdropWindow::showPieces() {
 	}
 
 	auto panelTopmost = (GetWindowLongPtrW(this->mPanel, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+	auto inPlace = this->shown && this->piecesInPlace(panelTopmost);
 
-	if (this->shown && !this->piecesMoved && EqualRect(&panel, &this->lastRect)
-	    && this->piecesInPlace(panelTopmost))
-	{
-		return;
-	}
+	if (inPlace && !this->piecesMoved && EqualRect(&panel, &this->lastRect)) return;
+
+	struct Move {
+		HWND hwnd = nullptr;
+		HWND after = nullptr;
+		RECT rect {};
+		UINT flags = 0;
+	};
+
+	std::vector<Move> moves;
+	moves.reserve(this->pieceCount);
 
 	this->syncing = true;
 	constexpr UINT flags = SWP_NOACTIVATE | SWP_NOOWNERZORDER;
@@ -646,7 +661,18 @@ void BackdropWindow::showPieces() {
 	HWND above = this->mPanel;
 
 	for (size_t i = 0; i < this->pieceCount; i++) {
-		const auto& piece = this->pieces.at(i);
+		auto& piece = this->pieces.at(i);
+		auto* after = std::exchange(above, piece.hwnd);
+
+		auto rect = RECT {
+		    .left = panel.left + piece.rect.x(),
+		    .top = panel.top + piece.rect.y(),
+		    .right = panel.left + piece.rect.x() + piece.rect.width(),
+		    .bottom = panel.top + piece.rect.y() + piece.rect.height(),
+		};
+
+		if (inPlace && EqualRect(&rect, &piece.placed)) continue;
+
 		auto ownTopmost = (GetWindowLongPtrW(piece.hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
 
 		if (panelTopmost != ownTopmost) {
@@ -661,17 +687,47 @@ void BackdropWindow::showPieces() {
 			);
 		}
 
-		SetWindowPos(
-		    piece.hwnd,
-		    above,
-		    panel.left + piece.rect.x(),
-		    panel.top + piece.rect.y(),
-		    piece.rect.width(),
-		    piece.rect.height(),
-		    flags | SWP_SHOWWINDOW
-		);
+		moves.push_back({
+		    .hwnd = piece.hwnd,
+		    .after = after,
+		    .rect = rect,
+		    .flags = flags | SWP_SHOWWINDOW | (inPlace ? SWP_NOZORDER : 0),
+		});
 
-		above = piece.hwnd;
+		piece.placed = rect;
+	}
+
+	if (!moves.empty()) {
+		auto* batch = BeginDeferWindowPos(static_cast<int>(moves.size()));
+
+		for (const auto& move: moves) {
+			if (batch == nullptr) break;
+
+			batch = DeferWindowPos(
+			    batch,
+			    move.hwnd,
+			    move.after,
+			    move.rect.left,
+			    move.rect.top,
+			    move.rect.right - move.rect.left,
+			    move.rect.bottom - move.rect.top,
+			    move.flags
+			);
+		}
+
+		if (batch == nullptr || !EndDeferWindowPos(batch)) {
+			for (const auto& move: moves) {
+				SetWindowPos(
+				    move.hwnd,
+				    move.after,
+				    move.rect.left,
+				    move.rect.top,
+				    move.rect.right - move.rect.left,
+				    move.rect.bottom - move.rect.top,
+				    move.flags
+				);
+			}
+		}
 	}
 
 	this->syncing = false;
@@ -940,6 +996,24 @@ BlurManager::Composition* BlurManager::ensureComposition() {
 
 	qCDebug(logBlur) << "Compositor created.";
 	return state;
+}
+
+bool BlurManager::deferComposition() {
+	if (this->unsupported || this->mShutDown || this->mBackend != Backend::HostBackdrop) return false;
+	if (startup::settled()) return false;
+	if (this->composition != nullptr && this->composition->compositor != nullptr) return false;
+
+	if (!this->compositionWaiting) {
+		this->compositionWaiting = true;
+		qCDebug(logBlur) << "Creating the compositor after the first panel frame.";
+
+		startup::afterFirstFrame(this, [this]() {
+			this->compositionWaiting = false;
+			this->scheduleNotifyPanels();
+		});
+	}
+
+	return true;
 }
 
 void BlurManager::markUnsupported(const QString& reason) {
@@ -1283,6 +1357,7 @@ void PanelBlur::adopt(PanelBlur* other) {
 
 	this->backdrop = std::move(other->backdrop);
 	this->shapes = std::move(other->shapes);
+	this->shapesForced = true;
 	this->active = this->backdrop != nullptr && other->active;
 	this->stale = other->stale;
 	this->panelWasShown = other->panelWasShown;
@@ -1318,6 +1393,7 @@ void PanelBlur::recreate() {
 void PanelBlur::destroyBackdrop() {
 	this->backdrop.reset();
 	this->shapes.clear();
+	this->shapesForced = true;
 	this->stale = true;
 }
 
@@ -1426,11 +1502,13 @@ void PanelBlur::setInputMask(const QRegion& region, bool hasMask) {
 void PanelBlur::onFrame() { this->updateShapes(); }
 
 void PanelBlur::scheduleShapes() {
+	this->shapesForced = true;
 	if (this->shapesPending) return;
 	this->shapesPending = true;
 
 	QTimer::singleShot(0, this, [this]() {
 		this->shapesPending = false;
+		if (this->frameConnection && framePending(this->mWindow.data())) return;
 		this->updateShapes();
 	});
 }
@@ -1440,14 +1518,43 @@ bool PanelBlur::panelShown() const {
 	return hwnd != nullptr && IsWindowVisible(hwnd) && !IsIconic(hwnd);
 }
 
+PanelBlur::ShapeInputs PanelBlur::shapeInputs(bool shown) const {
+	auto* window = this->mWindow.data();
+	if (window == nullptr) return {.shown = shown, .size = QSize(), .alpha = -1, .dpr = 0};
+
+	return {
+	    .shown = shown,
+	    .size = window->size(),
+	    .alpha = static_cast<qreal>(window->color().alphaF()),
+	    .dpr = window->devicePixelRatio(),
+	};
+}
+
 void PanelBlur::updateShapes() {
 	if (!this->active) return;
 
+	auto shown = this->panelShown();
+	auto inputs = this->shapeInputs(shown);
+	auto walks = shown && this->rule.ignoreAlpha.has_value();
+
+	if (!this->shapesForced && inputs == this->lastInputs
+	    && !(walks && itemTreeDirty(this->mWindow.data())))
+	{
+		this->syncPlacement();
+		return;
+	}
+
+	this->shapesForced = false;
+	this->lastInputs = inputs;
+
 	QList<BlurShape> next;
-	if (this->panelShown()) this->collectShapes(next);
+	if (shown) this->collectShapes(next);
 
 	if (this->backdrop == nullptr) {
 		if (next.isEmpty()) return;
+
+		auto* manager = BlurManager::instance();
+		if (manager != nullptr && manager->deferComposition()) return;
 
 		if (!this->ensureBackdrop()) {
 			this->active = false;

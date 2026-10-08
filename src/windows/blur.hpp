@@ -17,6 +17,7 @@
 #include <qrect.h>
 #include <qregion.h>
 #include <qregularexpression.h>
+#include <qsize.h>
 #include <qstring.h>
 #include <qtclasshelpermacros.h>
 #include <qtimer.h>
@@ -78,6 +79,7 @@ public:
 
 	struct Composition;
 	[[nodiscard]] Composition* ensureComposition();
+	[[nodiscard]] bool deferComposition();
 	void markUnsupported(const QString& reason);
 
 	void registerPanel(PanelBlur* panel);
@@ -135,6 +137,7 @@ private:
 	bool recreatePending = false;
 	bool notifyPending = false;
 	bool mShutDown = false;
+	bool compositionWaiting = false;
 
 	QFileSystemWatcher watcher;
 	QTimer reloadTimer;
@@ -172,9 +175,19 @@ private slots:
 	void updateShapes();
 
 private:
+	struct ShapeInputs {
+		bool shown = false;
+		QSize size;
+		qreal alpha = -1;
+		qreal dpr = 0;
+
+		[[nodiscard]] bool operator==(const ShapeInputs& other) const = default;
+	};
+
 	void connectFrames();
 	void disconnectFrames();
 	void scheduleShapes();
+	[[nodiscard]] ShapeInputs shapeInputs(bool shown) const;
 	void collectShapes(QList<BlurShape>& shapes);
 	bool ensureBackdrop();
 	void destroyBackdrop();
@@ -188,6 +201,8 @@ private:
 	BlurRule rule;
 	bool active = false;
 	bool shapesPending = false;
+	bool shapesForced = true;
+	ShapeInputs lastInputs;
 	bool stale = true;
 	bool panelWasShown = false;
 	QRegion mask;

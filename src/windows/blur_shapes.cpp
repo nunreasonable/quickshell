@@ -9,8 +9,11 @@
 #include <qquickwindow.h>
 #include <qrect.h>
 #include <qregion.h>
+#include <qtransform.h>
 #include <qtypes.h>
+#include <private/qquickitem_p.h>
 #include <private/qquickrectangle_p.h>
+#include <private/qquickwindow_p.h>
 
 namespace qs::windows {
 
@@ -76,27 +79,44 @@ public:
 		} else if (base > *this->query.ignoreAlpha) {
 			wholeSurface();
 		} else {
+			auto* content = window->contentItem();
+			auto* parent = content->parentItem();
+			auto origin =
+			    parent != nullptr ? QQuickItemPrivate::get(parent)->itemToWindowTransform() : QTransform();
+
 			this->threshold = *this->query.ignoreAlpha;
-			this->walk(window->contentItem(), 1, base, windowRect, 0);
+			this->walk(content, origin, 1, base, windowRect, 0);
 		}
 
 		return {.shapes = this->shapes, .truncated = this->budget < 0};
 	}
 
 private:
-	void walk(QQuickItem* item, qreal opacity, qreal coverage, const QRectF& clip, int depth) {
+	void walk(
+	    QQuickItem* item,
+	    const QTransform& parentTransform,
+	    qreal opacity,
+	    qreal coverage,
+	    const QRectF& clip,
+	    int depth
+	) {
 		if (item == nullptr || depth > MAX_DEPTH || --this->budget < 0) return;
-		if (!item->isVisible()) return;
 
-		opacity *= item->opacity();
+		auto* d = QQuickItemPrivate::get(item);
+		if (!d->effectiveVisible) return;
+
+		opacity *= d->opacity();
 		if (opacity <= INVISIBLE_ALPHA) return;
+
+		auto transform = parentTransform;
+		d->itemToParentTransform(&transform);
 
 		auto* rectangle = qobject_cast<QQuickRectangle*>(item);
 		auto clips = item->clip();
 
 		QRectF sceneRect;
 		if (rectangle != nullptr || clips) {
-			sceneRect = item->mapRectToScene(QRectF(0, 0, item->width(), item->height()));
+			sceneRect = transform.mapRect(QRectF(0, 0, item->width(), item->height()));
 		}
 
 		auto childClip = clip;
@@ -120,9 +140,9 @@ private:
 			coverage = combined;
 		}
 
-		const auto children = item->childItems();
+		const auto& children = d->childItems;
 		for (auto* child: children) {
-			this->walk(child, opacity, coverage, childClip, depth + 1);
+			this->walk(child, transform, opacity, coverage, childClip, depth + 1);
 		}
 	}
 
@@ -172,6 +192,39 @@ bool BlurShape::fuzzyEquals(const BlurShape& other) const {
 
 BlurShapeResult collectBlurShapes(QQuickWindow* window, const BlurShapeQuery& query) {
 	return Collector(query).run(window);
+}
+
+bool itemTreeDirty(QQuickWindow* window) {
+	if (window == nullptr) return false;
+
+	constexpr quint32 relevant = QQuickItemPrivate::TransformOrigin | QQuickItemPrivate::Transform
+	                           | QQuickItemPrivate::BasicTransform | QQuickItemPrivate::Position
+	                           | QQuickItemPrivate::Size | QQuickItemPrivate::OpacityValue
+	                           | QQuickItemPrivate::ChildrenChanged | QQuickItemPrivate::ParentChanged
+	                           | QQuickItemPrivate::Clip | QQuickItemPrivate::Window
+	                           | QQuickItemPrivate::Visible;
+
+	auto* item = QQuickWindowPrivate::get(window)->dirtyItemList;
+
+	while (item != nullptr) {
+		auto* d = QQuickItemPrivate::get(item);
+		if ((d->dirtyAttributes & relevant) != 0) return true;
+
+		if ((d->dirtyAttributes & QQuickItemPrivate::Content) != 0
+		    && qobject_cast<QQuickRectangle*>(item) != nullptr)
+		{
+			return true;
+		}
+
+		item = d->nextDirtyItem;
+	}
+
+	return false;
+}
+
+bool framePending(QQuickWindow* window) {
+	return window != nullptr && window->isExposed()
+	    && QQuickWindowPrivate::get(window)->dirtyItemList != nullptr;
 }
 
 } // namespace qs::windows
