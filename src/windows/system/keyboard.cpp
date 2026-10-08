@@ -1,20 +1,24 @@
 #include "keyboard.hpp"
 
 #include <algorithm>
+#include <utility>
 #include <vector>
 
+#include <qcoreapplication.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
+#include <qpointer.h>
 #include <qstring.h>
 
 #include "../../core/logcat.hpp"
+#include "../window_tracker.hpp"
 
 namespace qs::windows::sys {
 
 namespace {
 QS_LOGGING_CATEGORY(logKeyboard, "quickshell.windows.keyboard", QtWarningMsg);
 
-Keyboard* g_instance = nullptr;
+constexpr int LAYOUT_POLL_MS = 500;
 
 QString localeNameFromHkl(HKL hkl) {
 	auto langId = LOWORD(reinterpret_cast<quintptr>(hkl)); // NOLINT
@@ -50,72 +54,92 @@ std::vector<HKL> installedLayouts() {
 	return layouts;
 }
 
-void CALLBACK winEventProc(
-    HWINEVENTHOOK /*hook*/,
-    DWORD event,
-    HWND /*hwnd*/,
-    LONG idObject,
-    LONG /*idChild*/,
-    DWORD /*threadId*/,
-    DWORD /*time*/
-) {
-	if (event == EVENT_SYSTEM_FOREGROUND && idObject == OBJID_WINDOW && g_instance != nullptr) {
-		g_instance->refresh();
-	}
+HKL foregroundLayout() {
+	auto* foreground = GetForegroundWindow();
+	if (foreground == nullptr) return nullptr;
+
+	auto threadId = GetWindowThreadProcessId(foreground, nullptr);
+	if (threadId == 0) return nullptr;
+
+	return GetKeyboardLayout(threadId);
 }
 
 } // namespace
 
+KeyboardLayoutWatcher* KeyboardLayoutWatcher::instance() {
+	static QPointer<KeyboardLayoutWatcher> watcher; // NOLINT
+	if (watcher.isNull()) watcher = new KeyboardLayoutWatcher(QCoreApplication::instance());
+	return watcher.data();
+}
+
+KeyboardLayoutWatcher::KeyboardLayoutWatcher(QObject* parent): QObject(parent) {
+	this->pollTimer.setInterval(LAYOUT_POLL_MS);
+	QObject::connect(&this->pollTimer, &QTimer::timeout, this, &KeyboardLayoutWatcher::check);
+
+	QObject::connect(
+	    WindowTracker::instance(),
+	    &WindowTracker::foregroundChanged,
+	    this,
+	    &KeyboardLayoutWatcher::check
+	);
+
+	this->mLayouts = installedLayouts();
+	this->mCurrent = foregroundLayout();
+	if (this->mLayouts.size() > 1) this->pollTimer.start();
+}
+
+void KeyboardLayoutWatcher::check() {
+	auto layouts = installedLayouts();
+
+	if (layouts != this->mLayouts) {
+		this->mLayouts = std::move(layouts);
+
+		if (this->mLayouts.size() > 1) this->pollTimer.start();
+		else this->pollTimer.stop();
+
+		qCDebug(logKeyboard) << "Installed keyboard layouts changed:" << this->mLayouts.size();
+		emit this->layoutsChanged();
+	}
+
+	auto* current = foregroundLayout();
+	if (current == nullptr || current == this->mCurrent) return;
+
+	this->mCurrent = current;
+	emit this->currentChanged();
+}
+
 Keyboard::Keyboard(QObject* parent): QObject(parent) {
-	g_instance = this;
-
-	this->pollTimer.setInterval(500);
-	QObject::connect(&this->pollTimer, &QTimer::timeout, this, &Keyboard::refresh);
-
 	QTimer::singleShot(0, this, &Keyboard::initDeferred);
 }
 
 void Keyboard::initDeferred() {
-	this->hook = SetWinEventHook(
-	    EVENT_SYSTEM_FOREGROUND,
-	    EVENT_SYSTEM_FOREGROUND,
-	    nullptr,
-	    &winEventProc,
-	    0,
-	    0,
-	    WINEVENT_OUTOFCONTEXT
+	auto* watcher = KeyboardLayoutWatcher::instance();
+	QObject::connect(watcher, &KeyboardLayoutWatcher::currentChanged, this, &Keyboard::refresh);
+
+	QObject::connect(
+	    watcher,
+	    &KeyboardLayoutWatcher::layoutsChanged,
+	    this,
+	    &Keyboard::refreshLayoutList
 	);
-	if (this->hook == nullptr) {
-		qCWarning(logKeyboard) << "SetWinEventHook(EVENT_SYSTEM_FOREGROUND) failed:" << GetLastError();
-	}
 
 	this->refreshLayoutList();
 	this->refresh();
-
-	if (this->mActive) this->pollTimer.start();
 }
 
-Keyboard::~Keyboard() {
-	if (this->hook != nullptr) UnhookWinEvent(this->hook);
-	if (g_instance == this) g_instance = nullptr;
-}
+Keyboard::~Keyboard() = default;
 
 void Keyboard::setActive(bool active) {
 	if (this->mActive == active) return;
 	this->mActive = active;
 	emit this->activeChanged();
 
-	if (active) {
-		this->refresh();
-		this->pollTimer.start();
-	} else {
-		this->pollTimer.stop();
-	}
+	if (active) this->refresh();
 }
 
 void Keyboard::refreshLayoutList() {
 	QStringList codes;
-	for (auto* hkl: installedLayouts()) {
+	for (auto* hkl: KeyboardLayoutWatcher::instance()->layouts()) {
 		auto code = localeNameFromHkl(hkl);
 		if (!code.isEmpty() && !codes.contains(code)) codes.append(code);
 	}
@@ -123,13 +147,11 @@ void Keyboard::refreshLayoutList() {
 }
 
 void Keyboard::refresh() {
-	auto* foreground = GetForegroundWindow();
-	if (foreground == nullptr) return;
+	if (!this->mActive) return;
 
-	auto threadId = GetWindowThreadProcessId(foreground, nullptr);
-	if (threadId == 0) return;
+	auto* hkl = KeyboardLayoutWatcher::instance()->current();
+	if (hkl == nullptr) return;
 
-	auto hkl = GetKeyboardLayout(threadId);
 	auto code = localeNameFromHkl(hkl);
 	if (code.isEmpty() || code == this->bCurrentLayoutCode.value()) return;
 

@@ -16,6 +16,7 @@
 #include "../window/proxywindow.hpp"
 #include "input_mask.hpp"
 #include "util.hpp"
+#include "window_tracker.hpp"
 
 namespace qs::windows {
 
@@ -52,35 +53,17 @@ public:
 private:
 	explicit FocusGrabTracker(InputMaskTracker* masks): QObject(masks) {
 		QObject::connect(masks, &InputMaskTracker::buttonPressed, this, &FocusGrabTracker::onButtonPressed);
-	}
 
-	void startWatching() {
-		InputMaskTracker::instance()->acquireButtonEvents();
-
-		this->foregroundHook = SetWinEventHook(
-		    EVENT_SYSTEM_FOREGROUND,
-		    EVENT_SYSTEM_FOREGROUND,
-		    nullptr,
-		    &FocusGrabTracker::foregroundProc,
-		    0,
-		    0,
-		    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+		QObject::connect(
+		    WindowTracker::instance(),
+		    &WindowTracker::foregroundChanged,
+		    this,
+		    &FocusGrabTracker::onForegroundChanged
 		);
-
-		if (this->foregroundHook == nullptr) {
-			qCWarning(logFocusGrab) << "Failed to watch foreground changes, focus grabs only clear on "
-			                           "clicks.";
-		}
 	}
 
-	void stopWatching() {
-		InputMaskTracker::instance()->releaseButtonEvents();
-
-		if (this->foregroundHook != nullptr) {
-			UnhookWinEvent(this->foregroundHook);
-			this->foregroundHook = nullptr;
-		}
-	}
+	void startWatching() { InputMaskTracker::instance()->acquireButtonEvents(); }
+	void stopWatching() { InputMaskTracker::instance()->releaseButtonEvents(); }
 
 	void onButtonPressed(QPoint position, quint32 time) {
 		auto* hit = WindowFromPoint(POINT {.x = position.x(), .y = position.y()});
@@ -100,8 +83,8 @@ private:
 		}
 	}
 
-	void onForegroundChanged(HWND hwnd, DWORD time) {
-		if (hwnd == nullptr || isOwnProcessWindow(hwnd)) return;
+	void onForegroundChanged(HWND hwnd, quint32 time) {
+		if (this->grabs.isEmpty() || hwnd == nullptr || isOwnProcessWindow(hwnd)) return;
 
 		qCDebug(logFocusGrab) << "Foreground moved to another process:" << hwnd;
 
@@ -116,21 +99,7 @@ private:
 		}
 	}
 
-	static void CALLBACK foregroundProc(
-	    HWINEVENTHOOK /*hook*/,
-	    DWORD /*event*/,
-	    HWND hwnd,
-	    LONG idObject,
-	    LONG /*idChild*/,
-	    DWORD /*thread*/,
-	    DWORD time
-	) {
-		if (idObject != OBJID_WINDOW) return;
-		FocusGrabTracker::instance()->onForegroundChanged(hwnd, time);
-	}
-
 	QList<QPointer<FocusGrab>> grabs;
-	HWINEVENTHOOK foregroundHook = nullptr;
 };
 
 } // namespace

@@ -31,6 +31,7 @@
 #include "../core/rootwrapper.hpp"
 #include "../io/ipchandler.hpp"
 #include "keyboard_hook.hpp"
+#include "system/keyboard.hpp"
 
 namespace qs::windows::hotkeys {
 
@@ -432,15 +433,14 @@ HotkeyManager::HotkeyManager(QObject* parent): QObject(parent) {
 	this->reloadTimer.setInterval(200);
 	QObject::connect(&this->reloadTimer, &QTimer::timeout, this, &HotkeyManager::loadFile);
 
+	auto* layouts = sys::KeyboardLayoutWatcher::instance();
 	this->lastLayout = activeKeyboardLayout();
-	this->layoutTimer.setInterval(2000);
-	QObject::connect(&this->layoutTimer, &QTimer::timeout, this, [this] {
-		auto* layout = activeKeyboardLayout();
+	QObject::connect(layouts, &sys::KeyboardLayoutWatcher::currentChanged, this, [this, layouts] {
+		auto* layout = layouts->current();
 		if (layout == this->lastLayout) return;
 		this->lastLayout = layout;
 		if (this->loaded) this->reload();
 	});
-	this->layoutTimer.start();
 
 	this->releaseTimer.setInterval(RELEASE_POLL_MS);
 	QObject::connect(&this->releaseTimer, &QTimer::timeout, this, &HotkeyManager::pollReleases);

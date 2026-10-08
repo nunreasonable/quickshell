@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include <qobject.h>
 #include <qproperty.h>
 #include <qqmlintegration.h>
@@ -10,6 +12,30 @@
 #include <qtmetamacros.h>
 
 namespace qs::windows::sys {
+
+class KeyboardLayoutWatcher: public QObject {
+	Q_OBJECT;
+
+public:
+	static KeyboardLayoutWatcher* instance();
+	Q_DISABLE_COPY_MOVE(KeyboardLayoutWatcher);
+
+	[[nodiscard]] HKL current() const { return this->mCurrent; }
+	[[nodiscard]] const std::vector<HKL>& layouts() const { return this->mLayouts; }
+
+	void check();
+
+signals:
+	void currentChanged();
+	void layoutsChanged();
+
+private:
+	explicit KeyboardLayoutWatcher(QObject* parent);
+
+	HKL mCurrent = nullptr;
+	std::vector<HKL> mLayouts;
+	QTimer pollTimer;
+};
 
 class Keyboard: public QObject {
 	Q_OBJECT;
@@ -54,8 +80,6 @@ private:
 	void refreshLayoutList();
 
 	bool mActive = true;
-	QTimer pollTimer;
-	HWINEVENTHOOK hook = nullptr;
 
 	// clang-format off
 	Q_OBJECT_BINDABLE_PROPERTY(Keyboard, QString, bCurrentLayoutCode, &Keyboard::currentLayoutChanged);
