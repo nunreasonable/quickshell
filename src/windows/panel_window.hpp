@@ -148,6 +148,7 @@ protected:
 private slots:
 	void onSurfaceCreated();
 	void onWindowVisibleChanged();
+	void onDesktopAccessorReady();
 	void updateScreen();
 	void scheduleUpdateDimensions();
 	void onScreenScaleChanged();
@@ -189,6 +190,7 @@ private:
 	bool scaleRecreatePending = false;
 	bool focusGrabPending = false;
 	bool pinnedToAllDesktops = false;
+	HWND pinFailedHwnd = nullptr;
 
 	HWND mEmbedParent = nullptr;
 	HWND mEmbedInsertAfter = nullptr;

@@ -31,6 +31,7 @@
 #include "blur.hpp"
 #include "desktop_host.hpp"
 #include "input_mask.hpp"
+#include "startup.hpp"
 #include "util.hpp"
 #include "virtual_desktops.hpp"
 
@@ -269,6 +270,14 @@ void WinPanelWindow::connectWindow() {
 	QObject::connect(this->window, &ProxiedWindow::devicePixelRatioChanged, this, &WinPanelWindow::scheduleUpdateDimensions);
 	// clang-format on
 
+	QObject::connect(
+	    VirtualDesktops::instance(),
+	    &VirtualDesktops::accessorReady,
+	    this,
+	    &WinPanelWindow::onDesktopAccessorReady,
+	    Qt::UniqueConnection
+	);
+
 	this->updateScreen();
 
 	if (this->hwnd() == nullptr) {
@@ -400,16 +409,24 @@ void WinPanelWindow::stickToAllDesktops() {
 			return;
 
 		auto* desktops = VirtualDesktops::instance();
+		if (!desktops->accessorLoaded() || this->pinFailedHwnd == hwnd) return;
+
 		this->pinnedToAllDesktops = desktops->isWindowPinned(hwnd) || desktops->pinWindow(hwnd, true);
 
 		if (!this->pinnedToAllDesktops) {
+			this->pinFailedHwnd = hwnd;
 			qCDebug(logPanel) << "Could not pin" << this << "to all desktops; it will follow the current one";
 		}
 	});
 }
 
+void WinPanelWindow::onDesktopAccessorReady() {
+	if (this->window != nullptr && this->window->isVisible()) this->stickToAllDesktops();
+}
+
 void WinPanelWindow::onWindowVisibleChanged() {
 	if (this->window->isVisible()) {
+		startup::watchWindow(this->window);
 		WinPanelStack::instance()->addPanel(this);
 		this->updateDimensions();
 		this->updateLayer();

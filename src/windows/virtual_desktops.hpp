@@ -70,6 +70,7 @@ public:
 signals:
 	void desktopsChanged();
 	void currentChanged();
+	void accessorReady();
 
 private:
 	explicit VirtualDesktops();

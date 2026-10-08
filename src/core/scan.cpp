@@ -4,6 +4,8 @@
 
 #include <qcontainerfwd.h>
 #include <qcryptographichash.h>
+#include <qdatastream.h>
+#include <qdatetime.h>
 #include <qdir.h>
 #include <qfileinfo.h>
 #include <qjsengine.h>
@@ -14,13 +16,28 @@
 #include <qlogging.h>
 #include <qloggingcategory.h>
 #include <qpair.h>
+#include <qsavefile.h>
 #include <qstring.h>
+#include <qtenvironmentvariables.h>
 #include <qtextstream.h>
+#include <qtimezone.h>
 
 #include "logcat.hpp"
 #include "scanenv.hpp"
 
 QS_LOGGING_CATEGORY(logQmlScanner, "quickshell.qmlscanner", QtWarningMsg);
+
+namespace {
+
+constexpr quint32 SCAN_CACHE_MAGIC = 0x71736331;
+constexpr quint32 SCAN_CACHE_VERSION = 1;
+
+bool scanCacheDisabled() {
+	static const bool disabled = qEnvironmentVariableIsSet("QS_DISABLE_SCAN_CACHE");
+	return disabled;
+}
+
+} // namespace
 
 bool QmlScanner::readAndHashFile(const QString& path, QByteArray& data) {
 	auto file = QFile(path);
@@ -42,8 +59,12 @@ bool QmlScanner::hasFileContentChanged(const QString& path) const {
 }
 
 void QmlScanner::scanDir(const QDir& dir) {
+	auto absolutePath = QDir::cleanPath(dir.absolutePath());
+	if (this->seenDirPaths.contains(absolutePath)) return;
+	this->seenDirPaths.insert(absolutePath);
+
 	auto dirKey = dir.canonicalPath();
-	if (dirKey.isEmpty()) dirKey = QDir::cleanPath(dir.absolutePath());
+	if (dirKey.isEmpty()) dirKey = absolutePath;
 	if (this->scannedDirs.contains(dirKey)) return;
 	this->scannedDirs.insert(dirKey);
 
@@ -60,7 +81,8 @@ void QmlScanner::scanDir(const QDir& dir) {
 	bool seenQmldir = false;
 	auto entries = QVector<Entry>();
 
-	for (auto& name: dir.entryList(QDir::Files | QDir::NoDotAndDotDot)) {
+	for (const auto& info: dir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot)) {
+		auto name = info.fileName();
 		if (name == "qmldir") {
 			qCDebug(
 			    logQmlScanner
@@ -70,7 +92,7 @@ void QmlScanner::scanDir(const QDir& dir) {
 		} else if (name.at(0).isUpper() && name.endsWith(".qml")) {
 			auto& entry = entries.emplaceBack();
 
-			if (this->scanQmlFile(dir.filePath(name), entry.singleton, entry.internal)) {
+			if (this->scanQmlFile(dir.filePath(name), info, entry.singleton, entry.internal)) {
 				entry.name = name;
 			} else {
 				entries.pop_back();
@@ -125,11 +147,34 @@ void QmlScanner::scanDir(const QDir& dir) {
 	}
 }
 
-bool QmlScanner::scanQmlFile(const QString& path, bool& singleton, bool& internal) {
-	if (this->scannedFiles.contains(path)) return false;
+bool QmlScanner::scanQmlFile(
+    const QString& path,
+    const QFileInfo& info,
+    bool& singleton,
+    bool& internal
+) {
+	if (this->scannedFileSet.contains(path)) return false;
+	this->scannedFileSet.insert(path);
 	this->scannedFiles.push_back(path);
 
+	auto size = info.size();
+	auto modified = info.lastModified(QTimeZone::UTC).toMSecsSinceEpoch();
+
+	if (auto cached = this->cachedFiles.constFind(path); cached != this->cachedFiles.constEnd()
+	                                                   && cached->size == size
+	                                                   && cached->modified == modified)
+	{
+		qCDebug(logQmlScanner) << "Using cached scan of qml file" << path;
+		singleton = cached->singleton;
+		internal = cached->internal;
+		this->fileHashes.insert(path, cached->hash);
+		this->freshFiles.insert(path, *cached);
+		this->scanImports(path, cached->imports);
+		return true;
+	}
+
 	qCDebug(logQmlScanner) << "Scanning qml file" << path;
+	this->cacheChanged = true;
 
 	QByteArray fileData;
 	if (!this->readAndHashFile(path, fileData)) {
@@ -137,6 +182,7 @@ bool QmlScanner::scanQmlFile(const QString& path, bool& singleton, bool& interna
 		return false;
 	}
 
+	auto mayPreprocess = fileData.contains("//@ if") || fileData.contains("//@ endif");
 	auto stream = QTextStream(&fileData);
 	auto imports = QVector<QString>();
 
@@ -146,14 +192,14 @@ bool QmlScanner::scanQmlFile(const QString& path, bool& singleton, bool& interna
 	int lineNum = 0;
 	QString overrideText;
 	bool isOverridden = false;
-
-	auto& pragmaEngine = *QmlScanner::preprocEngine();
+	bool preprocessed = false;
 
 	auto postError = [&, this](QString error) {
 		this->scanErrors.append({.file = path, .message = std::move(error), .line = lineNum});
 	};
 
 	while (!stream.atEnd()) {
+		if (!inHeader && !mayPreprocess) break;
 		++lineNum;
 		bool hideMask = false;
 		auto rawLine = stream.readLine();
@@ -201,8 +247,9 @@ bool QmlScanner::scanQmlFile(const QString& path, bool& singleton, bool& interna
 		}
 
 		if (line.startsWith("//@ if ")) {
+			preprocessed = true;
 			auto code = line.sliced(7);
-			auto value = pragmaEngine.evaluate(code, path, 1234);
+			auto value = QmlScanner::preprocEngine()->evaluate(code, path, 1234);
 			bool mask = true;
 
 			if (value.isError()) {
@@ -218,6 +265,7 @@ bool QmlScanner::scanQmlFile(const QString& path, bool& singleton, bool& interna
 			if (mask) isOverridden = true;
 			sourceMasked = mask;
 		} else if (line.startsWith("//@ endif")) {
+			preprocessed = true;
 			if (ifScopes.isEmpty()) {
 				postError("endif without matching if");
 			} else {
@@ -228,8 +276,10 @@ bool QmlScanner::scanQmlFile(const QString& path, bool& singleton, bool& interna
 			}
 		}
 
-		if (!hideMask && sourceMasked) overrideText.append("// MASKED: " % rawLine % '\n');
-		else overrideText.append(rawLine % '\n');
+		if (mayPreprocess) {
+			if (!hideMask && sourceMasked) overrideText.append("// MASKED: " % rawLine % '\n');
+			else overrideText.append(rawLine % '\n');
+		}
 
 	next:;
 	}
@@ -246,12 +296,29 @@ bool QmlScanner::scanQmlFile(const QString& path, bool& singleton, bool& interna
 		qCDebug(logQmlScanner) << "Found imports" << imports;
 	}
 
+	if (!preprocessed) {
+		this->freshFiles.insert(
+		    path,
+		    {.size = size,
+		     .modified = modified,
+		     .hash = this->fileHashes.value(path),
+		     .singleton = singleton,
+		     .internal = internal,
+		     .imports = imports}
+		);
+	}
+
+	this->scanImports(path, imports);
+	return true;
+}
+
+void QmlScanner::scanImports(const QString& path, const QVector<QString>& imports) {
 	auto currentdir = QDir(QFileInfo(path).absolutePath());
 
 	// the root can never be a singleton so it dosent matter if we skip it
 	this->scanDir(currentdir);
 
-	for (auto& import: imports) {
+	for (const auto& import: imports) {
 		QString ipath;
 		if (import.startsWith("root:")) {
 			auto path = import.sliced(5);
@@ -261,15 +328,25 @@ bool QmlScanner::scanQmlFile(const QString& path, bool& singleton, bool& interna
 			ipath = currentdir.filePath(import);
 		}
 
-		auto pathInfo = QFileInfo(ipath);
-		auto cpath = pathInfo.absoluteFilePath();
+		auto target = this->importTargets.constFind(ipath);
+		if (target == this->importTargets.constEnd()) {
+			auto pathInfo = QFileInfo(ipath);
+			target = this->importTargets.insert(
+			    ipath,
+			    {.exists = pathInfo.exists(),
+			     .isDir = pathInfo.isDir(),
+			     .absolutePath = pathInfo.absoluteFilePath()}
+			);
+		}
 
-		if (!pathInfo.exists()) {
+		const auto& cpath = target->absolutePath;
+
+		if (!target->exists) {
 			qCWarning(logQmlScanner) << "Ignoring unresolvable import" << ipath << "from" << path;
 			continue;
 		}
 
-		if (!pathInfo.isDir()) {
+		if (!target->isDir) {
 			qCDebug(logQmlScanner) << "Ignoring non-directory import" << ipath << "from" << path;
 			continue;
 		}
@@ -280,14 +357,72 @@ bool QmlScanner::scanQmlFile(const QString& path, bool& singleton, bool& interna
 			this->readAndHashFile(cpath, jsData);
 		} else this->scanDir(cpath);
 	}
-
-	return true;
 }
 
 void QmlScanner::scanQmlRoot(const QString& path) {
 	bool singleton = false;
 	bool internal = false;
-	this->scanQmlFile(path, singleton, internal);
+	this->scanQmlFile(path, QFileInfo(path), singleton, internal);
+}
+
+void QmlScanner::loadCache(const QString& path) {
+	if (scanCacheDisabled() || path.isEmpty()) return;
+
+	auto file = QFile(path);
+	if (!file.open(QFile::ReadOnly)) return;
+
+	auto stream = QDataStream(&file);
+	stream.setVersion(QDataStream::Qt_6_0);
+
+	quint32 magic = 0;
+	quint32 version = 0;
+	qint32 count = 0;
+	stream >> magic >> version >> count;
+	if (magic != SCAN_CACHE_MAGIC || version != SCAN_CACHE_VERSION || count < 0) return;
+
+	auto files = QHash<QString, CachedFile>();
+	files.reserve(count);
+
+	for (qint32 i = 0; i != count && stream.status() == QDataStream::Ok; i++) {
+		QString filePath;
+		CachedFile cached;
+		stream >> filePath >> cached.size >> cached.modified >> cached.hash >> cached.singleton
+		    >> cached.internal >> cached.imports;
+		files.insert(filePath, cached);
+	}
+
+	if (stream.status() != QDataStream::Ok) {
+		qCDebug(logQmlScanner) << "Ignoring unreadable scan cache" << path;
+		return;
+	}
+
+	qCDebug(logQmlScanner) << "Loaded scan cache with" << files.size() << "files from" << path;
+	this->cachedFiles = std::move(files);
+}
+
+void QmlScanner::saveCache(const QString& path) const {
+	if (scanCacheDisabled() || path.isEmpty()) return;
+	if (!this->cacheChanged && this->freshFiles.size() == this->cachedFiles.size()) return;
+
+	auto file = QSaveFile(path);
+	if (!file.open(QFile::WriteOnly)) {
+		qCDebug(logQmlScanner) << "Could not write scan cache" << path << file.errorString();
+		return;
+	}
+
+	auto stream = QDataStream(&file);
+	stream.setVersion(QDataStream::Qt_6_0);
+	stream << SCAN_CACHE_MAGIC << SCAN_CACHE_VERSION << static_cast<qint32>(this->freshFiles.size());
+
+	for (auto it = this->freshFiles.constBegin(); it != this->freshFiles.constEnd(); ++it) {
+		const auto& cached = it.value();
+		stream << it.key() << cached.size << cached.modified << cached.hash << cached.singleton
+		       << cached.internal << cached.imports;
+	}
+
+	if (!file.commit()) {
+		qCDebug(logQmlScanner) << "Could not write scan cache" << path << file.errorString();
+	}
 }
 
 bool QmlScanner::scanQmlJson(const QString& path) {

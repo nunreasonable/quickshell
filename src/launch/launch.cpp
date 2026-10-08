@@ -3,6 +3,7 @@
 #include <qcryptographichash.h>
 #include <qdebug.h>
 #include <qdir.h>
+#include <qelapsedtimer.h>
 #include <qfile.h>
 #include <qguiapplication.h>
 #include <qhash.h>
@@ -19,6 +20,7 @@
 
 #include "../core/common.hpp"
 #include "../core/instanceinfo.hpp"
+#include "../core/logcat.hpp"
 #include "../core/logging.hpp"
 #include "../core/paths.hpp"
 #include "../core/plugin.hpp"
@@ -62,7 +64,13 @@ QString base36Encode(T number) {
 
 } // namespace
 
+namespace {
+QS_LOGGING_CATEGORY(logStartup, "quickshell.startup", QtWarningMsg);
+}
+
 int launch(const LaunchArgs& args, char** argv) {
+	auto timer = QElapsedTimer();
+	timer.start();
 	auto pathId = QCryptographicHash::hash(args.configPath.toUtf8(), QCryptographicHash::Md5).toHex();
 	auto shellId = QString(pathId);
 
@@ -302,8 +310,10 @@ int launch(const LaunchArgs& args, char** argv) {
 		app = new QGuiApplication(qArgC, argv);
 	}
 
+	auto appMs = timer.restart();
 	LogManager::initThreadLogging();
 	LogManager::initFs();
+	qCDebug(logStartup) << "Created the application in" << appMs << "ms, logging in" << timer.restart() << "ms";
 
 	QGuiApplication::setDesktopFileName(appId);
 
@@ -322,7 +332,9 @@ int launch(const LaunchArgs& args, char** argv) {
 	// If we don't do that, attempts to get a QuickshellScreenInfo from a QScreen will fail in screenAdded bindings.
 	QuickshellTracked::init();
 
+	timer.restart();
 	QsEnginePlugin::initPlugins();
+	qCDebug(logStartup) << "Initialized plugins in" << timer.restart() << "ms";
 
 	// Base window transparency appears to be additive.
 	// Use a fully transparent window with a colored rect.
@@ -334,6 +346,7 @@ int launch(const LaunchArgs& args, char** argv) {
 
 	qs::ipc::IpcServer::start();
 	QsPaths::instance()->createLock();
+	qCDebug(logStartup) << "Started IPC and took the lock in" << timer.restart() << "ms";
 
 	auto root = RootWrapper(args.configPath, shellId);
 	QGuiApplication::setQuitOnLastWindowClosed(false);

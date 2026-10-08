@@ -1,6 +1,7 @@
 #include <qcoreapplication.h>
 #include <qdir.h>
 #include <qdiriterator.h>
+#include <qelapsedtimer.h>
 #include <qfont.h>
 #include <qfontdatabase.h>
 #include <qicon.h>
@@ -10,12 +11,15 @@
 #include <qqml.h>
 #include <qstring.h>
 
+#include "../core/logcat.hpp"
 #include "../core/plugin.hpp"
 #include "desktopentry_backend.hpp"
 #include "panel_window.hpp"
 #include "util.hpp"
 
 namespace {
+
+QS_LOGGING_CATEGORY(logStartup, "quickshell.startup", QtWarningMsg);
 
 constexpr const char* PERUSER_FONT_PREFIX = "jetbrainsmononerdfont-";
 constexpr const char* PERUSER_FONT_FAMILY = "JetBrainsMono Nerd Font";
@@ -98,9 +102,13 @@ class WindowsPlugin: public QsEnginePlugin {
 
 	void init() override {
 		qs::windows::optOutOfProcessPowerThrottling();
+		auto timer = QElapsedTimer();
+		timer.start();
 		loadBundledFonts();
+		qCDebug(logStartup) << "Loaded bundled fonts in" << timer.restart() << "ms";
 		addBundledIconPath();
 		qs::windows::WindowsDesktopEntryBackend::install();
+		qCDebug(logStartup) << "Installed the desktop entry backend in" << timer.restart() << "ms";
 	}
 
 	void registerTypes() override {

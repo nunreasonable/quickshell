@@ -22,6 +22,7 @@
 #include <qtimer.h>
 #include <qtypes.h>
 
+#include "startup.hpp"
 #include "util.hpp"
 #include "virtual_desktops.hpp"
 
@@ -464,7 +465,7 @@ WindowTracker::WindowTracker() {
 
 	this->startEventThread();
 
-	this->rescan();
+	startup::afterFirstFrame(this, [this]() { this->rescan(); });
 }
 
 WindowTracker::~WindowTracker() = default;
@@ -502,12 +503,15 @@ void WindowTracker::startEventThread() {
 	if (ready == nullptr) return;
 
 	std::thread(&eventThreadMain, ready).detach();
-	WaitForSingleObject(ready, INFINITE);
-	CloseHandle(ready);
 
-	if (gEventHookCount.load() < 6) {
-		qCWarning(logTracker) << "Only" << gEventHookCount.load() << "of 6 window event hooks installed.";
-	}
+	QTimer::singleShot(0, this, [ready]() {
+		WaitForSingleObject(ready, INFINITE);
+		CloseHandle(ready);
+
+		if (gEventHookCount.load() < 6) {
+			qCWarning(logTracker) << "Only" << gEventHookCount.load() << "of 6 window event hooks installed.";
+		}
+	});
 }
 
 void WindowTracker::drainEvents() {

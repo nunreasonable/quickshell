@@ -573,10 +573,15 @@ int runCommand(int argc, char** argv) {
 		           : state.log.verbosity == 1 ? QtInfoMsg
 		                                      : QtDebugMsg;
 
+		auto sparse = state.log.sparse;
+#ifdef _WIN32
+		if (!qEnvironmentVariableIsSet("QS_DETAILED_LOGS")) sparse = true;
+#endif
+
 		LogManager::init(
 		    !state.log.noColor,
 		    state.log.timestamp,
-		    state.log.sparse,
+		    sparse,
 		    level,
 		    *state.log.rules,
 		    *state.subcommand.log ? "READER" : ""

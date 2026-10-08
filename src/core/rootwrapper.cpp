@@ -3,6 +3,7 @@
 #include <utility>
 
 #include <qdir.h>
+#include <qelapsedtimer.h>
 #include <qfileinfo.h>
 #include <qfilesystemwatcher.h>
 #include <qlogging.h>
@@ -17,9 +18,15 @@
 #include "../window/floatingwindow.hpp"
 #include "generation.hpp"
 #include "instanceinfo.hpp"
+#include "logcat.hpp"
+#include "paths.hpp"
 #include "qmlglobal.hpp"
 #include "scan.hpp"
 #include "toolsupport.hpp"
+
+namespace {
+QS_LOGGING_CATEGORY(logStartup, "quickshell.startup", QtWarningMsg);
+}
 
 RootWrapper::RootWrapper(QString rootPath, QString shellId)
     : QObject(nullptr)
@@ -57,10 +64,17 @@ RootWrapper::~RootWrapper() {
 void RootWrapper::reloadGraph(bool hard) {
 	auto rootFile = QFileInfo(this->rootPath);
 	auto rootPath = rootFile.dir();
+	auto timer = QElapsedTimer();
+	timer.start();
+	auto scanCache = QsPaths::instance()->shellCacheDir().filePath("qmlscan.bin");
 	auto scanner = QmlScanner(rootPath);
+	scanner.loadCache(scanCache);
 	scanner.scanQmlRoot(this->rootPath);
+	scanner.saveCache(scanCache);
+	qCDebug(logStartup) << "Scanned" << scanner.scannedFiles.size() << "files in" << timer.restart() << "ms";
 
 	qs::core::QmlToolingSupport::updateTooling(rootPath, scanner);
+	qCDebug(logStartup) << "Updated tooling in" << timer.restart() << "ms";
 	this->configDirWatcher.addPath(rootPath.path());
 
 	// todo: move into EngineGeneration
@@ -97,11 +111,13 @@ void RootWrapper::reloadGraph(bool hard) {
 
 	auto* generation = new EngineGeneration(rootPath, std::move(scanner));
 	generation->wrapper = this;
+	qCDebug(logStartup) << "Created the engine in" << timer.restart() << "ms";
 
 	QUrl url;
 	url.setScheme("qs");
 	url.setPath("@/qs/" % rootFile.fileName());
 	auto component = QQmlComponent(generation->engine, url);
+	qCDebug(logStartup) << "Loaded the root component in" << timer.restart() << "ms";
 
 	if (!component.isReady()) {
 		qCritical() << "Failed to load configuration";
@@ -145,6 +161,7 @@ void RootWrapper::reloadGraph(bool hard) {
 	}
 
 	auto* newRoot = component.beginCreate(generation->engine->rootContext());
+	qCDebug(logStartup) << "Created the root object in" << timer.restart() << "ms";
 
 	if (auto* item = qobject_cast<QQuickItem*>(newRoot)) {
 		auto* window = new FloatingWindowInterface();
@@ -158,6 +175,7 @@ void RootWrapper::reloadGraph(bool hard) {
 	generation->root = newRoot;
 
 	component.completeCreate();
+	qCDebug(logStartup) << "Completed the root object in" << timer.restart() << "ms";
 
 	if (this->generation) {
 		QObject::disconnect(this->generation, nullptr, this, nullptr);

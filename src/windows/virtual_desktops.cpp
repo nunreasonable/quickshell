@@ -10,6 +10,7 @@
 #include <qthread.h>
 #include <qtypes.h>
 
+#include "startup.hpp"
 #include "util.hpp"
 
 #include <objbase.h>
@@ -200,9 +201,14 @@ VirtualDesktops::VirtualDesktops() {
 	}
 
 	ProcessIdToSessionId(GetCurrentProcessId(), &this->sessionId);
-	this->loadAccessor();
-	this->installListener();
 	this->refresh();
+
+	startup::afterFirstFrame(this, [this]() {
+		this->loadAccessor();
+		this->installListener();
+		this->refresh();
+		if (this->accessor.loaded) emit this->accessorReady();
+	});
 
 	auto sessionKey = QString::fromWCharArray(SESSION_KEY_FORMAT).arg(this->sessionId);
 	this->watcher = new RegistryWatcher({QString::fromWCharArray(DESKTOPS_KEY), sessionKey}, this);

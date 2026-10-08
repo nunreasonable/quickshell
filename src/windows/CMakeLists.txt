@@ -1,5 +1,6 @@
 qt_add_library(quickshell-windows STATIC
 	util.cpp
+	startup.cpp
 	appbar.cpp
 	input_mask.cpp
 	panel_window.cpp

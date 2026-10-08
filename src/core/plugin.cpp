@@ -1,9 +1,15 @@
 #include "plugin.hpp"
 #include <algorithm>
 
+#include <qelapsedtimer.h>
 #include <qvector.h> // NOLINT (what??)
 
 #include "generation.hpp"
+#include "logcat.hpp"
+
+namespace {
+QS_LOGGING_CATEGORY(logStartup, "quickshell.startup", QtWarningMsg);
+}
 
 static QVector<QsEnginePlugin*> plugins; // NOLINT
 
@@ -32,18 +38,28 @@ void QsEnginePlugin::initPlugins() {
 		plugin->preinit();
 	}
 
+	auto timer = QElapsedTimer();
+	timer.start();
+
 	for (QsEnginePlugin* plugin: plugins) {
 		plugin->init();
+		qCDebug(logStartup) << "Initialized plugin" << plugin->name() << "in" << timer.restart() << "ms";
 	}
 
 	for (QsEnginePlugin* plugin: plugins) {
 		plugin->registerTypes();
 	}
+
+	qCDebug(logStartup) << "Registered plugin types in" << timer.restart() << "ms";
 }
 
 void QsEnginePlugin::runConstructGeneration(EngineGeneration& generation) {
+	auto timer = QElapsedTimer();
+	timer.start();
+
 	for (QsEnginePlugin* plugin: plugins) {
 		plugin->constructGeneration(generation);
+		qCDebug(logStartup) << "Constructed generation for plugin" << plugin->name() << "in" << timer.restart() << "ms";
 	}
 }
 
