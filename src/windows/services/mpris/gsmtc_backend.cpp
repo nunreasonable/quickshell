@@ -5,6 +5,7 @@
 #include <qthread.h>
 #include <qtypes.h>
 
+#include "../../startup.hpp"
 #include "gsmtc_worker.hpp"
 #include "mpris.hpp"
 
@@ -17,7 +18,7 @@ GsmtcBackend::GsmtcBackend(Mpris* frontend) {
 	QObject::connect(&this->mThread, &QThread::started, this->mWorker, &GsmtcWorker::start);
 	QObject::connect(&this->mThread, &QThread::finished, this->mWorker, &GsmtcWorker::shutdown);
 
-	this->mThread.start();
+	startup::afterFirstFrame(this, [this]() { this->mThread.start(); });
 }
 
 GsmtcBackend::~GsmtcBackend() {

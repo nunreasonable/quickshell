@@ -10,6 +10,7 @@
 #include <qthread.h>
 #include <qtypes.h>
 
+#include "../startup.hpp"
 #include "bt_worker.hpp"
 
 namespace qs::bluetooth {
@@ -28,7 +29,10 @@ BtBackend::BtBackend(WinBluetooth* frontend): mThread(std::make_unique<QThread>(
 	QObject::connect(this->mThread.get(), &QThread::started, this->mWorker, &BtWorker::start);
 	QObject::connect(this->mThread.get(), &QThread::finished, this->mWorker, &BtWorker::shutdown);
 
-	this->mThread->start();
+	auto* thread = this->mThread.get();
+	qs::windows::startup::afterFirstFrame(thread, [this, thread]() {
+		if (this->mWorker != nullptr) thread->start();
+	});
 }
 
 BtBackend::~BtBackend() { this->stop(); }
