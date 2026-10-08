@@ -26,12 +26,22 @@ namespace {
 Q_LOGGING_CATEGORY(logScreenshot, "quickshell.windows.screenshot", QtWarningMsg);
 
 constexpr int CAPTURE_TIMEOUT_MS = 2000;
+constexpr int PNG_QUALITY = 85;
+constexpr int KEEP_CAPTURE_MS = 30000;
 
 QString localPath(const QString& path) {
 	if (path.startsWith("file:", Qt::CaseInsensitive)) return QUrl(path).toLocalFile();
 	return path;
 }
 } // namespace
+
+Screenshot::Screenshot(QObject* parent): QObject(parent) {
+	this->capturesExpiry.setSingleShot(true);
+	this->capturesExpiry.setInterval(KEEP_CAPTURE_MS);
+	QObject::connect(&this->capturesExpiry, &QTimer::timeout, this, [this]() {
+		this->captures.clear();
+	});
+}
 
 bool Screenshot::captureScreen(const QString& screenName, const QString& path) {
 	QList<QScreen*> screens;
@@ -89,11 +99,12 @@ bool Screenshot::captureScreen(const QString& screenName, const QString& path) {
 		return false;
 	}
 
-	if (!result.save(path, "PNG")) {
+	if (!result.save(path, "PNG", PNG_QUALITY)) {
 		qCWarning(logScreenshot) << "Cannot write" << path;
 		return false;
 	}
 
+	this->keepCapture(path, result);
 	return true;
 }
 
@@ -105,7 +116,9 @@ bool Screenshot::cropToFile(
     int height,
     const QString& dstPath
 ) {
-	QImage source(srcPath);
+	auto source = this->takeCapture(QFileInfo(srcPath));
+	if (source.isNull()) source = QImage(srcPath);
+
 	if (source.isNull()) {
 		qCWarning(logScreenshot) << "Cannot load" << srcPath;
 		return false;
@@ -126,7 +139,9 @@ bool Screenshot::cropToFile(
 		return false;
 	}
 
-	if (!cropped.save(dstPath, "PNG")) {
+	this->captures.remove(info.absoluteFilePath());
+
+	if (!cropped.save(dstPath, "PNG", PNG_QUALITY)) {
 		qCWarning(logScreenshot) << "Cannot write" << dstPath;
 		return false;
 	}
@@ -150,7 +165,9 @@ bool Screenshot::loadPixels(const QString& path) {
 		return true;
 	}
 
-	QImage image(path);
+	auto image = this->takeCapture(info);
+	if (image.isNull()) image = QImage(path);
+
 	if (image.isNull()) {
 		qCWarning(logScreenshot) << "pixelAt: cannot load" << path;
 		this->releasePixels();
@@ -168,6 +185,24 @@ QString Screenshot::pixelAt(const QString& path, int x, int y) {
 	if (!this->loadPixels(localPath(path))) return QString();
 	if (!this->pixels.valid(x, y)) return QString();
 	return QColor::fromRgb(this->pixels.pixel(x, y)).name(QColor::HexRgb);
+}
+
+void Screenshot::keepCapture(const QString& path, const QImage& image) {
+	auto info = QFileInfo(path);
+
+	this->captures.insert(
+	    info.absoluteFilePath(),
+	    {.image = image, .modified = info.lastModified(), .size = info.size()}
+	);
+
+	this->capturesExpiry.start();
+}
+
+QImage Screenshot::takeCapture(const QFileInfo& info) {
+	auto kept = this->captures.take(info.absoluteFilePath());
+	if (kept.image.isNull() || !info.exists()) return {};
+	if (info.lastModified() != kept.modified || info.size() != kept.size) return {};
+	return kept.image;
 }
 
 void Screenshot::releasePixels() {
