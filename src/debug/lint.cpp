@@ -18,12 +18,18 @@ namespace qs::debug {
 namespace {
 QS_LOGGING_CATEGORY(logLint, "quickshell.linter", QtWarningMsg);
 
+#ifdef Q_OS_WIN
+constexpr bool ITEM_LINTS = false;
+#else
+constexpr bool ITEM_LINTS = true;
+#endif
+
 void lintZeroSized(QQuickItem* item);
 bool isRenderable(QQuickItem* item);
 } // namespace
 
 void lintObjectTree(QObject* object) {
-	if (!logLint().isWarningEnabled()) return;
+	if (!ITEM_LINTS || !logLint().isWarningEnabled()) return;
 
 	for (auto* child: object->children()) {
 		if (child->isQuickItemType()) {
@@ -36,7 +42,7 @@ void lintObjectTree(QObject* object) {
 }
 
 void lintItemTree(QQuickItem* item) {
-	if (!logLint().isWarningEnabled()) return;
+	if (!ITEM_LINTS || !logLint().isWarningEnabled()) return;
 
 	lintZeroSized(item);
 
