@@ -55,24 +55,31 @@ private:
 	};
 
 	void evaluate(POINT cursor);
+	void publish();
+	void emitCursor(QPoint position);
+	void onCursorTrail();
 	void updateHookState();
 	bool startHook();
 	void stopHook();
+	void onHookFailed(DWORD error, quint32 generation);
 	void onCursorMoved();
 	void onButtonPressed(QPoint position, quint32 time);
 
 	static LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 	static LRESULT CALLBACK mouseHookProc(int code, WPARAM wParam, LPARAM lParam);
-	static void hookThreadMain(HANDLE readyEvent);
+	static void hookThreadMain(quint32 generation);
 
 	QList<Entry> entries;
 	HWND messageWindow = nullptr;
 	std::thread hookThread;
 	bool hookRunning = false;
 	bool hookFailed = false;
+	quint32 hookGeneration = 0;
 	int cursorWatchers = 0;
 	int hookHolders = 0;
+	QPoint lastCursor;
 	QTimer pollTimer;
+	QTimer cursorTrailTimer;
 	QTimer lateReportTimer;
 };
 

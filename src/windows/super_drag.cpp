@@ -61,6 +61,7 @@ static_assert(sizeof(LPARAM) >= sizeof(uint64_t));
 
 std::atomic<bool> gEnabled = false;      // NOLINT
 std::atomic<DWORD> gWorkerId = 0;        // NOLINT
+std::atomic<bool> gWorkerStop = false;   // NOLINT
 std::atomic<HWND> gGuiWindow = nullptr;  // NOLINT
 std::atomic<uint64_t> gCursor = 0;       // NOLINT
 std::atomic<bool> gMovePending = false;  // NOLINT
@@ -583,12 +584,9 @@ void SuperDragManager::setEnabled(bool enabled) {
 bool SuperDragManager::startWorker() {
 	if (this->workerRunning) return true;
 
-	auto* ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-	if (ready == nullptr) return false;
-
-	this->worker = std::thread(&SuperDragManager::workerMain, ready);
-	WaitForSingleObject(ready, INFINITE);
-	CloseHandle(ready);
+	gWorkerId.store(0);
+	gWorkerStop.store(false);
+	this->worker = std::thread(&SuperDragManager::workerMain);
 
 	this->workerRunning = true;
 	return true;
@@ -597,6 +595,7 @@ bool SuperDragManager::startWorker() {
 void SuperDragManager::stopWorker() {
 	if (!this->workerRunning) return;
 
+	gWorkerStop.store(true);
 	auto id = gWorkerId.exchange(0);
 	if (id != 0) PostThreadMessageW(id, WM_QUIT, 0, 0);
 
@@ -604,13 +603,13 @@ void SuperDragManager::stopWorker() {
 	this->workerRunning = false;
 }
 
-void SuperDragManager::workerMain(HANDLE readyEvent) {
+void SuperDragManager::workerMain() {
 	MSG msg {};
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 	SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 	prioritizeInputThread(THREAD_PRIORITY_HIGHEST);
 	gWorkerId.store(GetCurrentThreadId());
-	SetEvent(readyEvent);
+	if (gWorkerStop.load()) return;
 
 	auto drag = Drag();
 

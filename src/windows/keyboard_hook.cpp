@@ -6,6 +6,8 @@
 #include <thread>
 #include <utility>
 
+#include <qlogging.h>
+#include <qloggingcategory.h>
 #include <windows.h>
 
 #include "input_mask.hpp"
@@ -15,11 +17,14 @@ namespace qs::windows::hotkeys {
 
 namespace {
 
+Q_LOGGING_CATEGORY(logKeyboardHook, "quickshell.windows.hotkeys", QtInfoMsg);
+
 std::atomic<std::shared_ptr<const HookSnapshot>> gSnapshot; // NOLINT
 std::atomic<HWND> gTarget = nullptr;                         // NOLINT
 std::atomic<UINT> gMessageBase = 0;                          // NOLINT
 std::atomic<DWORD> gThreadId = 0;                            // NOLINT
-std::atomic<bool> gInstalled = false;                        // NOLINT
+std::atomic<bool> gStopRequested = false;                    // NOLINT
+std::atomic<bool> gFailed = false;                           // NOLINT
 std::atomic<bool> gForegroundBlocked = false; // NOLINT
 std::atomic<bool> gSuperChord = false;        // NOLINT
 
@@ -313,33 +318,35 @@ LRESULT CALLBACK hookProc(int code, WPARAM wParam, LPARAM lParam) {
 	return CallNextHookEx(nullptr, code, wParam, lParam);
 }
 
-void hookThreadMain(HANDLE readyEvent) {
+void hookThreadMain() {
 	MSG msg {};
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 	gThreadId.store(GetCurrentThreadId());
+	if (gStopRequested.load()) return;
 
 	prioritizeInputThread(THREAD_PRIORITY_TIME_CRITICAL);
 
 	auto* hook = SetWindowsHookExW(WH_KEYBOARD_LL, &hookProc, GetModuleHandleW(nullptr), 0);
-	HWINEVENTHOOK foregroundHook = nullptr;
 
-	if (hook != nullptr) {
-		foregroundHook = SetWinEventHook(
-		    EVENT_SYSTEM_FOREGROUND,
-		    EVENT_SYSTEM_FOREGROUND,
-		    nullptr,
-		    &foregroundChanged,
-		    0,
-		    0,
-		    WINEVENT_OUTOFCONTEXT
-		);
-
-		gForegroundBlocked.store(isHiddenFromUs(GetForegroundWindow()));
+	if (hook == nullptr) {
+		auto error = GetLastError();
+		gFailed.store(true);
+		qCWarning(logKeyboardHook) << "Failed to install the keyboard hook (error" << error
+		                           << "), binds with the Windows key are unavailable.";
+		return;
 	}
 
-	gInstalled.store(hook != nullptr);
-	SetEvent(readyEvent);
-	if (hook == nullptr) return;
+	auto* foregroundHook = SetWinEventHook(
+	    EVENT_SYSTEM_FOREGROUND,
+	    EVENT_SYSTEM_FOREGROUND,
+	    nullptr,
+	    &foregroundChanged,
+	    0,
+	    0,
+	    WINEVENT_OUTOFCONTEXT
+	);
+
+	gForegroundBlocked.store(isHiddenFromUs(GetForegroundWindow()));
 
 	while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
 		TranslateMessage(&msg);
@@ -377,37 +384,34 @@ bool KeyboardHook::start(HWND target, UINT messageBase) {
 	gTarget.store(target);
 	gMessageBase.store(messageBase);
 
-	if (gThread != nullptr) return true;
+	if (gThread != nullptr && !gFailed.load()) return true;
 
-	auto* ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-	if (ready == nullptr) return false;
-
-	gInstalled.store(false);
-	gThread = new std::thread(&hookThreadMain, ready);
-	WaitForSingleObject(ready, INFINITE);
-	CloseHandle(ready);
-
-	if (!gInstalled.load()) {
+	if (gThread != nullptr) {
 		gThread->join();
 		delete gThread;
-		gThread = nullptr;
-		return false;
 	}
 
+	gThreadId.store(0);
+	gStopRequested.store(false);
+	gFailed.store(false);
+	gThread = new std::thread(&hookThreadMain);
 	return true;
 }
 
 void KeyboardHook::stop() {
 	if (gThread == nullptr) return;
 
-	PostThreadMessageW(gThreadId.load(), WM_QUIT, 0, 0);
+	gStopRequested.store(true);
+	auto threadId = gThreadId.load();
+	if (threadId != 0) PostThreadMessageW(threadId, WM_QUIT, 0, 0);
+
 	gThread->join();
 	delete gThread;
 	gThread = nullptr;
 	gTarget.store(nullptr);
 }
 
-bool KeyboardHook::isRunning() { return gThread != nullptr; }
+bool KeyboardHook::isRunning() { return gThread != nullptr && !gFailed.load(); }
 bool KeyboardHook::foregroundBlocked() { return gForegroundBlocked.load(); }
 
 void KeyboardHook::setSnapshot(std::shared_ptr<const HookSnapshot> snapshot) {

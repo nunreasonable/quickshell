@@ -47,7 +47,7 @@ private:
 	void finishGuiDrag(const POINT* delta);
 
 	static LRESULT CALLBACK messageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-	static void workerMain(HANDLE readyEvent);
+	static void workerMain();
 
 	HWND messageWindow = nullptr;
 	std::thread worker;

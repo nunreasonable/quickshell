@@ -1,7 +1,10 @@
 #include "input_mask.hpp"
 #include <atomic>
 #include <cmath>
+#include <memory>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include <qcoreapplication.h>
 #include <qlogging.h>
@@ -23,21 +26,84 @@ Q_LOGGING_CATEGORY(logInputMask, "quickshell.windows.inputmask", QtWarningMsg);
 
 constexpr UINT WM_QS_CURSOR_MOVED = WM_APP + 1;
 constexpr UINT WM_QS_BUTTON_PRESSED = WM_APP + 2;
+constexpr UINT WM_QS_HOOK_FAILED = WM_APP + 3;
 constexpr auto MESSAGE_WINDOW_CLASS = L"QuickshellInputMaskTracker";
+constexpr int CURSOR_INTERVAL_MS = 33;
 
-std::atomic<LONG> cursorX = 0;       // NOLINT
-std::atomic<LONG> cursorY = 0;       // NOLINT
-std::atomic<bool> wakePending = false; // NOLINT
-std::atomic<HWND> hookTarget = nullptr; // NOLINT
-std::atomic<DWORD> hookThreadId = 0;    // NOLINT
-std::atomic<bool> hookInstalled = false; // NOLINT
-std::atomic<int> buttonWatchers = 0;     // NOLINT
+struct MaskedWindow {
+	HWND hwnd = nullptr;
+	QRegion region;
+	qreal dpr = 1;
+
+	[[nodiscard]] bool operator==(const MaskedWindow& other) const = default;
+};
+
+using MaskList = std::vector<MaskedWindow>;
+
+std::atomic<LONG> cursorX = 0;                       // NOLINT
+std::atomic<LONG> cursorY = 0;                       // NOLINT
+std::atomic<bool> wakePending = false;               // NOLINT
+std::atomic<HWND> hookTarget = nullptr;              // NOLINT
+std::atomic<DWORD> hookThreadId = 0;                 // NOLINT
+std::atomic<bool> hookStopRequested = false;         // NOLINT
+std::atomic<int> buttonWatchers = 0;                 // NOLINT
+std::atomic<bool> cursorWatched = false;             // NOLINT
+std::atomic<DWORD> lastCursorWake = 0;               // NOLINT
+std::atomic<std::shared_ptr<const MaskList>> gMasks; // NOLINT
 
 constexpr DWORD LATE_INPUT_MS = 100;
 constexpr int LATE_REPORT_INTERVAL_MS = 10000;
 std::atomic<quint32> lateMouseEvents = 0; // NOLINT
 std::atomic<quint32> lateKeyEvents = 0;   // NOLINT
 std::atomic<DWORD> worstLateMs = 0;       // NOLINT
+
+QPoint localPoint(POINT cursor, const RECT& rect, qreal dpr) {
+	return QPoint(
+	    static_cast<int>(std::floor((cursor.x - rect.left) / dpr)),
+	    static_cast<int>(std::floor((cursor.y - rect.top) / dpr))
+	);
+}
+
+bool masksNeedEvaluation(POINT cursor) {
+	auto masks = gMasks.load(std::memory_order_acquire);
+	if (masks == nullptr) return false;
+
+	for (const auto& window: *masks) {
+		if (!IsWindowVisible(window.hwnd)) continue;
+
+		auto transparent = (GetWindowLongPtrW(window.hwnd, GWL_EXSTYLE) & WS_EX_TRANSPARENT) != 0;
+
+		if (window.region.isEmpty()) {
+			if (!transparent) return true;
+			continue;
+		}
+
+		RECT rect {};
+		if (!GetWindowRect(window.hwnd, &rect) || !PtInRect(&rect, cursor)) continue;
+
+		if (window.region.contains(localPoint(cursor, rect, window.dpr)) == transparent) return true;
+	}
+
+	return false;
+}
+
+bool cursorWakeDue() {
+	if (!cursorWatched.load(std::memory_order_relaxed)) return false;
+
+	auto now = GetTickCount();
+	auto elapsed = now - lastCursorWake.load(std::memory_order_relaxed);
+	if (elapsed < static_cast<DWORD>(CURSOR_INTERVAL_MS)) return false;
+
+	lastCursorWake.store(now, std::memory_order_relaxed);
+	return true;
+}
+
+void wakeTracker() {
+	if (wakePending.exchange(true)) return;
+
+	auto* target = hookTarget.load();
+	if (target == nullptr || !PostMessageW(target, WM_QS_CURSOR_MOVED, 0, 0)) wakePending.store(false);
+}
 
 } // namespace
 
@@ -90,6 +156,15 @@ InputMaskTracker::InputMaskTracker(QObject* parent): QObject(parent) {
 	this->pollTimer.setInterval(16);
 	QObject::connect(&this->pollTimer, &QTimer::timeout, this, &InputMaskTracker::refresh);
 
+	this->cursorTrailTimer.setSingleShot(true);
+	this->cursorTrailTimer.setInterval(CURSOR_INTERVAL_MS);
+	QObject::connect(
+	    &this->cursorTrailTimer,
+	    &QTimer::timeout,
+	    this,
+	    &InputMaskTracker::onCursorTrail
+	);
+
 	this->lateReportTimer.setInterval(LATE_REPORT_INTERVAL_MS);
 	QObject::connect(&this->lateReportTimer, &QTimer::timeout, this, []() {
 		auto mouse = lateMouseEvents.exchange(0);
@@ -107,6 +182,7 @@ InputMaskTracker::InputMaskTracker(QObject* parent): QObject(parent) {
 
 InputMaskTracker::~InputMaskTracker() {
 	this->stopHook();
+	gMasks.store(nullptr, std::memory_order_release);
 
 	if (this->messageWindow != nullptr) {
 		DestroyWindow(this->messageWindow);
@@ -120,6 +196,8 @@ void InputMaskTracker::setMask(QWindow* window, const QRegion& region) {
 	auto found = false;
 	for (auto& entry: this->entries) {
 		if (entry.window == window) {
+			if (entry.region == region) return;
+
 			entry.region = region;
 			found = true;
 			break;
@@ -129,6 +207,7 @@ void InputMaskTracker::setMask(QWindow* window, const QRegion& region) {
 	if (!found) this->entries.push_back(Entry {.window = window, .region = region});
 	qCDebug(logInputMask) << "Mask for" << window << "set to" << region;
 
+	this->publish();
 	this->updateHookState();
 	this->refresh();
 }
@@ -142,13 +221,35 @@ void InputMaskTracker::remove(QWindow* window) {
 		setExStyleBits(hwndOf(window), WS_EX_TRANSPARENT, false);
 	}
 
+	this->publish();
 	this->updateHookState();
 }
 
 void InputMaskTracker::refresh() {
+	this->publish();
+
 	POINT cursor {};
 	if (!GetCursorPos(&cursor)) return;
 	this->evaluate(cursor);
+}
+
+void InputMaskTracker::publish() {
+	MaskList next;
+	next.reserve(static_cast<size_t>(this->entries.size()));
+
+	for (const auto& entry: this->entries) {
+		auto* window = entry.window.data();
+		auto* hwnd = hwndOf(window);
+		if (hwnd == nullptr) continue;
+
+		next.push_back({.hwnd = hwnd, .region = entry.region, .dpr = window->devicePixelRatio()});
+	}
+
+	auto current = gMasks.load(std::memory_order_acquire);
+	if (current == nullptr ? next.empty() : *current == next) return;
+
+	auto snapshot = next.empty() ? nullptr : std::make_shared<const MaskList>(std::move(next));
+	gMasks.store(std::move(snapshot), std::memory_order_release);
 }
 
 void InputMaskTracker::acquireButtonEvents() {
@@ -198,14 +299,31 @@ void InputMaskTracker::onCursorMoved() {
 	this->evaluate(cursor);
 }
 
+void InputMaskTracker::emitCursor(QPoint position) {
+	this->lastCursor = position;
+	emit this->cursorMoved(position);
+
+	if (this->hookRunning && this->cursorWatchers > 0) this->cursorTrailTimer.start();
+}
+
+void InputMaskTracker::onCursorTrail() {
+	if (!this->hookRunning || this->cursorWatchers <= 0) return;
+
+	auto position = QPoint(cursorX.load(), cursorY.load());
+	if (position != this->lastCursor) this->emitCursor(position);
+}
+
 void InputMaskTracker::evaluate(POINT cursor) {
-	if (this->cursorWatchers > 0) emit this->cursorMoved(QPoint(cursor.x, cursor.y));
+	if (this->cursorWatchers > 0) this->emitCursor(QPoint(cursor.x, cursor.y));
+
+	auto pruned = false;
 
 	for (auto it = this->entries.begin(); it != this->entries.end();) {
 		auto* window = it->window.data();
 
 		if (window == nullptr) {
 			it = this->entries.erase(it);
+			pruned = true;
 			continue;
 		}
 
@@ -224,12 +342,7 @@ void InputMaskTracker::evaluate(POINT cursor) {
 
 		RECT rect {};
 		if (GetWindowRect(hwnd, &rect) && PtInRect(&rect, cursor)) {
-			auto dpr = window->devicePixelRatio();
-			auto local = QPoint(
-			    static_cast<int>(std::floor((cursor.x - rect.left) / dpr)),
-			    static_cast<int>(std::floor((cursor.y - rect.top) / dpr))
-			);
-
+			auto local = localPoint(cursor, rect, window->devicePixelRatio());
 			auto through = !it->region.contains(local);
 			qCDebug(logInputMask) << "Cursor" << cursor.x << cursor.y << "local" << local << "in" << window
 			                      << (through ? "passes through" : "hits the mask");
@@ -238,6 +351,8 @@ void InputMaskTracker::evaluate(POINT cursor) {
 
 		++it;
 	}
+
+	if (pruned) this->publish();
 }
 
 void InputMaskTracker::updateHookState() {
@@ -250,6 +365,9 @@ void InputMaskTracker::updateHookState() {
 			this->hookFailed = true;
 		}
 	}
+
+	cursorWatched.store(this->hookRunning && this->cursorWatchers > 0);
+	if (this->cursorWatchers <= 0) this->cursorTrailTimer.stop();
 
 	if (needed && this->hookFailed && (!this->entries.isEmpty() || this->cursorWatchers > 0)
 	    && !this->pollTimer.isActive())
@@ -266,49 +384,67 @@ void InputMaskTracker::updateHookState() {
 bool InputMaskTracker::startHook() {
 	if (this->hookRunning) return true;
 
-	auto* ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-	if (ready == nullptr) return false;
-
+	this->hookGeneration++;
 	hookTarget.store(this->messageWindow);
-	hookInstalled.store(false);
-	this->hookThread = std::thread(&InputMaskTracker::hookThreadMain, ready);
-
-	WaitForSingleObject(ready, INFINITE);
-	CloseHandle(ready);
-
-	if (!hookInstalled.load()) {
-		this->hookThread.join();
-		return false;
-	}
+	hookThreadId.store(0);
+	hookStopRequested.store(false);
+	this->hookThread = std::thread(&InputMaskTracker::hookThreadMain, this->hookGeneration);
 
 	this->hookRunning = true;
-	qCDebug(logInputMask) << "Mouse hook installed.";
+	qCDebug(logInputMask) << "Mouse hook thread started.";
 	return true;
 }
 
 void InputMaskTracker::stopHook() {
 	if (!this->hookRunning) return;
 
-	PostThreadMessageW(hookThreadId.load(), WM_QUIT, 0, 0);
+	hookStopRequested.store(true);
+	auto threadId = hookThreadId.load();
+	if (threadId != 0) PostThreadMessageW(threadId, WM_QUIT, 0, 0);
+
 	this->hookThread.join();
 	this->hookRunning = false;
 	hookTarget.store(nullptr);
+	cursorWatched.store(false);
+	this->cursorTrailTimer.stop();
 }
 
-void InputMaskTracker::hookThreadMain(HANDLE readyEvent) {
+void InputMaskTracker::onHookFailed(DWORD error, quint32 generation) {
+	if (!this->hookRunning || generation != this->hookGeneration) return;
+
+	this->hookThread.join();
+	this->hookRunning = false;
+	this->hookFailed = true;
+	hookTarget.store(nullptr);
+	cursorWatched.store(false);
+	this->cursorTrailTimer.stop();
+
+	qCWarning(logInputMask).nospace()
+	    << "Mouse hook unavailable (error " << error << "), polling the cursor instead. "
+	    << "Mouse button presses and Super drags can't be observed.";
+
+	this->updateHookState();
+}
+
+void InputMaskTracker::hookThreadMain(quint32 generation) {
 	MSG msg {};
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 	hookThreadId.store(GetCurrentThreadId());
+	if (hookStopRequested.load()) return;
 
 	prioritizeInputThread(THREAD_PRIORITY_TIME_CRITICAL);
 
 	auto* hook =
 	    SetWindowsHookExW(WH_MOUSE_LL, &InputMaskTracker::mouseHookProc, GetModuleHandleW(nullptr), 0);
 
-	hookInstalled.store(hook != nullptr);
-	SetEvent(readyEvent);
+	if (hook == nullptr) {
+		auto error = GetLastError();
+		if (auto* target = hookTarget.load()) {
+			PostMessageW(target, WM_QS_HOOK_FAILED, error, static_cast<LPARAM>(generation));
+		}
 
-	if (hook == nullptr) return;
+		return;
+	}
 
 	while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
 		TranslateMessage(&msg);
@@ -326,11 +462,7 @@ LRESULT CALLBACK InputMaskTracker::mouseHookProc(int code, WPARAM wParam, LPARAM
 		cursorX.store(info->pt.x);
 		cursorY.store(info->pt.y);
 
-		if (!wakePending.exchange(true)) {
-			auto* target = hookTarget.load();
-			if (target != nullptr) PostMessageW(target, WM_QS_CURSOR_MOVED, 0, 0);
-			else wakePending.store(false);
-		}
+		if (cursorWakeDue() || masksNeedEvaluation(info->pt)) wakeTracker();
 
 		if (SuperDragManager::onMouseHook(wParam, info)) return 1;
 
@@ -362,6 +494,14 @@ InputMaskTracker::messageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 	if (msg == WM_QS_BUTTON_PRESSED) {
 		auto position = QPoint(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 		InputMaskTracker::instance()->onButtonPressed(position, static_cast<quint32>(wParam));
+		return 0;
+	}
+
+	if (msg == WM_QS_HOOK_FAILED) {
+		InputMaskTracker::instance()->onHookFailed(
+		    static_cast<DWORD>(wParam),
+		    static_cast<quint32>(lParam)
+		);
 		return 0;
 	}
 
