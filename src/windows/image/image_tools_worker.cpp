@@ -1,10 +1,12 @@
 #include "image_tools_worker.hpp"
 
+#include <qcoreapplication.h>
 #include <qdatetime.h>
 #include <qfileinfo.h>
 #include <qmetaobject.h>
 #include <qstring.h>
 
+#include "../../core/backgroundpool.hpp"
 #include "image_tools.hpp"
 
 namespace qs::windows::image {
@@ -47,6 +49,8 @@ void ImageToolsWorker::cmdLeastBusyRegion(
     int verticalPadding,
     bool busiest
 ) {
+	auto scope = BackgroundWorkScope();
+
 	QFileInfo info(imagePath);
 	auto mtimeMs = info.exists() ? info.lastModified().toMSecsSinceEpoch() : -1;
 	auto fileSize = info.exists() ? info.size() : -1;
@@ -89,8 +93,22 @@ void ImageToolsWorker::cmdLeastBusyRegion(
 	}
 
 	QMetaObject::invokeMethod(
-	    this->mFrontend,
-	    [frontend = this->mFrontend, requestId, result] { frontend->backendDone(requestId, result); },
+	    QCoreApplication::instance(),
+	    [frontend = this->mFrontend, requestId, result] {
+		    if (frontend) frontend->backendDone(requestId, result);
+	    },
+	    Qt::QueuedConnection
+	);
+}
+
+void ImageToolsWorker::cmdScheme(int requestId, const QString& imagePath) {
+	auto scheme = ImageTools::schemeForImage(imagePath);
+
+	QMetaObject::invokeMethod(
+	    QCoreApplication::instance(),
+	    [frontend = this->mFrontend, requestId, scheme] {
+		    if (frontend) frontend->backendSchemeDone(requestId, scheme);
+	    },
 	    Qt::QueuedConnection
 	);
 }

@@ -52,10 +52,14 @@ public:
 	    bool busiest
 	);
 
+	Q_INVOKABLE int requestSchemeForImage(const QString& imagePath);
+
 	void backendDone(int requestId, const QVariantMap& result);
+	void backendSchemeDone(int requestId, const QString& scheme);
 
 signals:
 	void leastBusyRegionReady(int requestId, const QVariantMap& result);
+	void schemeForImageReady(int requestId, const QString& scheme);
 
 private:
 	std::unique_ptr<ImageToolsBackend> mBackend;

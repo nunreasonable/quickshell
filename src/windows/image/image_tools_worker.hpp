@@ -3,6 +3,7 @@
 #include <qhash.h>
 #include <qlist.h>
 #include <qobject.h>
+#include <qpointer.h>
 #include <qstring.h>
 #include <qtclasshelpermacros.h>
 #include <qtmetamacros.h>
@@ -32,10 +33,12 @@ public:
 	    bool busiest
 	);
 
+	void cmdScheme(int requestId, const QString& imagePath);
+
 private:
 	static constexpr qsizetype MaxCacheEntries = 64;
 
-	ImageTools* mFrontend;
+	QPointer<ImageTools> mFrontend;
 	QHash<QString, QVariantMap> mCache;
 	QList<QString> mCacheOrder;
 };

@@ -8,13 +8,20 @@
 #include <vector>
 
 #include <qcolor.h>
+#include <qdatetime.h>
+#include <qfileinfo.h>
+#include <qhash.h>
 #include <qimage.h>
+#include <qimageiohandler.h>
 #include <qimagereader.h>
+#include <qlist.h>
 #include <qloggingcategory.h>
+#include <qmutex.h>
 #include <qpoint.h>
 #include <qrect.h>
 #include <qrgb.h>
 #include <qsize.h>
+#include <qvariant.h>
 
 #include "image_tools_backend.hpp"
 
@@ -23,8 +30,114 @@ namespace qs::windows::image {
 namespace {
 Q_LOGGING_CATEGORY(logImageTools, "quickshell.windows.imagetools", QtWarningMsg);
 
+constexpr int SCHEME_SAMPLE_DIM = 128;
+constexpr qsizetype MAX_CACHED_RESULTS = 32;
+
 QString toHex(int r, int g, int b) {
 	return QColor(std::clamp(r, 0, 255), std::clamp(g, 0, 255), std::clamp(b, 0, 255)).name();
+}
+
+class ResultCache {
+public:
+	std::optional<QVariant> find(const QString& key) {
+		if (key.isEmpty()) return std::nullopt;
+
+		QMutexLocker locker(&this->mutex);
+		auto it = this->values.constFind(key);
+		if (it == this->values.constEnd()) return std::nullopt;
+		return it.value();
+	}
+
+	void insert(const QString& key, const QVariant& value) {
+		if (key.isEmpty()) return;
+
+		QMutexLocker locker(&this->mutex);
+		if (this->values.contains(key)) return;
+
+		this->values.insert(key, value);
+		this->order.append(key);
+		if (this->order.size() > MAX_CACHED_RESULTS) this->values.remove(this->order.takeFirst());
+	}
+
+private:
+	QMutex mutex;
+	QHash<QString, QVariant> values;
+	QList<QString> order;
+};
+
+ResultCache& schemeCache() {
+	static auto* cache = new ResultCache(); // NOLINT
+	return *cache;
+}
+
+ResultCache& textColorCache() {
+	static auto* cache = new ResultCache(); // NOLINT
+	return *cache;
+}
+
+QString fileCacheKey(const QString& path) {
+	auto info = QFileInfo(path);
+	if (!info.isFile()) return QString();
+
+	return path + u'|' + QString::number(info.lastModified().toMSecsSinceEpoch()) + u'|'
+	     + QString::number(info.size());
+}
+
+QSize fitWithin(const QSize& size, int maxDim) {
+	auto scale = static_cast<double>(maxDim) / std::max(size.width(), size.height());
+	auto newW = std::max(1, static_cast<int>(size.width() * scale));
+	auto newH = std::max(1, static_cast<int>(size.height() * scale));
+	return {newW, newH};
+}
+
+QImage readDownscaled(const QString& path, int maxDim) {
+	auto reader = QImageReader(path);
+	auto size = reader.size();
+	auto prescaled = size.isValid() && std::max(size.width(), size.height()) > maxDim;
+	if (prescaled) reader.setScaledSize(fitWithin(size, maxDim));
+
+	auto image = reader.read();
+	if (image.isNull()) return image;
+
+	image = image.convertToFormat(QImage::Format_RGB32);
+	if (!prescaled && std::max(image.width(), image.height()) > maxDim) {
+		image = image.scaled(
+		    fitWithin(image.size(), maxDim),
+		    Qt::IgnoreAspectRatio,
+		    Qt::SmoothTransformation
+		);
+	}
+
+	return image;
+}
+
+QImage readForScreen(const QString& path, int targetW, int targetH) {
+	auto reader = QImageReader(path);
+
+	if (targetW > 0 && targetH > 0) {
+		auto size = reader.size();
+		auto rotated = reader.autoTransform()
+		            && reader.transformation().testFlag(QImageIOHandler::TransformationRotate90);
+		if (rotated) size.transpose();
+
+		if (size.isValid() && !size.isEmpty()) {
+			auto scale = std::max(
+			    static_cast<double>(targetW) / size.width(),
+			    static_cast<double>(targetH) / size.height()
+			);
+
+			if (scale < 1.0) {
+				auto scaled = QSize(
+				    std::max(1, static_cast<int>(std::lround(size.width() * scale))),
+				    std::max(1, static_cast<int>(std::lround(size.height() * scale)))
+				);
+				if (rotated) scaled.transpose();
+				reader.setScaledSize(scaled);
+			}
+		}
+	}
+
+	return reader.read();
 }
 
 QImage scaleAndCropToScreen(const QImage& src, int targetW, int targetH) {
@@ -145,7 +258,7 @@ QVariantMap ImageTools::leastBusyRegion(
 ) {
 	if (imagePath.isEmpty()) return QVariantMap {{"error", QStringLiteral("No image")}};
 
-	QImage original(imagePath);
+	auto original = readForScreen(imagePath, screenWidth, screenHeight);
 	if (original.isNull()) {
 		qCWarning(logImageTools) << "leastBusyRegion: could not load" << imagePath;
 		return QVariantMap {{"error", QStringLiteral("Image not found")}};
@@ -220,7 +333,10 @@ QVariantMap ImageTools::leastBusyRegion(
 }
 
 QVariantMap ImageTools::textColorFromImage(const QString& imagePath) {
-	QImage img(imagePath);
+	auto cacheKey = fileCacheKey(imagePath);
+	if (auto cached = textColorCache().find(cacheKey)) return cached->toMap();
+
+	auto img = QImageReader(imagePath).read();
 	if (img.isNull()) {
 		qCWarning(logImageTools) << "textColorFromImage: could not load" << imagePath;
 		return QVariantMap {{"error", QStringLiteral("Could not decode image data")}};
@@ -252,8 +368,6 @@ QVariantMap ImageTools::textColorFromImage(const QString& imagePath) {
 
 	std::vector<double> distances;
 	distances.reserve(static_cast<size_t>(w) * h);
-	std::vector<QRgb> pixels;
-	pixels.reserve(static_cast<size_t>(w) * h);
 
 	for (int y = 0; y < h; y++) {
 		const auto* line = reinterpret_cast<const QRgb*>(img.constScanLine(y));
@@ -261,33 +375,39 @@ QVariantMap ImageTools::textColorFromImage(const QString& imagePath) {
 			auto px = line[x];
 			double dr = qRed(px) - bgR, dg = qGreen(px) - bgG, db = qBlue(px) - bgB;
 			distances.push_back(std::sqrt(dr * dr + dg * dg + db * db));
-			pixels.push_back(px);
 		}
 	}
 
-	std::vector<double> sortedDistances = distances;
-	std::sort(sortedDistances.begin(), sortedDistances.end());
-	double rank = 0.95 * (static_cast<double>(sortedDistances.size()) - 1);
+	std::vector<double> ranked = distances;
+	double rank = 0.95 * (static_cast<double>(ranked.size()) - 1);
 	auto lo = static_cast<size_t>(std::floor(rank));
 	auto hi = static_cast<size_t>(std::ceil(rank));
-	double threshold = sortedDistances[lo]
-	                  + (sortedDistances[hi] - sortedDistances[lo]) * (rank - static_cast<double>(lo));
+	auto loIt = ranked.begin() + static_cast<std::ptrdiff_t>(lo);
+	std::nth_element(ranked.begin(), loIt, ranked.end());
+	auto loValue = *loIt;
+	auto hiValue = hi == lo ? loValue : *std::min_element(loIt + 1, ranked.end());
+	double threshold = loValue + (hiValue - loValue) * (rank - static_cast<double>(lo));
 
 	std::vector<int> tr, tg, tb;
-	for (size_t i = 0; i < pixels.size(); i++) {
-		if (distances[i] >= threshold) {
-			tr.push_back(qRed(pixels[i]));
-			tg.push_back(qGreen(pixels[i]));
-			tb.push_back(qBlue(pixels[i]));
+	size_t index = 0;
+	for (int y = 0; y < h; y++) {
+		const auto* line = reinterpret_cast<const QRgb*>(img.constScanLine(y));
+		for (int x = 0; x < w; x++, index++) {
+			if (distances[index] < threshold) continue;
+			tr.push_back(qRed(line[x]));
+			tg.push_back(qGreen(line[x]));
+			tb.push_back(qBlue(line[x]));
 		}
 	}
 
 	int textR = 255, textG = 255, textB = 255;
 	if (!tr.empty()) {
 		auto median = [](std::vector<int> v) {
-			std::sort(v.begin(), v.end());
 			auto n = v.size();
-			return n % 2 == 0 ? (v[n / 2 - 1] + v[n / 2]) / 2 : v[n / 2];
+			auto mid = v.begin() + static_cast<std::ptrdiff_t>(n / 2);
+			std::nth_element(v.begin(), mid, v.end());
+			if (n % 2 != 0) return *mid;
+			return (*std::max_element(v.begin(), mid) + *mid) / 2;
 		};
 		textR = median(tr);
 		textG = median(tg);
@@ -297,24 +417,18 @@ QVariantMap ImageTools::textColorFromImage(const QString& imagePath) {
 	QVariantMap result;
 	result["background"] = toHex(static_cast<int>(bgR), static_cast<int>(bgG), static_cast<int>(bgB));
 	result["text"] = toHex(textR, textG, textB);
+	textColorCache().insert(cacheKey, result);
 	return result;
 }
 
 QString ImageTools::schemeForImage(const QString& imagePath) {
-	QImage img(imagePath);
+	auto cacheKey = fileCacheKey(imagePath);
+	if (auto cached = schemeCache().find(cacheKey)) return cached->toString();
+
+	auto img = readDownscaled(imagePath, SCHEME_SAMPLE_DIM);
 	if (img.isNull()) {
 		qCWarning(logImageTools) << "schemeForImage: could not load" << imagePath;
 		return QStringLiteral("scheme-tonal-spot");
-	}
-
-	img = img.convertToFormat(QImage::Format_RGB32);
-
-	constexpr int maxDim = 128;
-	if (std::max(img.width(), img.height()) > maxDim) {
-		auto scale = static_cast<double>(maxDim) / std::max(img.width(), img.height());
-		auto newW = std::max(1, static_cast<int>(img.width() * scale));
-		auto newH = std::max(1, static_cast<int>(img.height() * scale));
-		img = img.scaled(newW, newH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 	}
 
 	auto w = img.width();
@@ -348,7 +462,10 @@ QString ImageTools::schemeForImage(const QString& imagePath) {
 	auto colorfulness = std::sqrt(stdRg * stdRg + stdYb * stdYb)
 	                   + (0.3 * std::sqrt(meanRg * meanRg + meanYb * meanYb));
 
-	return colorfulness < 40 ? QStringLiteral("scheme-neutral") : QStringLiteral("scheme-tonal-spot");
+	auto scheme =
+	    colorfulness < 40 ? QStringLiteral("scheme-neutral") : QStringLiteral("scheme-tonal-spot");
+	schemeCache().insert(cacheKey, scheme);
+	return scheme;
 }
 
 QSize ImageTools::imageSize(const QString& imagePath) {
@@ -386,8 +503,18 @@ int ImageTools::requestLeastBusyRegion(
 	return requestId;
 }
 
+int ImageTools::requestSchemeForImage(const QString& imagePath) {
+	auto requestId = this->mNextRequestId++;
+	this->mBackend->requestScheme(requestId, imagePath);
+	return requestId;
+}
+
 void ImageTools::backendDone(int requestId, const QVariantMap& result) {
 	emit this->leastBusyRegionReady(requestId, result);
+}
+
+void ImageTools::backendSchemeDone(int requestId, const QString& scheme) {
+	emit this->schemeForImageReady(requestId, scheme);
 }
 
 } // namespace qs::windows::image

@@ -31,9 +31,14 @@ public:
 	    bool busiest
 	);
 
+	void requestScheme(int requestId, const QString& imagePath);
+
 private:
+	void ensureStarted();
+
 	QThread mThread;
 	ImageToolsWorker* mWorker = nullptr;
+	bool mStarted = false;
 };
 
 } // namespace qs::windows::image

@@ -13,12 +13,13 @@ namespace qs::windows::image {
 ImageToolsBackend::ImageToolsBackend(ImageTools* frontend) {
 	this->mWorker = new ImageToolsWorker(frontend);
 	this->mWorker->moveToThread(&this->mThread);
-	this->mThread.start();
 }
 
 ImageToolsBackend::~ImageToolsBackend() {
-	this->mThread.quit();
-	this->mThread.wait();
+	if (this->mThread.isRunning()) {
+		this->mThread.quit();
+		this->mThread.wait();
+	}
 	delete this->mWorker;
 }
 
@@ -33,6 +34,8 @@ void ImageToolsBackend::requestLeastBusyRegion(
     int verticalPadding,
     bool busiest
 ) {
+	this->ensureStarted();
+
 	auto* worker = this->mWorker;
 	QMetaObject::invokeMethod(
 	    worker,
@@ -60,6 +63,24 @@ void ImageToolsBackend::requestLeastBusyRegion(
 	    },
 	    Qt::QueuedConnection
 	);
+}
+
+void ImageToolsBackend::requestScheme(int requestId, const QString& imagePath) {
+	this->ensureStarted();
+
+	auto* worker = this->mWorker;
+	QMetaObject::invokeMethod(
+	    worker,
+	    [worker, requestId, imagePath] { worker->cmdScheme(requestId, imagePath); },
+	    Qt::QueuedConnection
+	);
+}
+
+void ImageToolsBackend::ensureStarted() {
+	if (this->mStarted) return;
+
+	this->mStarted = true;
+	this->mThread.start(QThread::LowPriority);
 }
 
 } // namespace qs::windows::image
