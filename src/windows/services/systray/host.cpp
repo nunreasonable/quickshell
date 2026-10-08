@@ -9,16 +9,19 @@
 
 #include <qcoreapplication.h>
 #include <qfileinfo.h>
+#include <qhash.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
 #include <qnamespace.h>
 #include <qobject.h>
+#include <qpointer.h>
 #include <qstring.h>
 #include <qstringbuilder.h>
 #include <qtenvironmentvariables.h>
 #include <quuid.h>
 
 #include "../../../core/logcat.hpp"
+#include "../../startup.hpp"
 #include "hook.hpp"
 #include "item.hpp"
 
@@ -28,7 +31,7 @@ namespace {
 
 QS_LOGGING_CATEGORY(logTrayHost, "quickshell.windows.systray", QtWarningMsg);
 
-constexpr int PRUNE_INTERVAL_MS = 2000;
+constexpr int PRUNE_INTERVAL_MS = 10000;
 constexpr ULONGLONG DELETION_MEMORY_MS = 10000;
 
 constexpr int RESYNC_DELAY_MS = 300;
@@ -182,10 +185,7 @@ TrayHost::TrayHost() {
 		QObject::connect(&this->pollTimer, &QTimer::timeout, this, [this]() {
 			if (!this->snapshotRunning) this->startSnapshot();
 		});
-		this->pollTimer.start();
 	}
-
-	TrayHook::start(this->sink, missedTraffic, brief);
 
 	QObject::connect(
 	    QCoreApplication::instance(),
@@ -194,7 +194,11 @@ TrayHost::TrayHost() {
 	    []() { TrayHook::stop(); }
 	);
 
-	this->startSnapshot();
+	startup::afterFirstFrame(this, [this, missedTraffic, brief]() {
+		TrayHook::start(this->sink, missedTraffic, brief);
+		if (brief) this->pollTimer.start();
+		this->startSnapshot();
+	});
 }
 
 void TrayHost::apply(const TrayIconMessage& message) {
@@ -248,7 +252,7 @@ void TrayHost::add(const TrayIconMessage& message) {
 	auto id = known != nullptr ? QString::fromLatin1(known->id) : exeName;
 	if (id.isEmpty()) id = QStringLiteral("unknown");
 
-	auto title = known != nullptr ? QString::fromLatin1(known->title) : fileDescription(exePath);
+	auto title = known != nullptr ? QString::fromLatin1(known->title) : this->titles.value(exePath);
 	if (title.isEmpty()) title = exeName;
 
 	auto* item = new SystemTrayItem(message.hwnd, message.uid, message.guid, this);
@@ -277,6 +281,7 @@ void TrayHost::add(const TrayIconMessage& message) {
 	emit this->itemAdded(item);
 
 	if (!item->hasCallback()) this->recoverTimer.start();
+	if (known == nullptr) this->requestTitle(exePath);
 }
 
 void TrayHost::remove(SystemTrayItem* item) {
@@ -421,6 +426,53 @@ void TrayHost::onToolbarData(const std::vector<ExplorerIconData>& icons) {
 		this->recoverAgain = false;
 		this->recoverCallbacks();
 	}
+}
+
+void TrayHost::requestTitle(const QString& exePath) {
+	if (exePath.isEmpty() || this->titles.contains(exePath)) return;
+	if (this->titleQueue.contains(exePath)) return;
+
+	this->titleQueue.append(exePath);
+	if (!this->titlesReading) this->readTitles();
+}
+
+void TrayHost::readTitles() {
+	this->titlesReading = true;
+
+	std::thread([self = QPointer(this), paths = this->titleQueue]() {
+		SetThreadDescription(GetCurrentThread(), L"qs tray titles");
+
+		QHash<QString, QString> found;
+		for (const auto& path: paths) {
+			found.insert(path, fileDescription(path));
+		}
+
+		QMetaObject::invokeMethod(
+		    QCoreApplication::instance(),
+		    [self, found = std::move(found)]() {
+			    if (self) self->onTitles(found);
+		    },
+		    Qt::QueuedConnection
+		);
+	}).detach();
+}
+
+void TrayHost::onTitles(const QHash<QString, QString>& found) {
+	this->titlesReading = false;
+
+	for (const auto& [path, title]: found.asKeyValueRange()) {
+		this->titleQueue.removeOne(path);
+		this->titles.insert(path, title);
+		if (title.isEmpty()) continue;
+
+		for (auto* item: this->mItems) {
+			if (item->executable() == path && knownIcon(item->iconGuid()) == nullptr) {
+				item->setTitle(title);
+			}
+		}
+	}
+
+	if (!this->titleQueue.isEmpty()) this->readTitles();
 }
 
 SystemTrayItem* TrayHost::find(HWND hwnd, UINT uid, const QUuid& guid) const {

@@ -89,12 +89,14 @@ public:
 	[[nodiscard]] QUuid iconGuid() const { return this->guid; }
 	[[nodiscard]] bool ownerAlive() const;
 	[[nodiscard]] bool hasCallback() const { return this->callbackMessage != 0; }
+	[[nodiscard]] const QString& executable() const { return this->exePath; }
 
 	void update(const TrayIconMessage& message);
 	void applyExplorerData(UINT callbackMessage, UINT version);
 	void refreshFromExplorer(const TrayIconMessage& message);
 	void setIdentity(const QString& id, const QString& title, const QString& exePath);
 	void setCategory(Category::Enum category) { this->bCategory = category; }
+	void setTitle(const QString& title) { this->bTitle = title; }
 
 	// NOLINTBEGIN(readability-convert-member-functions-to-static)
 	[[nodiscard]] bool hasMenu() const { return true; }

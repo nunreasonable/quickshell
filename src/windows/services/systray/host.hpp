@@ -4,8 +4,10 @@
 
 #include <qt_windows.h>
 
+#include <qhash.h>
 #include <qlist.h>
 #include <qobject.h>
+#include <qstring.h>
 #include <qtclasshelpermacros.h>
 #include <qtimer.h>
 #include <qtmetamacros.h>
@@ -41,6 +43,9 @@ private:
 	void onSnapshotDone(bool ok);
 	void recoverCallbacks();
 	void onToolbarData(const std::vector<ExplorerIconData>& icons);
+	void requestTitle(const QString& exePath);
+	void readTitles();
+	void onTitles(const QHash<QString, QString>& found);
 	[[nodiscard]] SystemTrayItem* find(HWND hwnd, UINT uid, const QUuid& guid) const;
 	[[nodiscard]] QString uniqueId(const QString& base, UINT uid) const;
 	[[nodiscard]] bool deletedRecently(const TrayIconMessage& message);
@@ -68,6 +73,10 @@ private:
 	QTimer recoverTimer;
 	bool toolbarReading = false;
 	bool recoverAgain = false;
+
+	QHash<QString, QString> titles;
+	QList<QString> titleQueue;
+	bool titlesReading = false;
 };
 
 } // namespace qs::windows::services::systray

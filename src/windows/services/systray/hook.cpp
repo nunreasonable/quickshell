@@ -41,6 +41,10 @@ constexpr DWORD NOTIFYICON_SIGNATURE = 0x34753423;
 constexpr UINT_PTR RAISE_TIMER = 1;
 constexpr UINT_PTR ANNOUNCE_TIMER = 2;
 constexpr UINT RAISE_INTERVAL_MS = 100;
+constexpr UINT IDLE_RAISE_INTERVAL_MS = 1000;
+constexpr ULONGLONG ALERT_MS = 10000;
+constexpr ULONGLONG PROPS_SYNC_MS = 1000;
+constexpr ULONGLONG IDLE_PROPS_SYNC_MS = 5000;
 constexpr UINT ANNOUNCE_DELAY_MS = 1500;
 constexpr UINT FORWARD_TIMEOUT_MS = 4000;
 constexpr ULONGLONG READD_GRACE_MS = 30000;
@@ -119,6 +123,8 @@ private:
 	void stepBack(HWND first);
 	void syncGeometry();
 	void mirrorProps();
+	void stayAlert();
+	void paceRaises();
 
 	TrayIconSink sink;
 	std::function<void()> missed;
@@ -129,6 +135,8 @@ private:
 	UINT taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
 	ULONGLONG readdGraceUntil = 0;
 	ULONGLONG propsSyncedAt = 0;
+	ULONGLONG alertUntil = 0;
+	UINT raiseInterval = 0;
 	std::vector<std::wstring> mirrored;
 	bool probing = false;
 	bool probeSeen = false;
@@ -262,7 +270,7 @@ bool HookWindow::create() {
 
 	this->syncGeometry();
 	this->keepFirst(false);
-	SetTimer(this->hwnd, RAISE_TIMER, RAISE_INTERVAL_MS, nullptr);
+	this->stayAlert();
 
 	return true;
 }
@@ -291,6 +299,7 @@ void HookWindow::probeTitle() {
 void HookWindow::announce() {
 	this->readdGraceUntil = GetTickCount64() + READD_GRACE_MS;
 	stayInFront(BRIEF_FRONT_MS);
+	this->stayAlert();
 	this->keepFirst(false);
 
 	struct Broadcast {
@@ -325,6 +334,7 @@ void HookWindow::announceQueued() {
 	if (owners.empty()) return;
 
 	stayInFront(BRIEF_FRONT_MS);
+	this->stayAlert();
 	this->keepFirst();
 	this->readdGraceUntil = GetTickCount64() + READD_GRACE_MS;
 
@@ -357,8 +367,10 @@ LRESULT HookWindow::handle(UINT msg, WPARAM wParam, LPARAM lParam) {
 	case WM_COPYDATA: return this->onCopyData(wParam, lParam);
 	case WM_TIMER:
 		if (wParam == RAISE_TIMER) {
+			if (trayHookYielding()) this->stayAlert();
 			this->keepFirst();
 			this->syncGeometry();
+			this->paceRaises();
 		} else if (wParam == ANNOUNCE_TIMER) {
 			KillTimer(this->hwnd, ANNOUNCE_TIMER);
 			this->announce();
@@ -466,6 +478,7 @@ void HookWindow::onTaskbarCreated() {
 
 	qCInfo(logTrayHook) << "Explorer restarted, asking apps for their tray icons again";
 	stayInFront(ANNOUNCE_DELAY_MS + BRIEF_FRONT_MS);
+	this->stayAlert();
 	this->propsSyncedAt = 0;
 	this->lastRect = {};
 	this->lastNotifyRect = {};
@@ -531,6 +544,7 @@ void HookWindow::keepFirst(bool report) {
 
 	qCDebug(logTrayHook) << "Explorer's tray window went above ours, raising";
 
+	this->stayAlert();
 	SetWindowPos(
 	    this->hwnd,
 	    HWND_TOPMOST,
@@ -601,11 +615,29 @@ void HookWindow::mirrorProps() {
 	this->propsSyncedAt = GetTickCount64();
 }
 
+void HookWindow::stayAlert() {
+	this->alertUntil = GetTickCount64() + ALERT_MS;
+	if (this->raiseInterval == RAISE_INTERVAL_MS) return;
+
+	this->raiseInterval = RAISE_INTERVAL_MS;
+	SetTimer(this->hwnd, RAISE_TIMER, RAISE_INTERVAL_MS, nullptr);
+}
+
+void HookWindow::paceRaises() {
+	auto interval = GetTickCount64() < this->alertUntil ? RAISE_INTERVAL_MS : IDLE_RAISE_INTERVAL_MS;
+	if (interval == this->raiseInterval) return;
+
+	this->raiseInterval = interval;
+	SetTimer(this->hwnd, RAISE_TIMER, interval, nullptr);
+}
+
 void HookWindow::syncGeometry() {
 	auto* target = this->explorerWindow();
 	if (target == nullptr) return;
 
-	if (GetTickCount64() - this->propsSyncedAt >= 1000) this->mirrorProps();
+	auto now = GetTickCount64();
+	auto propsEvery = now < this->alertUntil ? PROPS_SYNC_MS : IDLE_PROPS_SYNC_MS;
+	if (now - this->propsSyncedAt >= propsEvery) this->mirrorProps();
 
 	RECT rect {};
 	if (!GetWindowRect(target, &rect)) return;
