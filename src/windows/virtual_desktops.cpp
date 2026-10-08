@@ -8,6 +8,7 @@
 #include <qobject.h>
 #include <qstring.h>
 #include <qthread.h>
+#include <qtimer.h>
 #include <qtypes.h>
 
 #include "startup.hpp"
@@ -51,6 +52,7 @@ constexpr UINT ACCESSOR_MESSAGE = WM_APP + 0x100;
 constexpr const wchar_t* LISTENER_CLASS = L"QuickshellVirtualDesktops";
 
 constexpr qsizetype MAX_DESKTOPS = 20;
+constexpr int CLOAK_REFRESH_DELAY_MS = 250;
 
 bool readBinary(HKEY key, const wchar_t* name, QByteArray& out) {
 	DWORD type = 0;
@@ -180,28 +182,12 @@ VirtualDesktops* VirtualDesktops::instance() {
 VirtualDesktops::VirtualDesktops() {
 	CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-	static constexpr GUID clsid = {
-	    0xaa509086,
-	    0x5ca9,
-	    0x4c25,
-	    {0x8f, 0x95, 0x58, 0x9d, 0x3c, 0x07, 0xb4, 0x8a}
-	};
-
-	auto hr = CoCreateInstance(
-	    clsid,
-	    nullptr,
-	    CLSCTX_ALL,
-	    __uuidof(IVirtualDesktopManager),
-	    reinterpret_cast<void**>(&this->manager)
-	);
-
-	if (FAILED(hr)) {
-		qCWarning(logDesktops) << "IVirtualDesktopManager unavailable:" << Qt::hex << hr;
-		this->manager = nullptr;
-	}
-
 	ProcessIdToSessionId(GetCurrentProcessId(), &this->sessionId);
-	this->refresh();
+	this->refresh(true);
+
+	this->cloakTimer.setSingleShot(true);
+	this->cloakTimer.setInterval(CLOAK_REFRESH_DELAY_MS);
+	QObject::connect(&this->cloakTimer, &QTimer::timeout, this, [this]() { this->refresh(); });
 
 	startup::afterFirstFrame(this, [this]() {
 		this->loadAccessor();
@@ -212,7 +198,9 @@ VirtualDesktops::VirtualDesktops() {
 
 	auto sessionKey = QString::fromWCharArray(SESSION_KEY_FORMAT).arg(this->sessionId);
 	this->watcher = new RegistryWatcher({QString::fromWCharArray(DESKTOPS_KEY), sessionKey}, this);
-	QObject::connect(this->watcher, &RegistryWatcher::changed, this, &VirtualDesktops::refresh);
+	QObject::connect(this->watcher, &RegistryWatcher::changed, this, [this]() {
+		this->refresh(true);
+	});
 	this->watcher->start();
 
 	if (auto* app = QCoreApplication::instance()) {
@@ -231,7 +219,7 @@ VirtualDesktops::~VirtualDesktops() {
 		DestroyWindow(this->listener);
 	}
 
-	if (this->manager != nullptr) this->manager->Release();
+	if (this->mManager != nullptr) this->mManager->Release();
 	if (this->accessor.module != nullptr) FreeLibrary(this->accessor.module);
 }
 
@@ -408,7 +396,12 @@ bool VirtualDesktops::readRegistry(QList<GUID>& ids, GUID& current) const {
 	return true;
 }
 
-void VirtualDesktops::refresh() {
+void VirtualDesktops::noteCloakChange() {
+	if (this->listener != nullptr && this->accessor.loaded) return;
+	if (!this->cloakTimer.isActive()) this->cloakTimer.start();
+}
+
+void VirtualDesktops::refresh(bool rereadNames) {
 	QList<GUID> ids;
 	GUID current {};
 
@@ -431,8 +424,18 @@ void VirtualDesktops::refresh() {
 
 	if (ids.isEmpty()) ids.append(GUID {});
 
+	auto sameIds = !rereadNames && ids.length() == this->mDesktops.length();
+	for (qsizetype i = 0; sameIds && i < ids.length(); i++) {
+		sameIds = IsEqualGUID(ids[i], this->mDesktops[i].id);
+	}
+
 	QList<Desktop> desktops;
-	for (const auto& id: ids) desktops.append(Desktop {.id = id, .name = this->readDesktopName(id)});
+	desktops.reserve(ids.length());
+
+	for (qsizetype i = 0; i < ids.length(); i++) {
+		auto name = sameIds ? this->mDesktops[i].name : this->readDesktopName(ids[i]);
+		desktops.append(Desktop {.id = ids[i], .name = name});
+	}
 
 	auto currentIndex = qsizetype(-1);
 	for (qsizetype i = 0; i < desktops.length(); i++) {
@@ -491,10 +494,38 @@ qsizetype VirtualDesktops::indexOf(const GUID& id) const {
 	return -1;
 }
 
+IVirtualDesktopManager* VirtualDesktops::manager() const {
+	if (this->managerTried) return this->mManager;
+	this->managerTried = true;
+
+	static constexpr GUID clsid = {
+	    0xaa509086,
+	    0x5ca9,
+	    0x4c25,
+	    {0x8f, 0x95, 0x58, 0x9d, 0x3c, 0x07, 0xb4, 0x8a}
+	};
+
+	auto hr = CoCreateInstance(
+	    clsid,
+	    nullptr,
+	    CLSCTX_ALL,
+	    __uuidof(IVirtualDesktopManager),
+	    reinterpret_cast<void**>(&this->mManager)
+	);
+
+	if (FAILED(hr)) {
+		qCWarning(logDesktops) << "IVirtualDesktopManager unavailable:" << Qt::hex << hr;
+		this->mManager = nullptr;
+	}
+
+	return this->mManager;
+}
+
 GUID VirtualDesktops::windowDesktopId(HWND hwnd) const {
 	GUID id {};
-	if (this->manager == nullptr || hwnd == nullptr) return id;
-	if (FAILED(this->manager->GetWindowDesktopId(hwnd, &id))) return GUID {};
+	auto* manager = this->manager();
+	if (manager == nullptr || hwnd == nullptr) return id;
+	if (FAILED(manager->GetWindowDesktopId(hwnd, &id))) return GUID {};
 	return id;
 }
 
@@ -512,9 +543,10 @@ qsizetype VirtualDesktops::windowDesktopIndex(HWND hwnd) const {
 }
 
 bool VirtualDesktops::isWindowOnCurrent(HWND hwnd) const {
-	if (this->manager == nullptr || hwnd == nullptr) return true;
+	auto* manager = this->manager();
+	if (manager == nullptr || hwnd == nullptr) return true;
 	BOOL onCurrent = TRUE;
-	if (FAILED(this->manager->IsWindowOnCurrentVirtualDesktop(hwnd, &onCurrent))) return true;
+	if (FAILED(manager->IsWindowOnCurrentVirtualDesktop(hwnd, &onCurrent))) return true;
 	return onCurrent != FALSE;
 }
 
@@ -621,8 +653,10 @@ bool VirtualDesktops::removeDesktop(qsizetype index, qsizetype fallback) {
 bool VirtualDesktops::moveWindow(HWND hwnd, qsizetype index) {
 	if (hwnd == nullptr || index < 0 || index >= this->count()) return false;
 
-	if (isOwnWindow(hwnd) && this->manager != nullptr) {
-		return SUCCEEDED(this->manager->MoveWindowToDesktop(hwnd, this->mDesktops[index].id));
+	if (isOwnWindow(hwnd)) {
+		if (auto* manager = this->manager()) {
+			return SUCCEEDED(manager->MoveWindowToDesktop(hwnd, this->mDesktops[index].id));
+		}
 	}
 
 	if (this->accessor.loaded) {

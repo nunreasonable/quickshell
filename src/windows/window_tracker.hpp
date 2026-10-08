@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include <qt_windows.h>
 
 #include <qhash.h>
@@ -20,6 +22,12 @@ namespace qs::windows {
 
 class WindowTracker;
 class VirtualDesktops;
+
+struct WindowEvent {
+	DWORD event = 0;
+	HWND hwnd = nullptr;
+	DWORD time = 0;
+};
 
 class TrackedWindow: public QObject {
 	Q_OBJECT;
@@ -88,7 +96,7 @@ private:
 	void refreshIdentity();
 	void refreshTitle();
 	void refreshState();
-	void refreshDesktop();
+	void refreshDesktop(bool askShell);
 
 	WindowTracker* tracker;
 	HWND mHwnd;
@@ -141,6 +149,7 @@ signals:
 	void flushed();
 	void moveSizeStarted(TrackedWindow* window);
 	void moveSizeEnded(TrackedWindow* window);
+	void foregroundChanged(HWND hwnd, quint32 time);
 
 private:
 	explicit WindowTracker();
@@ -152,10 +161,11 @@ private:
 		bool title = false;
 		bool state = false;
 		bool desktop = false;
+		bool askShell = false;
 	};
 
 	void startEventThread();
-	void onEvent(DWORD event, HWND hwnd);
+	void onEvent(DWORD event, HWND hwnd, DWORD time);
 	void schedule();
 	void flush();
 
@@ -176,12 +186,13 @@ private:
 
 	QHash<HWND, Dirty> dirty;
 	QSet<HWND> candidates;
+	QSet<HWND> moving;
 	bool foregroundDirty = false;
-	bool desktopsDirty = false;
 	QTimer flushTimer;
 	QTimer sweepTimer;
 
 	QHash<HMONITOR, QScreen*> screensByMonitor;
+	std::vector<WindowEvent> spareEvents;
 };
 
 } // namespace qs::windows

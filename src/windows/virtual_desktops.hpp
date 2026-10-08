@@ -7,6 +7,7 @@
 #include <qstring.h>
 #include <qtclasshelpermacros.h>
 #include <qthread.h>
+#include <qtimer.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
 
@@ -63,7 +64,8 @@ public:
 	bool pinWindow(HWND hwnd, bool pinned);
 	[[nodiscard]] bool isWindowPinned(HWND hwnd) const;
 
-	void refresh();
+	void refresh(bool rereadNames = false);
+	void noteCloakChange();
 
 	static QString guidToString(const GUID& guid);
 
@@ -77,6 +79,7 @@ private:
 	~VirtualDesktops() override;
 	Q_DISABLE_COPY_MOVE(VirtualDesktops);
 
+	[[nodiscard]] IVirtualDesktopManager* manager() const;
 	void loadAccessor();
 	void installListener();
 	bool readRegistry(QList<GUID>& ids, GUID& current) const;
@@ -95,9 +98,11 @@ private:
 	GUID mCurrentId {};
 	DWORD sessionId = 0;
 
-	IVirtualDesktopManager* manager = nullptr;
+	mutable IVirtualDesktopManager* mManager = nullptr;
+	mutable bool managerTried = false;
 	RegistryWatcher* watcher = nullptr;
 	HWND listener = nullptr;
+	QTimer cloakTimer;
 
 	mutable ULONGLONG accessorRestartedAt = 0;
 

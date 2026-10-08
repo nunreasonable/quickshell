@@ -3,6 +3,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -46,12 +47,32 @@ Q_LOGGING_CATEGORY(logTracker, "quickshell.windows.tracker", QtWarningMsg);
 
 constexpr auto EVENT_WINDOW_CLASS = L"QuickshellWindowTrackerEvents";
 constexpr UINT WM_QS_WINEVENTS = WM_APP + 1;
+constexpr int MOVING_FLUSH_MS = 50;
+constexpr int SWEEP_INTERVAL_MS = 10000;
 
 std::mutex gEventMutex;                       // NOLINT
-std::vector<std::pair<DWORD, HWND>> gEvents;  // NOLINT
+std::vector<WindowEvent> gEvents;             // NOLINT
+std::unordered_set<HWND> gTracked;            // NOLINT
 std::atomic<bool> gEventWakePending = false;  // NOLINT
 std::atomic<HWND> gEventTarget = nullptr;     // NOLINT
 std::atomic<int> gEventHookCount = 0;         // NOLINT
+
+bool onlyForTracked(DWORD event) {
+	switch (event) {
+	case EVENT_OBJECT_LOCATIONCHANGE:
+	case EVENT_OBJECT_DESTROY:
+	case EVENT_OBJECT_HIDE:
+	case EVENT_SYSTEM_MOVESIZESTART:
+	case EVENT_SYSTEM_MOVESIZEEND: return true;
+	default: return false;
+	}
+}
+
+bool mayBecomeTracked(HWND hwnd) {
+	if (!IsWindowVisible(hwnd)) return false;
+	auto exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+	return (exStyle & WS_EX_TOOLWINDOW) == 0 || (exStyle & WS_EX_APPWINDOW) != 0;
+}
 
 void CALLBACK queueEvent(
     HWINEVENTHOOK /*hook*/,
@@ -60,13 +81,27 @@ void CALLBACK queueEvent(
     LONG idObject,
     LONG idChild,
     DWORD /*eventThread*/,
-    DWORD /*eventTime*/
+    DWORD eventTime
 ) {
-	if (hwnd == nullptr || idObject != OBJID_WINDOW || idChild != CHILDID_SELF) return;
+	if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF || hwnd == nullptr) return;
+
+	auto trackedOnly = onlyForTracked(event);
+	if (!trackedOnly && event != EVENT_SYSTEM_FOREGROUND && GetAncestor(hwnd, GA_ROOT) != hwnd) {
+		return;
+	}
 
 	{
 		auto lock = std::lock_guard(gEventMutex);
-		gEvents.emplace_back(event, hwnd);
+
+		if (!gTracked.contains(hwnd)) {
+			if (trackedOnly) return;
+
+			auto announces = event == EVENT_OBJECT_SHOW || event == EVENT_OBJECT_NAMECHANGE;
+			if (announces && !mayBecomeTracked(hwnd)) return;
+		}
+
+		if (!gEvents.empty() && gEvents.back().event == event && gEvents.back().hwnd == hwnd) return;
+		gEvents.push_back({.event = event, .hwnd = hwnd, .time = eventTime});
 	}
 
 	if (!gEventWakePending.exchange(true)) {
@@ -78,7 +113,6 @@ void CALLBACK queueEvent(
 void eventThreadMain(HANDLE readyEvent) {
 	MSG msg {};
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
-	prioritizeInputThread(THREAD_PRIORITY_HIGHEST);
 
 	std::vector<HWINEVENTHOOK> hooks;
 	auto hook = [&hooks](DWORD min, DWORD max) {
@@ -293,8 +327,20 @@ void TrackedWindow::refreshState() {
 	Qt::endPropertyUpdateGroup();
 }
 
-void TrackedWindow::refreshDesktop() {
-	this->bDesktop = static_cast<qint32>(this->tracker->desktops()->windowDesktopIndex(this->mHwnd));
+void TrackedWindow::refreshDesktop(bool askShell) {
+	auto* desktops = this->tracker->desktops();
+
+	DWORD cloaked = 0;
+	auto shown =
+	    SUCCEEDED(DwmGetWindowAttribute(this->mHwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked)))
+	    && cloaked == 0;
+
+	if (shown && !askShell && desktops->currentIndex() >= 0) {
+		this->bDesktop = static_cast<qint32>(desktops->currentIndex());
+		return;
+	}
+
+	this->bDesktop = static_cast<qint32>(desktops->windowDesktopIndex(this->mHwnd));
 }
 
 void TrackedWindow::activate() {
@@ -390,7 +436,7 @@ void TrackedWindow::fullscreenOn(QScreen* screen) {
 
 bool TrackedWindow::moveToDesktop(qsizetype index) {
 	if (!this->tracker->desktops()->moveWindow(this->mHwnd, index)) return false;
-	this->refreshDesktop();
+	this->refreshDesktop(true);
 	return true;
 }
 
@@ -432,10 +478,9 @@ WindowTracker::WindowTracker() {
 	this->mDesktops = VirtualDesktops::instance();
 
 	this->flushTimer.setSingleShot(true);
-	this->flushTimer.setInterval(0);
 	QObject::connect(&this->flushTimer, &QTimer::timeout, this, &WindowTracker::flush);
 
-	this->sweepTimer.setInterval(2000);
+	this->sweepTimer.setInterval(SWEEP_INTERVAL_MS);
 	QObject::connect(&this->sweepTimer, &QTimer::timeout, this, [this]() {
 		if (this->sweepDestroyed()) {
 			this->updateActive();
@@ -517,27 +562,37 @@ void WindowTracker::startEventThread() {
 void WindowTracker::drainEvents() {
 	gEventWakePending.store(false);
 
-	std::vector<std::pair<DWORD, HWND>> events;
+	auto events = std::move(this->spareEvents);
+	events.clear();
+
 	{
 		auto lock = std::lock_guard(gEventMutex);
 		events.swap(gEvents);
 	}
 
-	for (const auto& [event, hwnd]: events) this->onEvent(event, hwnd);
+	for (const auto& e: events) this->onEvent(e.event, e.hwnd, e.time);
+
+	events.clear();
+	this->spareEvents = std::move(events);
 }
 
-void WindowTracker::onEvent(DWORD event, HWND hwnd) {
+void WindowTracker::onEvent(DWORD event, HWND hwnd, DWORD time) {
 	auto tracked = this->byHwnd.contains(hwnd);
 
 	switch (event) {
 	case EVENT_SYSTEM_FOREGROUND:
 		this->foregroundDirty = true;
-		this->desktopsDirty = true;
 		if (!tracked) this->candidates.insert(hwnd);
+		emit this->foregroundChanged(hwnd, time);
 		break;
 	case EVENT_OBJECT_LOCATIONCHANGE:
 		if (!tracked) return;
 		this->dirty[hwnd].state = true;
+
+		if (this->moving.contains(hwnd)) {
+			if (!this->flushTimer.isActive()) this->flushTimer.start(MOVING_FLUSH_MS);
+			return;
+		}
 		break;
 	case EVENT_OBJECT_DESTROY:
 	case EVENT_OBJECT_HIDE:
@@ -554,12 +609,13 @@ void WindowTracker::onEvent(DWORD event, HWND hwnd) {
 		break;
 	case EVENT_OBJECT_CLOAKED:
 	case EVENT_OBJECT_UNCLOAKED:
-		this->desktopsDirty = true;
+		this->mDesktops->noteCloakChange();
 		this->foregroundDirty = true;
 		if (tracked) {
 			auto& d = this->dirty[hwnd];
 			d.eligibility = true;
 			d.desktop = true;
+			d.askShell = true;
 			d.state = true;
 		} else {
 			this->candidates.insert(hwnd);
@@ -574,8 +630,14 @@ void WindowTracker::onEvent(DWORD event, HWND hwnd) {
 	case EVENT_SYSTEM_MOVESIZEEND:
 		if (!tracked) return;
 		this->dirty[hwnd].state = true;
-		if (event == EVENT_SYSTEM_MOVESIZESTART) emit this->moveSizeStarted(this->byHwnd.value(hwnd));
-		else emit this->moveSizeEnded(this->byHwnd.value(hwnd));
+
+		if (event == EVENT_SYSTEM_MOVESIZESTART) {
+			this->moving.insert(hwnd);
+			emit this->moveSizeStarted(this->byHwnd.value(hwnd));
+		} else {
+			this->moving.remove(hwnd);
+			emit this->moveSizeEnded(this->byHwnd.value(hwnd));
+		}
 		break;
 	default: return;
 	}
@@ -584,19 +646,15 @@ void WindowTracker::onEvent(DWORD event, HWND hwnd) {
 }
 
 void WindowTracker::noteMoveSize(HWND hwnd, bool started) {
-	this->onEvent(started ? EVENT_SYSTEM_MOVESIZESTART : EVENT_SYSTEM_MOVESIZEEND, hwnd);
+	auto event = started ? EVENT_SYSTEM_MOVESIZESTART : EVENT_SYSTEM_MOVESIZEEND;
+	this->onEvent(event, hwnd, GetTickCount());
 }
 
 void WindowTracker::schedule() {
-	if (!this->flushTimer.isActive()) this->flushTimer.start();
+	if (!this->flushTimer.isActive() || this->flushTimer.interval() != 0) this->flushTimer.start(0);
 }
 
 void WindowTracker::flush() {
-	if (this->desktopsDirty) {
-		this->desktopsDirty = false;
-		this->mDesktops->refresh();
-	}
-
 	auto candidates = std::move(this->candidates);
 	this->candidates.clear();
 
@@ -624,7 +682,7 @@ void WindowTracker::flush() {
 		Qt::beginPropertyUpdateGroup();
 		if (d.title) window->refreshTitle();
 		if (d.state) window->refreshState();
-		if (d.desktop) window->refreshDesktop();
+		if (d.desktop) window->refreshDesktop(d.askShell);
 		if (d.desktop && window->uwpFrame) window->refreshIdentity();
 		Qt::endPropertyUpdateGroup();
 	}
@@ -695,11 +753,16 @@ void WindowTracker::addWindow(HWND hwnd) {
 	window->refreshIdentity();
 	window->refreshTitle();
 	window->refreshState();
-	window->refreshDesktop();
+	window->refreshDesktop(false);
 	Qt::endPropertyUpdateGroup();
 
 	this->mWindows.append(window);
 	this->byHwnd.insert(hwnd, window);
+
+	{
+		auto lock = std::lock_guard(gEventMutex);
+		gTracked.insert(hwnd);
+	}
 
 	qCDebug(logTracker) << "Tracking" << window->addressHex() << window->appId() << window->title();
 	emit this->windowAdded(window);
@@ -710,6 +773,13 @@ void WindowTracker::removeWindow(TrackedWindow* window) {
 
 	this->mWindows.removeOne(window);
 	this->byHwnd.remove(window->hwnd());
+	this->moving.remove(window->hwnd());
+
+	{
+		auto lock = std::lock_guard(gEventMutex);
+		gTracked.erase(window->hwnd());
+	}
+
 	if (this->mActive == window) this->setActive(nullptr);
 
 	emit this->windowRemoved(window);
