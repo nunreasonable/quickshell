@@ -1,6 +1,7 @@
 #include "brightness.hpp"
 
 #include <algorithm>
+#include <cwchar>
 #include <vector>
 
 #include <qt_windows.h>
@@ -15,6 +16,7 @@
 #include <qlogging.h>
 #include <qloggingcategory.h>
 #include <qmetaobject.h>
+#include <qmutex.h>
 #include <qpointer.h>
 #include <qrunnable.h>
 #include <qscreen.h>
@@ -22,6 +24,7 @@
 
 #include "../../core/backgroundpool.hpp"
 #include "../../core/logcat.hpp"
+#include "../startup.hpp"
 #include "../util.hpp"
 #include "gamma.hpp"
 
@@ -76,74 +79,196 @@ bool ddcSet(HMONITOR hMonitor, qreal value) {
 	return ok;
 }
 
-struct WmiSession {
-	bool initializedCom = false;
-	IWbemLocator* locator = nullptr;
-	IWbemServices* services = nullptr;
-
-	bool open() {
-		auto hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-		this->initializedCom = hr == S_OK || hr == S_FALSE;
-		if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return false;
-
-		hr = CoCreateInstance(
-		    CLSID_WbemLocator,
-		    nullptr,
-		    CLSCTX_INPROC_SERVER,
-		    IID_IWbemLocator,
-		    reinterpret_cast<LPVOID*>(&this->locator) // NOLINT
-		);
-		if (FAILED(hr)) return false;
-
-		auto* ns = SysAllocString(L"ROOT\\WMI");
-		hr = this->locator->ConnectServer(
-		    ns,
-		    nullptr,
-		    nullptr,
-		    nullptr,
-		    0,
-		    nullptr,
-		    nullptr,
-		    &this->services
-		);
-		SysFreeString(ns);
-		if (FAILED(hr)) return false;
-
-		CoSetProxyBlanket(
-		    this->services,
-		    RPC_C_AUTHN_WINNT,
-		    RPC_C_AUTHZ_NONE,
-		    nullptr,
-		    RPC_C_AUTHN_LEVEL_CALL,
-		    RPC_C_IMP_LEVEL_IMPERSONATE,
-		    nullptr,
-		    EOAC_NONE
-		);
-
-		return true;
-	}
-
-	~WmiSession() {
-		if (this->services != nullptr) this->services->Release();
-		if (this->locator != nullptr) this->locator->Release();
-		if (this->initializedCom) CoUninitialize();
-	}
-
-	WmiSession() = default;
-	WmiSession(const WmiSession&) = delete;
-	WmiSession& operator=(const WmiSession&) = delete;
-	WmiSession(WmiSession&&) = delete;
-	WmiSession& operator=(WmiSession&&) = delete;
+enum class PanelKind : quint8 {
+	Unknown,
+	Internal,
+	External,
 };
 
-bool queryWmiBrightness(int index, qreal& outBrightness, QString* outInstanceName = nullptr) {
-	WmiSession session;
-	if (!session.open()) return false;
+const char* panelKindName(PanelKind kind) {
+	switch (kind) {
+	case PanelKind::Internal: return "internal";
+	case PanelKind::External: return "external";
+	default: return "unknown";
+	}
+}
 
+bool isInternalOutput(DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY technology) {
+	switch (technology) {
+	case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INTERNAL:
+	case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_DISPLAYPORT_EMBEDDED:
+	case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_UDI_EMBEDDED:
+	case DISPLAYCONFIG_OUTPUT_TECHNOLOGY_LVDS: return true;
+	default: return false;
+	}
+}
+
+PanelKind panelKind(HMONITOR hMonitor) {
+	if (hMonitor == nullptr) return PanelKind::Unknown;
+
+	MONITORINFOEXW info {};
+	info.cbSize = sizeof(info);
+	if (!GetMonitorInfoW(hMonitor, &info)) return PanelKind::Unknown;
+
+	std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+	std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+	LONG result = ERROR_INSUFFICIENT_BUFFER;
+
+	for (auto attempt = 0; attempt < 3 && result == ERROR_INSUFFICIENT_BUFFER; attempt++) {
+		UINT32 pathCount = 0;
+		UINT32 modeCount = 0;
+		result = GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount);
+		if (result != ERROR_SUCCESS) return PanelKind::Unknown;
+
+		paths.resize(pathCount);
+		modes.resize(modeCount);
+		result = QueryDisplayConfig(
+		    QDC_ONLY_ACTIVE_PATHS,
+		    &pathCount,
+		    paths.data(),
+		    &modeCount,
+		    modes.data(),
+		    nullptr
+		);
+		paths.resize(pathCount);
+	}
+
+	if (result != ERROR_SUCCESS) return PanelKind::Unknown;
+
+	auto matched = false;
+	for (const auto& path: paths) {
+		DISPLAYCONFIG_SOURCE_DEVICE_NAME source {};
+		source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+		source.header.size = sizeof(source);
+		source.header.adapterId = path.sourceInfo.adapterId;
+		source.header.id = path.sourceInfo.id;
+		if (DisplayConfigGetDeviceInfo(&source.header) != ERROR_SUCCESS) continue;
+		if (std::wcscmp(source.viewGdiDeviceName, info.szDevice) != 0) continue;
+
+		matched = true;
+		if (isInternalOutput(path.targetInfo.outputTechnology)) return PanelKind::Internal;
+	}
+
+	return matched ? PanelKind::External : PanelKind::Unknown;
+}
+
+struct MtaScope {
+	MtaScope(): hr(CoInitializeEx(nullptr, COINIT_MULTITHREADED)) {}
+
+	MtaScope(const MtaScope&) = delete;
+	MtaScope(MtaScope&&) = delete;
+	MtaScope& operator=(const MtaScope&) = delete;
+	MtaScope& operator=(MtaScope&&) = delete;
+
+	~MtaScope() {
+		if (SUCCEEDED(this->hr)) CoUninitialize();
+	}
+
+	HRESULT hr;
+};
+
+IWbemServices* connectWmi() {
+	IWbemLocator* locator = nullptr;
+	auto hr = CoCreateInstance(
+	    CLSID_WbemLocator,
+	    nullptr,
+	    CLSCTX_INPROC_SERVER,
+	    IID_IWbemLocator,
+	    reinterpret_cast<LPVOID*>(&locator) // NOLINT
+	);
+	if (FAILED(hr) || locator == nullptr) return nullptr;
+
+	IWbemServices* services = nullptr;
+	auto* ns = SysAllocString(L"ROOT\\WMI");
+	hr = locator->ConnectServer(ns, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &services);
+	SysFreeString(ns);
+	locator->Release();
+	if (FAILED(hr) || services == nullptr) return nullptr;
+
+	CoSetProxyBlanket(
+	    services,
+	    RPC_C_AUTHN_WINNT,
+	    RPC_C_AUTHZ_NONE,
+	    nullptr,
+	    RPC_C_AUTHN_LEVEL_CALL,
+	    RPC_C_IMP_LEVEL_IMPERSONATE,
+	    nullptr,
+	    EOAC_NONE
+	);
+
+	return services;
+}
+
+bool wmiConnectionLost(HRESULT hr) {
+	return hr == RPC_E_DISCONNECTED || hr == HRESULT_FROM_WIN32(RPC_S_SERVER_UNAVAILABLE)
+	    || hr == HRESULT_FROM_WIN32(RPC_S_CALL_FAILED) || hr == WBEM_E_TRANSPORT_FAILURE
+	    || hr == WBEM_E_SHUTTING_DOWN;
+}
+
+struct WmiCache {
+	QMutex mutex;
+	IWbemServices* services = nullptr;
+	bool mtaHeld = false;
+	bool mtaAttempted = false;
+};
+
+WmiCache& wmiCache() {
+	static auto* cache = new WmiCache();
+	return *cache;
+}
+
+template <typename Fn>
+bool withWmi(Fn&& fn) {
+	MtaScope com;
+
+	auto runOnce = [&fn]() {
+		auto* services = connectWmi();
+		if (services == nullptr) return false;
+		auto hr = fn(services);
+		services->Release();
+		return SUCCEEDED(hr);
+	};
+
+	if (com.hr == RPC_E_CHANGED_MODE) return runOnce();
+	if (FAILED(com.hr)) return false;
+
+	auto& cache = wmiCache();
+	QMutexLocker locker(&cache.mutex);
+
+	if (!cache.mtaAttempted) {
+		cache.mtaAttempted = true;
+		CO_MTA_USAGE_COOKIE cookie = nullptr;
+		cache.mtaHeld = SUCCEEDED(CoIncrementMTAUsage(&cookie));
+	}
+
+	if (!cache.mtaHeld) return runOnce();
+
+	if (cache.services == nullptr) cache.services = connectWmi();
+	if (cache.services == nullptr) return false;
+
+	auto hr = fn(cache.services);
+	if (wmiConnectionLost(hr)) {
+		qCDebug(logBrightness) << "WMI connection lost, reconnecting";
+		cache.services->Release();
+		cache.services = connectWmi();
+		if (cache.services == nullptr) return false;
+		hr = fn(cache.services);
+	}
+
+	return SUCCEEDED(hr);
+}
+
+HRESULT readWmiBrightness(
+    IWbemServices* services,
+    int index,
+    qreal& outBrightness,
+    bool& found,
+    QString* outInstanceName
+) {
 	auto* query = SysAllocString(L"SELECT * FROM WmiMonitorBrightness");
 	auto* language = SysAllocString(L"WQL");
 	IEnumWbemClassObject* enumerator = nullptr;
-	auto hr = session.services->ExecQuery(
+	auto hr = services->ExecQuery(
 	    language,
 	    query,
 	    WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
@@ -152,14 +277,14 @@ bool queryWmiBrightness(int index, qreal& outBrightness, QString* outInstanceNam
 	);
 	SysFreeString(query);
 	SysFreeString(language);
-	if (FAILED(hr) || enumerator == nullptr) return false;
+	if (FAILED(hr)) return hr;
+	if (enumerator == nullptr) return E_FAIL;
 
-	auto found = false;
 	IWbemClassObject* obj = nullptr;
 	ULONG returned = 0;
 	auto current = 0;
 
-	while (enumerator->Next(WBEM_INFINITE, 1, &obj, &returned) == S_OK) {
+	while ((hr = enumerator->Next(WBEM_INFINITE, 1, &obj, &returned)) == S_OK) {
 		if (current == index) {
 			VARIANT brightness {};
 			VariantInit(&brightness);
@@ -189,18 +314,28 @@ bool queryWmiBrightness(int index, qreal& outBrightness, QString* outInstanceNam
 	}
 
 	enumerator->Release();
-	return found;
+	return FAILED(hr) ? hr : S_OK;
 }
 
-bool setWmiBrightness(int index, qreal value) {
+bool queryWmiBrightness(int index, qreal& outBrightness) {
+	auto found = false;
+	auto ok = withWmi([&](IWbemServices* services) {
+		return readWmiBrightness(services, index, outBrightness, found, nullptr);
+	});
+
+	return ok && found;
+}
+
+HRESULT writeWmiBrightness(IWbemServices* services, int index, qreal value, bool& applied) {
 	QString instanceName;
 	qreal unused = 0.0;
-	if (!queryWmiBrightness(index, unused, &instanceName) || instanceName.isEmpty()) return false;
-
-	WmiSession session;
-	if (!session.open()) return false;
+	auto found = false;
+	auto hr = readWmiBrightness(services, index, unused, found, &instanceName);
+	if (FAILED(hr)) return hr;
+	if (!found || instanceName.isEmpty()) return S_OK;
 
 	auto escaped = instanceName;
+	escaped.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
 	escaped.replace(QStringLiteral("'"), QStringLiteral("\\'"));
 	auto queryString =
 	    QStringLiteral("SELECT * FROM WmiMonitorBrightnessMethods WHERE InstanceName = '%1'")
@@ -209,7 +344,7 @@ bool setWmiBrightness(int index, qreal value) {
 	auto* language = SysAllocString(L"WQL");
 
 	IEnumWbemClassObject* enumerator = nullptr;
-	auto hr = session.services->ExecQuery(
+	hr = services->ExecQuery(
 	    language,
 	    queryText,
 	    WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
@@ -218,13 +353,14 @@ bool setWmiBrightness(int index, qreal value) {
 	);
 	SysFreeString(queryText);
 	SysFreeString(language);
-	if (FAILED(hr) || enumerator == nullptr) return false;
+	if (FAILED(hr)) return hr;
+	if (enumerator == nullptr) return E_FAIL;
 
 	IWbemClassObject* obj = nullptr;
 	ULONG returned = 0;
-	auto ok = false;
 
-	if (enumerator->Next(WBEM_INFINITE, 1, &obj, &returned) == S_OK) {
+	hr = enumerator->Next(WBEM_INFINITE, 1, &obj, &returned);
+	if (hr == S_OK) {
 		VARIANT path {};
 		VariantInit(&path);
 		obj->Get(L"__PATH", 0, &path, nullptr, nullptr);
@@ -234,9 +370,10 @@ bool setWmiBrightness(int index, qreal value) {
 		auto* className = SysAllocString(L"WmiMonitorBrightnessMethods");
 		auto* methodName = SysAllocString(L"WmiSetBrightness");
 
-		if (SUCCEEDED(session.services->GetObject(className, 0, nullptr, &classObj, nullptr))
-		    && SUCCEEDED(classObj->GetMethod(methodName, 0, &inSignature, nullptr)))
-		{
+		hr = services->GetObject(className, 0, nullptr, &classObj, nullptr);
+		if (SUCCEEDED(hr)) hr = classObj->GetMethod(methodName, 0, &inSignature, nullptr);
+
+		if (SUCCEEDED(hr)) {
 			IWbemClassObject* instance = nullptr;
 			if (SUCCEEDED(inSignature->SpawnInstance(0, &instance))) {
 				VARIANT timeout {};
@@ -253,7 +390,7 @@ bool setWmiBrightness(int index, qreal value) {
 
 				IWbemClassObject* outParams = nullptr;
 				if (path.vt == VT_BSTR) {
-					hr = session.services->ExecMethod(
+					hr = services->ExecMethod(
 					    path.bstrVal,
 					    methodName,
 					    0,
@@ -262,14 +399,14 @@ bool setWmiBrightness(int index, qreal value) {
 					    &outParams,
 					    nullptr
 					);
-					ok = SUCCEEDED(hr);
+					applied = SUCCEEDED(hr);
 				}
 
 				if (outParams != nullptr) outParams->Release();
 				instance->Release();
 			}
-			if (inSignature != nullptr) inSignature->Release();
 		}
+		if (inSignature != nullptr) inSignature->Release();
 		if (classObj != nullptr) classObj->Release();
 		SysFreeString(className);
 		SysFreeString(methodName);
@@ -278,20 +415,35 @@ bool setWmiBrightness(int index, qreal value) {
 	}
 
 	enumerator->Release();
-	return ok;
+	return FAILED(hr) ? hr : S_OK;
+}
+
+bool setWmiBrightness(int index, qreal value) {
+	auto applied = false;
+	auto ok = withWmi([&](IWbemServices* services) {
+		return writeWmiBrightness(services, index, value, applied);
+	});
+
+	return ok && applied;
+}
+
+QScreen* screenNamed(const QString& screenName) {
+	for (auto* screen: QGuiApplication::screens()) {
+		if (screen->name() == screenName) return screen;
+	}
+
+	return nullptr;
 }
 
 } // namespace
 
 void Brightness::query(const QString& screenName) {
-	QScreen* target = nullptr;
-	for (auto* screen: QGuiApplication::screens()) {
-		if (screen->name() == screenName) {
-			target = screen;
-			break;
-		}
+	if (!startup::settled()) {
+		startup::afterFirstFrame(this, [this, screenName]() { this->query(screenName); });
+		return;
 	}
 
+	auto* target = screenNamed(screenName);
 	auto hMonitor = target != nullptr ? qs::windows::monitorForScreen(target) : nullptr;
 	auto cachedRoute = this->screenRoute.value(screenName, -2);
 	auto resolved = cachedRoute != -2;
@@ -314,7 +466,9 @@ void Brightness::query(const QString& screenName) {
 		} else if (ddcQuery(hMonitor, brightness)) {
 			available = true;
 			isDdc = true;
-		} else if (queryWmiBrightness(wmiCandidateIndex, brightness)) {
+		} else if (panelKind(hMonitor) != PanelKind::External
+		           && queryWmiBrightness(wmiCandidateIndex, brightness))
+		{
 			available = true;
 			usedWmiIndex = wmiCandidateIndex;
 		}
@@ -343,13 +497,27 @@ void Brightness::query(const QString& screenName) {
 }
 
 void Brightness::probe(const QString& screenName) {
+	if (!startup::settled()) {
+		startup::afterFirstFrame(this, [this, screenName]() { this->probe(screenName); });
+		return;
+	}
+
+	auto* target = screenNamed(screenName);
+	auto hMonitor = target != nullptr ? qs::windows::monitorForScreen(target) : nullptr;
 	auto cachedRoute = this->screenRoute.value(screenName, -2);
 	auto wmiCandidateIndex = cachedRoute >= 0 ? cachedRoute : this->nextWmiInstanceIndex;
 
 	auto guard = QPointer<Brightness>(this);
-	auto* task = QRunnable::create([guard, screenName, cachedRoute, wmiCandidateIndex]() {
+	auto* task = QRunnable::create([guard, screenName, hMonitor, cachedRoute, wmiCandidateIndex]() {
 		auto brightness = 1.0;
-		auto internal = cachedRoute != -1 && queryWmiBrightness(wmiCandidateIndex, brightness);
+		auto candidate = cachedRoute >= 0;
+		if (cachedRoute == -2) {
+			auto kind = panelKind(hMonitor);
+			qCDebug(logBrightness) << screenName << "output kind:" << panelKindName(kind);
+			candidate = kind != PanelKind::External;
+		}
+
+		auto internal = candidate && queryWmiBrightness(wmiCandidateIndex, brightness);
 
 		QMetaObject::invokeMethod(
 		    QCoreApplication::instance(),
@@ -373,14 +541,7 @@ void Brightness::probe(const QString& screenName) {
 }
 
 void Brightness::setBrightness(const QString& screenName, bool isDdc, qreal value) {
-	QScreen* target = nullptr;
-	for (auto* screen: QGuiApplication::screens()) {
-		if (screen->name() == screenName) {
-			target = screen;
-			break;
-		}
-	}
-
+	auto* target = screenNamed(screenName);
 	auto hMonitor = target != nullptr ? qs::windows::monitorForScreen(target) : nullptr;
 	auto wmiIndex = this->screenRoute.value(screenName, -1);
 	auto clamped = std::clamp(value, 0.0, 1.0);
