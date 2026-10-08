@@ -55,6 +55,8 @@ public:
 	[[nodiscard]] QBindable<HyprlandMonitor*> bindableMonitor() { return &this->bMonitor; }
 
 	void refreshIpcObject();
+	void markIpcObjectDirty();
+	void flushIpcObject();
 	void leaveWorkspace();
 
 signals:
@@ -84,6 +86,7 @@ private:
 	qs::wayland::toplevel::Toplevel* mWaylandHandle = nullptr;
 	HyprlandToplevel* mHyprlandHandle = nullptr;
 	HyprlandWorkspace* memberOf = nullptr;
+	bool ipcObjectDirty = false;
 
 	// clang-format off
 	Q_OBJECT_BINDABLE_PROPERTY(HyprlandToplevel, QString, bTitle, &HyprlandToplevel::titleChanged);

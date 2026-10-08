@@ -1,5 +1,7 @@
 #include "connection.hpp"
 
+#include <utility>
+
 #include <qbytearray.h>
 #include <qbytearrayview.h>
 #include <qcontainerfwd.h>
@@ -8,6 +10,7 @@
 #include <qlogging.h>
 #include <qloggingcategory.h>
 #include <qobject.h>
+#include <qpointer.h>
 #include <qproperty.h>
 #include <qscreen.h>
 #include <qtimer.h>
@@ -31,6 +34,10 @@ namespace qs::hyprland::ipc {
 namespace {
 Q_LOGGING_CATEGORY(logHyprlandIpc, "quickshell.hyprland.ipc", QtWarningMsg);
 Q_LOGGING_CATEGORY(logHyprlandIpcEvents, "quickshell.hyprland.ipc.events", QtWarningMsg);
+
+constexpr int GEOMETRY_EVENT_MS = 500;
+constexpr int TITLE_EVENT_MS = 200;
+constexpr int IPC_OBJECT_REFRESH_MS = 100;
 
 QByteArray workspaceName(HyprlandWorkspace* workspace) {
 	return workspace == nullptr ? QByteArray() : workspace->bindableName().value().toUtf8();
@@ -96,8 +103,19 @@ HyprlandIpc::HyprlandIpc()
     , mDesktops(VirtualDesktops::instance())
     , dispatcher(new Dispatcher(this)) {
 	this->geometryTimer.setSingleShot(true);
-	this->geometryTimer.setInterval(100);
 	QObject::connect(&this->geometryTimer, &QTimer::timeout, this, &HyprlandIpc::emitGeometryEvent);
+
+	this->titleTimer.setSingleShot(true);
+	this->titleTimer.setInterval(TITLE_EVENT_MS);
+	QObject::connect(&this->titleTimer, &QTimer::timeout, this, &HyprlandIpc::emitTitleEvents);
+
+	this->ipcObjectTimer.setSingleShot(true);
+	this->ipcObjectTimer.setInterval(IPC_OBJECT_REFRESH_MS);
+	QObject::connect(&this->ipcObjectTimer, &QTimer::timeout, this, &HyprlandIpc::flushIpcObjects);
+
+	QObject::connect(this->mTracker, &WindowTracker::moveSizeEnded, this, [this]() {
+		this->geometryAfterFlush = true;
+	});
 
 	// clang-format off
 	QObject::connect(this->mTracker, &WindowTracker::windowAdded, this, &HyprlandIpc::onWindowAdded);
@@ -196,7 +214,45 @@ void HyprlandIpc::refreshToplevels() {
 	for (auto* toplevel: this->mToplevels.valueList()) toplevel->refreshIpcObject();
 }
 
+void HyprlandIpc::scheduleIpcObjectRefresh(HyprlandToplevel* toplevel) {
+	this->dirtyIpcObjects.append(toplevel);
+	if (!this->ipcObjectTimer.isActive()) this->ipcObjectTimer.start();
+}
+
+void HyprlandIpc::flushIpcObjects() {
+	this->ipcObjectTimer.stop();
+	auto dirty = std::exchange(this->dirtyIpcObjects, {});
+
+	for (const auto& toplevel: dirty) {
+		if (toplevel != nullptr) toplevel->flushIpcObject();
+	}
+}
+
+void HyprlandIpc::scheduleGeometryEvent(bool prompt) {
+	if (prompt) {
+		if (!this->geometryTimer.isActive() || this->geometryTimer.interval() != 0) {
+			this->geometryTimer.start(0);
+		}
+	} else if (!this->geometryTimer.isActive()) {
+		this->geometryTimer.start(GEOMETRY_EVENT_MS);
+	}
+}
+
+void HyprlandIpc::emitTitleEvents() {
+	auto pending = std::exchange(this->pendingTitles, {});
+
+	for (const auto& toplevel: pending) {
+		if (toplevel == nullptr || toplevel->window() == nullptr) continue;
+		if (!this->byWindow.contains(toplevel->window())) continue;
+
+		auto address = toplevel->addressStr().toUtf8();
+		this->emitEvent("windowtitlev2", address + "," + toplevel->window()->title().toUtf8());
+		this->emitEvent("windowtitle", address);
+	}
+}
+
 void HyprlandIpc::emitEvent(const QByteArray& name, const QByteArray& data) {
+	this->flushIpcObjects();
 	qCDebug(logHyprlandIpcEvents) << "Event" << name << data;
 	this->event.name = name;
 	this->event.data = data;
@@ -361,9 +417,9 @@ void HyprlandIpc::onWindowAdded(TrackedWindow* window) {
 
 	auto address = toplevel->addressStr().toUtf8();
 
-	QObject::connect(window, &TrackedWindow::titleChanged, this, [this, window, address]() {
-		this->emitEvent("windowtitlev2", address + "," + window->title().toUtf8());
-		this->emitEvent("windowtitle", address);
+	QObject::connect(window, &TrackedWindow::titleChanged, toplevel, [this, toplevel]() {
+		if (!this->pendingTitles.contains(toplevel)) this->pendingTitles.append(toplevel);
+		if (!this->titleTimer.isActive()) this->titleTimer.start();
 	});
 
 	QObject::connect(toplevel, &HyprlandToplevel::workspaceChanged, this, [this, toplevel, address]() {
@@ -377,14 +433,13 @@ void HyprlandIpc::onWindowAdded(TrackedWindow* window) {
 		this->emitEvent("fullscreen", window->fullscreen() ? "1" : "0");
 	});
 
-	auto geometry = [this]() {
-		if (!this->geometryTimer.isActive()) this->geometryTimer.start();
-	};
+	auto geometry = [this]() { this->scheduleGeometryEvent(false); };
+	auto promptGeometry = [this]() { this->scheduleGeometryEvent(true); };
 
 	QObject::connect(window, &TrackedWindow::rectChanged, this, geometry);
-	QObject::connect(window, &TrackedWindow::minimizedChanged, this, geometry);
-	QObject::connect(window, &TrackedWindow::maximizedChanged, this, geometry);
-	QObject::connect(window, &TrackedWindow::screenChanged, this, geometry);
+	QObject::connect(window, &TrackedWindow::minimizedChanged, this, promptGeometry);
+	QObject::connect(window, &TrackedWindow::maximizedChanged, this, promptGeometry);
+	QObject::connect(window, &TrackedWindow::screenChanged, this, promptGeometry);
 
 	this->emitEvent(
 	    "openwindow",
@@ -402,6 +457,8 @@ void HyprlandIpc::onWindowRemoved(TrackedWindow* window) {
 	if (this->bActiveToplevel.value() == toplevel) this->bActiveToplevel = nullptr;
 	this->mToplevels.removeObject(toplevel);
 	toplevel->leaveWorkspace();
+	this->pendingTitles.removeAll(toplevel);
+	this->dirtyIpcObjects.removeAll(toplevel);
 
 	this->emitEvent("closewindow", toplevel->addressStr().toUtf8());
 	toplevel->deleteLater();
@@ -430,6 +487,11 @@ void HyprlandIpc::onActiveWindowChanged() {
 void HyprlandIpc::onTrackerFlushed() {
 	if (auto* toplevel = this->bActiveToplevel.value()) {
 		this->updateFocusedMonitor(toplevel->bindableMonitor().value());
+	}
+
+	if (this->geometryAfterFlush) {
+		this->geometryAfterFlush = false;
+		this->scheduleGeometryEvent(true);
 	}
 }
 

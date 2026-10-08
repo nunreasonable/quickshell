@@ -44,16 +44,16 @@ HyprlandToplevel::HyprlandToplevel(HyprlandIpc* ipc, TrackedWindow* window)
 	QObject::connect(this, &HyprlandToplevel::workspaceChanged, this, &HyprlandToplevel::onWorkspaceChanged);
 
 	// clang-format off
-	QObject::connect(window, &TrackedWindow::titleChanged, this, &HyprlandToplevel::refreshIpcObject);
-	QObject::connect(window, &TrackedWindow::appIdChanged, this, &HyprlandToplevel::refreshIpcObject);
-	QObject::connect(window, &TrackedWindow::pidChanged, this, &HyprlandToplevel::refreshIpcObject);
-	QObject::connect(window, &TrackedWindow::rectChanged, this, &HyprlandToplevel::refreshIpcObject);
-	QObject::connect(window, &TrackedWindow::minimizedChanged, this, &HyprlandToplevel::refreshIpcObject);
-	QObject::connect(window, &TrackedWindow::maximizedChanged, this, &HyprlandToplevel::refreshIpcObject);
-	QObject::connect(window, &TrackedWindow::fullscreenChanged, this, &HyprlandToplevel::refreshIpcObject);
-	QObject::connect(window, &TrackedWindow::activatedChanged, this, &HyprlandToplevel::refreshIpcObject);
-	QObject::connect(this, &HyprlandToplevel::workspaceChanged, this, &HyprlandToplevel::refreshIpcObject);
-	QObject::connect(this, &HyprlandToplevel::monitorChanged, this, &HyprlandToplevel::refreshIpcObject);
+	QObject::connect(window, &TrackedWindow::titleChanged, this, &HyprlandToplevel::markIpcObjectDirty);
+	QObject::connect(window, &TrackedWindow::appIdChanged, this, &HyprlandToplevel::markIpcObjectDirty);
+	QObject::connect(window, &TrackedWindow::pidChanged, this, &HyprlandToplevel::markIpcObjectDirty);
+	QObject::connect(window, &TrackedWindow::rectChanged, this, &HyprlandToplevel::markIpcObjectDirty);
+	QObject::connect(window, &TrackedWindow::minimizedChanged, this, &HyprlandToplevel::markIpcObjectDirty);
+	QObject::connect(window, &TrackedWindow::maximizedChanged, this, &HyprlandToplevel::markIpcObjectDirty);
+	QObject::connect(window, &TrackedWindow::fullscreenChanged, this, &HyprlandToplevel::markIpcObjectDirty);
+	QObject::connect(window, &TrackedWindow::activatedChanged, this, &HyprlandToplevel::markIpcObjectDirty);
+	QObject::connect(this, &HyprlandToplevel::workspaceChanged, this, &HyprlandToplevel::markIpcObjectDirty);
+	QObject::connect(this, &HyprlandToplevel::monitorChanged, this, &HyprlandToplevel::markIpcObjectDirty);
 	// clang-format on
 
 	QObject::connect(
@@ -61,7 +61,7 @@ HyprlandToplevel::HyprlandToplevel(HyprlandIpc* ipc, TrackedWindow* window)
 	    &TilingManager::windowTilingChanged,
 	    this,
 	    [this](TrackedWindow* changed) {
-		    if (changed == this->mWindow) this->refreshIpcObject();
+		    if (changed == this->mWindow) this->markIpcObjectDirty();
 	    }
 	);
 
@@ -190,7 +190,19 @@ void HyprlandToplevel::leaveWorkspace() {
 	this->memberOf = nullptr;
 }
 
+void HyprlandToplevel::markIpcObjectDirty() {
+	if (this->ipcObjectDirty || this->mWindow == nullptr) return;
+	this->ipcObjectDirty = true;
+	this->ipc->scheduleIpcObjectRefresh(this);
+}
+
+void HyprlandToplevel::flushIpcObject() {
+	if (this->ipcObjectDirty) this->refreshIpcObject();
+}
+
 void HyprlandToplevel::refreshIpcObject() {
+	this->ipcObjectDirty = false;
+
 	auto* window = this->mWindow;
 	if (window == nullptr) return;
 

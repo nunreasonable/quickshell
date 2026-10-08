@@ -4,7 +4,9 @@
 #include <qbytearrayview.h>
 #include <qcontainerfwd.h>
 #include <qhash.h>
+#include <qlist.h>
 #include <qobject.h>
+#include <qpointer.h>
 #include <qproperty.h>
 #include <qqmlintegration.h>
 #include <qscreen.h>
@@ -100,6 +102,9 @@ public:
 
 	void emitEvent(const QByteArray& name, const QByteArray& data);
 
+	void scheduleIpcObjectRefresh(HyprlandToplevel* toplevel);
+	void flushIpcObjects();
+
 	void workspaceOccupancyChanged() { this->updateVisibleWorkspaces(); }
 
 	[[nodiscard]] static QVector<QByteArrayView> parseEventArgs(QByteArrayView event, quint16 count);
@@ -125,6 +130,7 @@ private slots:
 	void onCurrentDesktopChanged();
 	void onScreensChanged();
 	void emitGeometryEvent();
+	void emitTitleEvents();
 
 private:
 	explicit HyprlandIpc();
@@ -135,6 +141,7 @@ private:
 	void updateVisibleWorkspaces(bool initial = false);
 	void updateFocusedMonitor(HyprlandMonitor* monitor);
 	void updateFocusedWorkspace();
+	void scheduleGeometryEvent(bool prompt);
 
 	qs::windows::WindowTracker* mTracker = nullptr;
 	qs::windows::VirtualDesktops* mDesktops = nullptr;
@@ -148,6 +155,11 @@ private:
 
 	HyprlandIpcEvent event {this};
 	QTimer geometryTimer;
+	bool geometryAfterFlush = false;
+	QTimer titleTimer;
+	QList<QPointer<HyprlandToplevel>> pendingTitles;
+	QTimer ipcObjectTimer;
+	QList<QPointer<HyprlandToplevel>> dirtyIpcObjects;
 
 	// clang-format off
 	Q_OBJECT_BINDABLE_PROPERTY(HyprlandIpc, HyprlandMonitor*, bFocusedMonitor, &HyprlandIpc::focusedMonitorChanged);
