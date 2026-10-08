@@ -115,7 +115,7 @@ void eventThreadMain(HANDLE readyEvent) {
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 
 	std::vector<HWINEVENTHOOK> hooks;
-	auto hook = [&hooks](DWORD min, DWORD max) {
+	auto hook = [&hooks](DWORD min, DWORD max, bool ownProcess) {
 		auto* handle = SetWinEventHook(
 		    min,
 		    max,
@@ -123,18 +123,18 @@ void eventThreadMain(HANDLE readyEvent) {
 		    &queueEvent,
 		    0,
 		    0,
-		    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+		    WINEVENT_OUTOFCONTEXT | (ownProcess ? 0 : WINEVENT_SKIPOWNPROCESS)
 		);
 
 		if (handle != nullptr) hooks.push_back(handle);
 	};
 
-	hook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND);
-	hook(EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND);
-	hook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND);
-	hook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE);
-	hook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_NAMECHANGE);
-	hook(EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED);
+	hook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, true);
+	hook(EVENT_SYSTEM_MOVESIZESTART, EVENT_SYSTEM_MOVESIZEEND, true);
+	hook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, true);
+	hook(EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, true);
+	hook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_NAMECHANGE, false);
+	hook(EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED, true);
 
 	gEventHookCount.store(static_cast<int>(hooks.size()));
 	SetEvent(readyEvent);
