@@ -23,6 +23,7 @@ Item {
         anchors.fill: parent
         source: root._effectiveSource
         fillMode: Image.PreserveAspectFit
+        sourceSize: root.width > 0 && root.height > 0 ? Qt.size(Math.ceil(root.width / 16) * 16, Math.ceil(root.height / 16) * 16) : Qt.size(0, 0)
         smooth: true
         asynchronous: true
         onStatusChanged: {

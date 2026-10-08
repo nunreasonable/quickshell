@@ -720,8 +720,6 @@ bool WindowTracker::isEligible(HWND hwnd) const {
 	auto appWindow = (exStyle & WS_EX_APPWINDOW) != 0;
 	if ((exStyle & WS_EX_TOOLWINDOW) != 0 && !appWindow) return false;
 
-	if (isOwnProcessWindow(hwnd)) return false;
-
 	if (!appWindow) {
 		HWND walk = nullptr;
 		auto* next = GetAncestor(hwnd, GA_ROOTOWNER);
@@ -795,9 +793,8 @@ void WindowTracker::updateActive() {
 		return;
 	}
 
-	if (isOwnProcessWindow(foreground)) return;
-
 	auto* window = this->byHwnd.value(foreground);
+	if (window == nullptr && isOwnProcessWindow(foreground) && !this->isEligible(foreground)) return;
 
 	if (window == nullptr && this->isEligible(foreground)) {
 		this->addWindow(foreground);

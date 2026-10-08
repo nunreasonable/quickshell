@@ -2,20 +2,26 @@
 #include <qdir.h>
 #include <qdiriterator.h>
 #include <qelapsedtimer.h>
+#include <qevent.h>
 #include <qfont.h>
 #include <qfontdatabase.h>
-#include <qicon.h>
 #include <qguiapplication.h>
+#include <qicon.h>
 #include <qlist.h>
 #include <qlogging.h>
+#include <qpointer.h>
 #include <qqml.h>
+#include <qquickwindow.h>
 #include <qstring.h>
+#include <qtimer.h>
 
 #include "../core/logcat.hpp"
 #include "../core/plugin.hpp"
 #include "desktopentry_backend.hpp"
 #include "panel_window.hpp"
 #include "util.hpp"
+
+#include <dwmapi.h>
 
 namespace {
 
@@ -94,6 +100,40 @@ void addBundledIconPath() {
 	QIcon::setFallbackSearchPaths(paths);
 }
 
+void setCloaked(QWindow* window, bool cloaked) {
+	if (window == nullptr || window->handle() == nullptr) return;
+	BOOL value = cloaked ? TRUE : FALSE;
+	DwmSetWindowAttribute(qs::windows::hwndOf(window), DWMWA_CLOAK, &value, sizeof(value));
+}
+
+class FirstFrameCloak: public QObject {
+public:
+	bool eventFilter(QObject* object, QEvent* event) override {
+		if (event->type() != QEvent::PlatformSurface) return false;
+
+		auto* surfaceEvent = static_cast<QPlatformSurfaceEvent*>(event);
+		if (surfaceEvent->surfaceEventType() != QPlatformSurfaceEvent::SurfaceCreated) return false;
+
+		auto* window = qobject_cast<QQuickWindow*>(object);
+		if (window == nullptr || window->parent() != nullptr || window->type() != Qt::Window) return false;
+		if (qobject_cast<qs::windows::WinProxiedWindow*>(window) != nullptr) return false;
+
+		setCloaked(window, true);
+
+		auto uncloak = [guard = QPointer<QQuickWindow>(window)]() { setCloaked(guard, false); };
+		QObject::connect(
+		    window,
+		    &QQuickWindow::frameSwapped,
+		    window,
+		    uncloak,
+		    static_cast<Qt::ConnectionType>(Qt::QueuedConnection | Qt::SingleShotConnection)
+		);
+		QTimer::singleShot(2000, window, uncloak);
+
+		return false;
+	}
+};
+
 class WindowsPlugin: public QsEnginePlugin {
 	QString name() override { return "windows"; }
 	QList<QString> dependencies() override { return {"window"}; }
@@ -108,6 +148,7 @@ class WindowsPlugin: public QsEnginePlugin {
 		qCDebug(logStartup) << "Loaded bundled fonts in" << timer.restart() << "ms";
 		addBundledIconPath();
 		qs::windows::WindowsDesktopEntryBackend::install();
+		QCoreApplication::instance()->installEventFilter(new FirstFrameCloak());
 		qCDebug(logStartup) << "Installed the desktop entry backend in" << timer.restart() << "ms";
 	}
 
