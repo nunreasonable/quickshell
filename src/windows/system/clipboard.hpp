@@ -18,9 +18,16 @@ struct ClipboardEntry {
 	qint64 id = 0;
 	bool isImage = false;
 	QString text;
+	QString preview;
 	QString imagePath;
 	int width = 0;
 	int height = 0;
+};
+
+struct ClipboardCapture {
+	quint32 sequence = 0;
+	bool captured = false;
+	ClipboardEntry entry;
 };
 
 class Clipboard: public QObject {
@@ -51,10 +58,13 @@ signals:
 
 private:
 	void onClipboardUpdate();
+	void startCapture();
+	void finishCapture(const ClipboardCapture& capture);
 	void rebuildEntriesProperty();
 	void trimHistory();
-	void captureText(const QString& text);
-	void captureImage();
+	void captureText(ClipboardEntry entry);
+	void captureImage(const ClipboardEntry& entry);
+	void noteOwnWrite();
 	QString cacheDir();
 
 	void writeImageToClipboard(const QImage& image);
@@ -64,6 +74,10 @@ private:
 	QString mCacheDir;
 	qint64 nextId = 1;
 	qint64 suppressNextCaptureFor = -1;
+	bool capturing = false;
+	bool captureAgain = false;
+	quint32 capturedSequence = 0;
+	quint32 writtenSequence = 0;
 
 	Q_OBJECT_BINDABLE_PROPERTY(Clipboard, QStringList, bEntries, &Clipboard::entriesChanged);
 };
