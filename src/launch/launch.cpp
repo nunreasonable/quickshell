@@ -17,6 +17,8 @@
 #include <qstring.h>
 #include <qtenvironmentvariables.h>
 #include <qtextstream.h>
+#include <qthreadpool.h>
+#include <qtimer.h>
 
 #include "../core/common.hpp"
 #include "../core/instanceinfo.hpp"
@@ -350,6 +352,14 @@ int launch(const LaunchArgs& args, char** argv) {
 
 	auto root = RootWrapper(args.configPath, shellId);
 	QGuiApplication::setQuitOnLastWindowClosed(false);
+
+#ifdef _WIN32
+	if (auto* runDir = QsPaths::instance()->baseRunDir()) {
+		QTimer::singleShot(30000, app, [base = *runDir]() {
+			QThreadPool::globalInstance()->start([base]() { QsPaths::pruneDeadInstances(base, 5); });
+		});
+	}
+#endif
 
 	exitDaemon(0);
 

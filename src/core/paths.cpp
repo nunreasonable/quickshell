@@ -1,19 +1,24 @@
 #include "paths.hpp"
 #include <cerrno>
+#include <algorithm>
 #include <cstdio>
 #include <tuple>
 #include <utility>
 
 #include <qcontainerfwd.h>
 #include <qcoreapplication.h>
+#include <qdatetime.h>
 #include <qdatastream.h>
 #include <qdir.h>
 #include <qfile.h>
 #include <qfileinfo.h>
+#include <qhash.h>
 #include <qlogging.h>
 #include <qloggingcategory.h>
+#include <qset.h>
 #include <qstandardpaths.h>
 #include <qtenvironmentvariables.h>
+#include <qtimezone.h>
 #include <qtversionchecks.h>
 
 #ifdef _WIN32
@@ -503,4 +508,55 @@ QsPaths::collectInstances(const QString& path, const QString& display) {
 	}
 
 	return {liveInstances, mismatchedInstances, deadInstances};
+}
+
+void QsPaths::pruneDeadInstances(const QDir& baseRunDir, qsizetype keepPerShell) {
+	struct Dead {
+		QString id;
+		QDateTime launchTime;
+	};
+
+	auto byId = QDir(baseRunDir.filePath("by-id"));
+	auto recentLimit = QDateTime::currentDateTimeUtc().addSecs(-300);
+	auto deadByShell = QHash<QString, QVector<Dead>>();
+	auto keptIds = QSet<QString>();
+
+	InstanceLockInfo info;
+	for (const auto& entry: byId.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+		auto id = entry.fileName();
+		keptIds.insert(id);
+
+		if (entry.lastModified(QTimeZone::UTC) > recentLimit) continue;
+		if (!QsPaths::checkLock(entry.filePath(), &info, true) || info.pid != -1) continue;
+
+		deadByShell[info.instance.shellId].push_back({.id = id, .launchTime = info.instance.launchTime});
+	}
+
+	auto removed = QSet<QString>();
+	for (auto it = deadByShell.begin(); it != deadByShell.end(); ++it) {
+		auto& dead = it.value();
+		std::ranges::sort(dead, [](const Dead& a, const Dead& b) { return a.launchTime > b.launchTime; });
+
+		for (qsizetype i = keepPerShell; i < dead.size(); i++) {
+			const auto& id = dead[i].id;
+			if (!QDir(byId.filePath(id)).removeRecursively()) continue;
+
+			removed.insert(id);
+			keptIds.remove(id);
+			QFile::remove(QDir(baseRunDir.filePath("by-shell")).filePath(it.key() + '/' + id));
+
+			auto crashes = QsPaths::crashDir(id);
+			if (crashes.exists() && crashes.isEmpty()) crashes.removeRecursively();
+		}
+	}
+
+	auto byPid = QDir(baseRunDir.filePath("by-pid"));
+	for (const auto& link: byPid.entryInfoList(QDir::Files | QDir::NoDotAndDotDot)) {
+		auto target = QsPaths::resolveRunLink(link.filePath());
+		if (!keptIds.contains(QFileInfo(target).fileName())) QFile::remove(link.filePath());
+	}
+
+	if (!removed.isEmpty()) {
+		qCInfo(logPaths) << "Removed" << removed.size() << "old instance directories";
+	}
 }

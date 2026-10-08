@@ -35,6 +35,7 @@ public:
 	checkLock(const QString& path, InstanceLockInfo* info = nullptr, bool allowDead = false);
 	static std::tuple<QVector<InstanceLockInfo>, QVector<InstanceLockInfo>, QVector<InstanceLockInfo>>
 	collectInstances(const QString& path, const QString& display);
+	static void pruneDeadInstances(const QDir& baseRunDir, qsizetype keepPerShell);
 
 	QDir* baseRunDir();
 	QDir* shellRunDir();
