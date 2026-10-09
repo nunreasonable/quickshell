@@ -184,6 +184,20 @@ void TaskbarManager::setHoverOnly(bool hoverOnly) {
 	emit this->hoverOnlyChanged();
 }
 
+void TaskbarManager::turnOffAutoHide() {
+	if (this->mHoverOnly) return;
+
+	gTurnedOnAutoHide.store(false);
+	setAutoHideOwned(false);
+
+	if ((appBarState() & ABS_AUTOHIDE) != 0) {
+		setAutoHide(false);
+		qCInfo(logTaskbar) << "Turned taskbar auto-hide off for the Windows taskbar mode.";
+	}
+
+	showAllTaskbars();
+}
+
 void TaskbarManager::restoreForCrash() {
 	if (gConcealing.load()) showAllTaskbars();
 }
@@ -530,5 +544,6 @@ Taskbar::Taskbar(QObject* parent): QObject(parent) {
 
 bool Taskbar::hoverOnly() const { return TaskbarManager::instance()->hoverOnly(); }
 void Taskbar::setHoverOnly(bool hoverOnly) { TaskbarManager::instance()->setHoverOnly(hoverOnly); }
+void Taskbar::turnOffAutoHide() { TaskbarManager::instance()->turnOffAutoHide(); }
 
 } // namespace qs::windows

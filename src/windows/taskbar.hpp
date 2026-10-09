@@ -25,6 +25,7 @@ public:
 
 	[[nodiscard]] bool hoverOnly() const { return this->mHoverOnly; }
 	void setHoverOnly(bool hoverOnly);
+	void turnOffAutoHide();
 
 	static void restoreForCrash();
 
@@ -90,6 +91,7 @@ public:
 
 	[[nodiscard]] bool hoverOnly() const;
 	void setHoverOnly(bool hoverOnly);
+	Q_INVOKABLE void turnOffAutoHide();
 
 signals:
 	void hoverOnlyChanged();
