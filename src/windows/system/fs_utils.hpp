@@ -25,6 +25,8 @@ public:
 	Q_INVOKABLE static QString findExecutable(const QString& name);
 
 	Q_INVOKABLE static bool makePath(const QString& path);
+
+	Q_INVOKABLE static bool removeFile(const QString& path);
 };
 
 } // namespace qs::windows::sys

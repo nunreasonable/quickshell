@@ -4,6 +4,7 @@
 
 #include <qcoreapplication.h>
 #include <qdir.h>
+#include <qfile.h>
 #include <qfileinfo.h>
 #include <qstandardpaths.h>
 
@@ -58,6 +59,13 @@ QString FsUtils::findExecutable(const QString& name) {
 bool FsUtils::makePath(const QString& path) {
 	if (path.isEmpty()) return false;
 	return QDir().mkpath(path);
+}
+
+bool FsUtils::removeFile(const QString& path) {
+	auto info = QFileInfo(path);
+	if (!info.exists()) return true;
+	if (!info.isFile()) return false;
+	return QFile::remove(path);
 }
 
 } // namespace qs::windows::sys
