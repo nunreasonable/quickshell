@@ -288,7 +288,11 @@ void LogManager::filterCategory(QLoggingCategory* category) {
 	// default configs that hide everything. QT_LOGGING_RULES is considered via the filter list.
 	if (isQs) {
 		// QtDebugMsg == 0, so default
-		auto defaultLevel = instance->defaultLevels.value(categoryName);
+		auto defaultLevel = QtDebugMsg;
+		{
+			auto locker = QMutexLocker(&instance->defaultLevelsMutex);
+			defaultLevel = instance->defaultLevels.value(categoryName);
+		}
 
 		filter = CategoryFilter();
 		// clang-format off
@@ -395,7 +399,9 @@ void LogManager::initThreadLogging() {
 }
 
 void initLogCategoryLevel(const char* name, QtMsgType defaultLevel) {
-	LogManager::instance()->defaultLevels.insert(QLatin1StringView(name), defaultLevel);
+	auto* instance = LogManager::instance();
+	auto locker = QMutexLocker(&instance->defaultLevelsMutex);
+	instance->defaultLevels.insert(QLatin1StringView(name), defaultLevel);
 }
 
 void LogManager::initFs() {

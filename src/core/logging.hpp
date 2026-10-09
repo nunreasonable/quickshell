@@ -119,6 +119,7 @@ private:
 	QList<qt_logging_registry::QLoggingRule>* rules = nullptr;
 	QtMsgType mDefaultLevel = QtWarningMsg;
 	QHash<QLatin1StringView, QtMsgType> defaultLevels;
+	QMutex defaultLevelsMutex;
 	QHash<const void*, CategoryFilter> sparseFilters;
 	QHash<QLatin1StringView, CategoryFilter> allFilters;
 
