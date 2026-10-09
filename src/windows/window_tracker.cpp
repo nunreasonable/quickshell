@@ -55,7 +55,6 @@ std::vector<WindowEvent> gEvents;             // NOLINT
 std::unordered_set<HWND> gTracked;            // NOLINT
 std::atomic<bool> gEventWakePending = false;  // NOLINT
 std::atomic<HWND> gEventTarget = nullptr;     // NOLINT
-std::atomic<int> gEventHookCount = 0;         // NOLINT
 
 bool onlyForTracked(DWORD event) {
 	switch (event) {
@@ -110,7 +109,7 @@ void CALLBACK queueEvent(
 	}
 }
 
-void eventThreadMain(HANDLE readyEvent) {
+void eventThreadMain() {
 	MSG msg {};
 	PeekMessageW(&msg, nullptr, WM_USER, WM_USER, PM_NOREMOVE);
 
@@ -136,8 +135,9 @@ void eventThreadMain(HANDLE readyEvent) {
 	hook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_NAMECHANGE, false);
 	hook(EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED, true);
 
-	gEventHookCount.store(static_cast<int>(hooks.size()));
-	SetEvent(readyEvent);
+	if (hooks.size() < 6) {
+		qCWarning(logTracker) << "Only" << hooks.size() << "of 6 window event hooks installed.";
+	}
 
 	while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
 		TranslateMessage(&msg);
@@ -543,20 +543,7 @@ void WindowTracker::startEventThread() {
 	}
 
 	gEventTarget.store(window);
-
-	auto* ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-	if (ready == nullptr) return;
-
-	std::thread(&eventThreadMain, ready).detach();
-
-	QTimer::singleShot(0, this, [ready]() {
-		WaitForSingleObject(ready, INFINITE);
-		CloseHandle(ready);
-
-		if (gEventHookCount.load() < 6) {
-			qCWarning(logTracker) << "Only" << gEventHookCount.load() << "of 6 window event hooks installed.";
-		}
-	});
+	std::thread(&eventThreadMain).detach();
 }
 
 void WindowTracker::drainEvents() {
