@@ -1,4 +1,5 @@
 #include "account_age.hpp"
+#include <atomic>
 #include <thread>
 
 #include <qcoreapplication.h>
@@ -24,39 +25,58 @@ namespace {
 
 QS_LOGGING_CATEGORY(logAccountAge, "quickshell.windows.accountage", QtWarningMsg);
 
-QString lookUpKind() {
+struct AccountInfo {
+	QString kind = QStringLiteral("unknown");
+	QString principal;
+};
+
+AccountInfo lookUpAccount() {
+	auto info = AccountInfo();
 	wchar_t name[UNLEN + 1] {};
 	DWORD size = UNLEN + 1;
-	if (!GetUserNameW(name, &size)) return QStringLiteral("unknown");
+	if (!GetUserNameW(name, &size)) return info;
 
 	LPBYTE buffer = nullptr;
 	auto status = NetUserGetInfo(nullptr, name, 24, &buffer);
 	if (status != NERR_Success || buffer == nullptr) {
 		if (buffer != nullptr) NetApiBufferFree(buffer);
-		qCInfo(logAccountAge) << "Not a local SAM user (status" << status << "), treating it as a work, school or domain account";
-		return QStringLiteral("other");
+		qCInfo(logAccountAge) << "No level 24 info for this user (status" << status << "), treating it as not a Microsoft account";
+		info.kind = QStringLiteral("other");
+		return info;
 	}
 
-	auto* info = reinterpret_cast<USER_INFO_24*>(buffer);
-	auto kind = QStringLiteral("local");
-	if (info->usri24_internet_identity) {
-		auto provider = info->usri24_internet_provider_name != nullptr
-		                  ? QString::fromWCharArray(info->usri24_internet_provider_name)
+	auto* user = reinterpret_cast<USER_INFO_24*>(buffer);
+	info.kind = QStringLiteral("local");
+	if (user->usri24_internet_identity) {
+		auto provider = user->usri24_internet_provider_name != nullptr
+		                  ? QString::fromWCharArray(user->usri24_internet_provider_name)
 		                  : QString();
-		kind = provider.compare(QStringLiteral("MicrosoftAccount"), Qt::CaseInsensitive) == 0
-		         ? QStringLiteral("microsoft")
-		         : QStringLiteral("other");
+		info.kind = provider.compare(QStringLiteral("MicrosoftAccount"), Qt::CaseInsensitive) == 0
+		              ? QStringLiteral("microsoft")
+		              : QStringLiteral("other");
+		if (user->usri24_internet_principal_name != nullptr)
+			info.principal = QString::fromWCharArray(user->usri24_internet_principal_name);
 	}
 
 	NetApiBufferFree(buffer);
-	return kind;
+	return info;
 }
 
-QString lookUpAge() {
+QString principalOf(const winrt::Windows::System::User& user) {
+	using namespace winrt::Windows::System;
+	try {
+		auto value = user.GetPropertyAsync(KnownUserProperties::PrincipalName()).get();
+		if (auto text = value.try_as<winrt::hstring>()) return QString::fromWCharArray(text->c_str());
+	} catch (...) {
+	}
+	return QString();
+}
+
+QString lookUpAge(const QString& principal) {
 	auto apartment = true;
 	try {
 		winrt::init_apartment(winrt::apartment_type::multi_threaded);
-	} catch (const winrt::hresult_error&) {
+	} catch (...) {
 		apartment = false;
 	}
 
@@ -65,13 +85,21 @@ QString lookUpAge() {
 		using namespace winrt::Windows::System;
 		auto users = User::FindAllAsync().get();
 		User user = nullptr;
-		for (const auto& candidate: users) {
-			if (candidate.Type() == UserType::LocalUser) {
-				user = candidate;
-				break;
+		if (users.Size() == 1) {
+			user = users.GetAt(0);
+		} else {
+			auto matches = 0;
+			for (const auto& candidate: users) {
+				if (!principal.isEmpty() && principalOf(candidate).compare(principal, Qt::CaseInsensitive) == 0) {
+					user = candidate;
+					matches++;
+				}
+			}
+			if (matches != 1) {
+				user = nullptr;
+				qCInfo(logAccountAge) << "Couldn't tell which of" << users.Size() << "signed-in users runs the shell";
 			}
 		}
-		if (user == nullptr && users.Size() > 0) user = users.GetAt(0);
 
 		if (user != nullptr && !user.try_as<IUser2>()) {
 			result = QStringLiteral("unsupported");
@@ -84,7 +112,7 @@ QString lookUpAge() {
 		}
 	} catch (const winrt::hresult_error& e) {
 		qCWarning(logAccountAge) << "Couldn't check the account's age group:"
-		                      << QString::fromWCharArray(e.message().c_str());
+		                         << QString::fromWCharArray(e.message().c_str());
 	} catch (...) {
 		qCWarning(logAccountAge) << "Couldn't check the account's age group";
 	}
@@ -93,24 +121,38 @@ QString lookUpAge() {
 	return result;
 }
 
+std::atomic<bool> gShuttingDown = false;
+
 } // namespace
 
 AccountAge::AccountAge(QObject* parent): QObject(parent) {
+	QObject::connect(qApp, &QCoreApplication::aboutToQuit, []() { gShuttingDown.store(true); });
 	startup::afterFirstFrame(this, [this]() { this->start(); });
 }
 
 void AccountAge::refresh() { this->start(); }
 
 void AccountAge::start() {
-	if (this->mRunning) return;
+	if (this->mRunning || gShuttingDown.load()) return;
 	this->mRunning = true;
 
 	auto self = QPointer<AccountAge>(this);
 	std::thread([self]() {
-		auto kind = lookUpKind();
-		auto age = kind == QStringLiteral("microsoft") ? lookUpAge() : QStringLiteral("unknown");
+		auto kind = QStringLiteral("unknown");
+		auto age = QStringLiteral("unknown");
+		try {
+			auto account = lookUpAccount();
+			kind = account.kind;
+			if (kind == QStringLiteral("microsoft")) age = lookUpAge(account.principal);
+		} catch (...) {
+			kind = QStringLiteral("unknown");
+			age = QStringLiteral("unknown");
+		}
+		if (gShuttingDown.load()) return;
+		auto* app = QCoreApplication::instance();
+		if (app == nullptr) return;
 		QMetaObject::invokeMethod(
-		    QCoreApplication::instance(),
+		    app,
 		    [self, kind, age]() {
 			    if (self) self->apply(kind, age);
 		    },

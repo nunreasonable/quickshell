@@ -1,4 +1,5 @@
 #include "fs_utils.hpp"
+#include <string>
 
 #include <qt_windows.h>
 
@@ -65,7 +66,22 @@ bool FsUtils::removeFile(const QString& path) {
 	auto info = QFileInfo(path);
 	if (!info.exists()) return true;
 	if (!info.isFile()) return false;
+	if (!info.isWritable()) QFile::setPermissions(path, info.permissions() | QFileDevice::WriteOwner | QFileDevice::WriteUser);
 	return QFile::remove(path);
+}
+
+QString FsUtils::canonicalPath(const QString& path) {
+	if (path.isEmpty()) return QString();
+	auto native = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
+	auto wide = native.toStdWString();
+	auto size = GetLongPathNameW(wide.c_str(), nullptr, 0);
+	if (size > 0) {
+		auto buffer = std::wstring(size, L'\0');
+		auto written = GetLongPathNameW(wide.c_str(), buffer.data(), size);
+		if (written > 0 && written < size) native = QString::fromWCharArray(buffer.c_str(), static_cast<qsizetype>(written));
+	}
+	auto canonical = QFileInfo(native).canonicalFilePath();
+	return canonical.isEmpty() ? QDir::fromNativeSeparators(native) : canonical;
 }
 
 } // namespace qs::windows::sys

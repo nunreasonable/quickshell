@@ -1,4 +1,5 @@
 #include "hotkeys.hpp"
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <utility>
@@ -507,11 +508,47 @@ void HotkeyManager::loadFile() {
 
 		this->unregisterAll();
 		this->parse(data, path);
+		if (!path.isEmpty() && path == this->userFilePath()) this->mergeDefaults();
 		this->registerAll();
 		emit this->bindsChanged();
 	}
 
 	this->updateWatches();
+}
+
+void HotkeyManager::mergeDefaults() {
+	auto defaultPath = this->defaultFilePath();
+	auto file = QFile(defaultPath);
+	if (defaultPath.isEmpty() || !file.open(QFile::ReadOnly)) return;
+
+	auto data = file.readAll();
+	auto introduced = QStringList();
+	for (const auto& entry: QJsonDocument::fromJson(data).object().value("binds").toArray()) {
+		auto object = entry.toObject();
+		if (object.contains("since")) introduced.append(object.value("name").toString());
+	}
+	if (introduced.isEmpty()) return;
+
+	auto userBinds = this->binds;
+	this->parse(data, defaultPath);
+	auto defaults = this->binds;
+	this->binds = userBinds;
+
+	for (const auto& bind: defaults) {
+		if (bind.action != Bind::Action::Global || !introduced.contains(bind.name)) continue;
+
+		auto taken = std::ranges::any_of(userBinds, [&](const Bind& existing) {
+			return existing.combo == bind.combo
+			    || (existing.action == Bind::Action::Global && existing.name == bind.name
+			        && existing.appid == bind.appid);
+		});
+
+		if (!taken) {
+			qCInfo(logHotkeys) << "Adding default bind" << bind.keys << "for" << bind.name
+			                   << "missing from the user keybinds file";
+			this->binds.append(bind);
+		}
+	}
 }
 
 void HotkeyManager::updateWatches() {

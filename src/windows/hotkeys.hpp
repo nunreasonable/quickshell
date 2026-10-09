@@ -104,6 +104,7 @@ private:
 	void parse(const QByteArray& data, const QString& path);
 	void unregisterAll();
 	void registerAll();
+	void mergeDefaults();
 	void updateWatches();
 	void scheduleReload();
 
