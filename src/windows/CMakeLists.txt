@@ -31,6 +31,7 @@ qt_add_library(quickshell-windows STATIC
 	system/gamma.cpp
 	system/screenshot.cpp
 	system/notification_settings.cpp
+	system/account_age.cpp
 	system/network.cpp
 	system/network_wifi.cpp
 	system/network_wifi_item.cpp
@@ -107,6 +108,7 @@ target_link_libraries(quickshell-windows PRIVATE
 	dxgi
 	wlanapi
 	iphlpapi
+	netapi32
 	CoreMessaging
 	material-color
 	mfplat
@@ -129,6 +131,7 @@ set(QS_WINDOWS_DELAYLOAD
 	CoreMessaging
 	wlanapi
 	iphlpapi
+	netapi32
 	version
 	powrprof
 	d3d11
