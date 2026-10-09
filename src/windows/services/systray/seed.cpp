@@ -88,7 +88,7 @@ public:
 		message.hwnd = item->hwnd;
 		message.uid = item->id;
 		message.flags = NIF_ICON | NIF_TIP;
-		if (item->icon != nullptr) message.icon = QImage::fromHICON(item->icon);
+		message.icon = qs::windows::services::systray::imageFromIcon(item->icon);
 		if (item->tip != nullptr) message.tip = QString::fromWCharArray(item->tip);
 		if (item->exeName != nullptr) message.exePath = QString::fromWCharArray(item->exeName);
 

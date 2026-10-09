@@ -194,7 +194,7 @@ TrayIconMessage decode(const TrayDataWire& wire) {
 
 	if ((nid.uFlags & NIF_ICON) != 0) {
 		auto* icon = handleFromWire<HICON>(nid.hIcon);
-		if (icon != nullptr) message.icon = QImage::fromHICON(icon);
+		message.icon = imageFromIcon(icon);
 	}
 
 	if ((nid.uFlags & NIF_TIP) != 0) {
@@ -751,6 +751,14 @@ void TrayHook::announceTo(std::vector<HWND> owners) {
 
 	auto* hwnd = gHwnd.load();
 	if (hwnd != nullptr) PostMessageW(hwnd, announceMessage(), 0, 0);
+}
+
+QImage imageFromIcon(HICON icon) {
+	ICONINFO info {};
+	if (icon == nullptr || !GetIconInfo(icon, &info)) return {};
+	if (info.hbmColor != nullptr) DeleteObject(info.hbmColor);
+	if (info.hbmMask != nullptr) DeleteObject(info.hbmMask);
+	return QImage::fromHICON(icon);
 }
 
 } // namespace qs::windows::services::systray

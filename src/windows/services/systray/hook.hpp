@@ -39,6 +39,7 @@ public:
 };
 
 void seedFromExplorer(TrayIconSink sink, std::function<void(bool ok)> done);
+[[nodiscard]] QImage imageFromIcon(HICON icon);
 
 struct ExplorerIconData {
 	HWND hwnd = nullptr;
