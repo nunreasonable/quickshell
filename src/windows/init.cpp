@@ -28,6 +28,7 @@ namespace {
 QS_LOGGING_CATEGORY(logStartup, "quickshell.startup", QtWarningMsg);
 
 constexpr const char* PERUSER_FONT_PREFIX = "jetbrainsmononerdfont-";
+constexpr const char* PERUSER_FONT_REGULAR_FILE = "jetbrainsmononerdfont-regular.ttf";
 constexpr const char* PERUSER_FONT_FAMILY = "JetBrainsMono Nerd Font";
 
 bool allPeruserFontsPresent(const QDir& dir, const QDir& userFontsDir) {
@@ -59,7 +60,7 @@ void loadBundledFonts() {
 	auto userFontsDir = QDir(qEnvironmentVariable("LocalAppData") + "/Microsoft/Windows/Fonts");
 	auto skipPeruser = allPeruserFontsPresent(dir, userFontsDir);
 
-	enum class Select { All, PeruserOnly, ExceptPeruser };
+	enum class Select { NonPeruser, PeruserRegularOnly, PeruserAll };
 
 	auto load = [&](Select which) {
 		auto iter = QDirIterator(
@@ -71,9 +72,17 @@ void loadBundledFonts() {
 
 		while (iter.hasNext()) {
 			auto path = iter.next();
-			auto isPeruser = iter.fileName().startsWith(PERUSER_FONT_PREFIX, Qt::CaseInsensitive);
-			if (which == Select::PeruserOnly && !isPeruser) continue;
-			if (which == Select::ExceptPeruser && isPeruser) continue;
+			auto name = iter.fileName();
+			auto isPeruser = name.startsWith(PERUSER_FONT_PREFIX, Qt::CaseInsensitive);
+
+			if (which == Select::NonPeruser) {
+				if (isPeruser) continue;
+			} else if (which == Select::PeruserRegularOnly) {
+				if (!isPeruser || name.compare(PERUSER_FONT_REGULAR_FILE, Qt::CaseInsensitive) != 0)
+					continue;
+			} else {
+				if (!isPeruser) continue;
+			}
 
 			if (QFontDatabase::addApplicationFont(path) == -1) {
 				qWarning() << "Failed to load bundled font" << path;
@@ -81,10 +90,12 @@ void loadBundledFonts() {
 		}
 	};
 
-	load(skipPeruser ? Select::ExceptPeruser : Select::All);
+	load(Select::NonPeruser);
 
-	if (skipPeruser && !QFontDatabase::families().contains(QString(PERUSER_FONT_FAMILY))) {
-		load(Select::PeruserOnly);
+	if (!skipPeruser) load(Select::PeruserRegularOnly);
+
+	if (!QFontDatabase::families().contains(QString(PERUSER_FONT_FAMILY))) {
+		load(Select::PeruserAll);
 	}
 
 	QFont::insertSubstitution("JetBrains Mono NF", PERUSER_FONT_FAMILY);
