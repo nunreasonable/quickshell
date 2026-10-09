@@ -17,15 +17,21 @@ qt_add_qml_module(quickshell-widgets
 		ClippingWrapperRectangleInternal.qml
 )
 
+if (WIN32)
+	set(QS_CLIPRECT_SHADER_OPTIONS NOMSL BATCHABLE OPTIMIZED QUIET)
+else()
+	set(QS_CLIPRECT_SHADER_OPTIONS NOHLSL NOMSL BATCHABLE PRECOMPILE OPTIMIZED QUIET)
+endif()
+
 qt6_add_shaders(quickshell-widgets "widgets-cliprect"
-	NOHLSL NOMSL BATCHABLE PRECOMPILE OPTIMIZED QUIET
+	${QS_CLIPRECT_SHADER_OPTIONS}
 	PREFIX "/Quickshell/Widgets"
 	FILES shaders/cliprect.frag
 	OUTPUTS shaders/cliprect.frag.qsb
 )
 
 qt6_add_shaders(quickshell-widgets "widgets-cliprect-ub"
-	NOHLSL NOMSL BATCHABLE PRECOMPILE OPTIMIZED QUIET
+	${QS_CLIPRECT_SHADER_OPTIONS}
 	PREFIX "/Quickshell/Widgets"
 	FILES shaders/cliprect.frag
 	OUTPUTS shaders/cliprect-ub.frag.qsb

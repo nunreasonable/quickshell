@@ -32,6 +32,7 @@ qt_add_library(quickshell-windows STATIC
 	system/screenshot.cpp
 	system/notification_settings.cpp
 	system/account_age.cpp
+	system/time_zones.cpp
 	system/network.cpp
 	system/network_wifi.cpp
 	system/network_wifi_item.cpp
