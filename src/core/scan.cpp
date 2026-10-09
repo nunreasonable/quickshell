@@ -58,12 +58,43 @@ bool QmlScanner::hasFileContentChanged(const QString& path) const {
 	return newHash != it.value();
 }
 
+QString QmlScanner::canonicalDirPath(const QDir& dir, const QString& absolutePath) {
+#ifdef _WIN32
+	qsizetype pos = -1;
+	if (absolutePath.startsWith(u"//")) {
+		pos = absolutePath.indexOf(u'/', 2);
+	} else if (absolutePath.size() >= 3 && absolutePath.at(1) == u':' && absolutePath.at(2) == u'/') {
+		pos = 2;
+	}
+
+	if (pos == -1) return dir.canonicalPath();
+
+	do {
+		pos = absolutePath.indexOf(u'/', pos + 1);
+		auto prefix = pos == -1 ? absolutePath : absolutePath.first(pos);
+		if (this->plainDirs.contains(prefix)) continue;
+
+		auto info = QFileInfo(prefix);
+		if (info.isSymLink()) return dir.canonicalPath();
+		if (!info.exists()) return QString();
+		this->plainDirs.insert(prefix);
+	} while (pos != -1);
+
+	auto path = absolutePath;
+	if (path.at(0) != u'/') path[0] = path.at(0).toUpper();
+	return path;
+#else
+	Q_UNUSED(absolutePath);
+	return dir.canonicalPath();
+#endif
+}
+
 void QmlScanner::scanDir(const QDir& dir) {
 	auto absolutePath = QDir::cleanPath(dir.absolutePath());
 	if (this->seenDirPaths.contains(absolutePath)) return;
 	this->seenDirPaths.insert(absolutePath);
 
-	auto dirKey = dir.canonicalPath();
+	auto dirKey = this->canonicalDirPath(dir, absolutePath);
 	if (dirKey.isEmpty()) dirKey = absolutePath;
 	if (this->scannedDirs.contains(dirKey)) return;
 	this->scannedDirs.insert(dirKey);

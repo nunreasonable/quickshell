@@ -63,7 +63,10 @@ private:
 	QHash<QString, ImportTarget> importTargets;
 	QHash<QString, CachedFile> cachedFiles;
 	QHash<QString, CachedFile> freshFiles;
+	QSet<QString> plainDirs;
 	bool cacheChanged = false;
+
+	QString canonicalDirPath(const QDir& dir, const QString& absolutePath);
 
 	bool scanQmlFile(const QString& path, const QFileInfo& info, bool& singleton, bool& internal);
 	void scanImports(const QString& path, const QVector<QString>& imports);
