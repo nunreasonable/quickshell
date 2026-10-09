@@ -16,6 +16,7 @@ public:
 
 	static UINT callbackMessage();
 	static UINT taskbarCreatedMessage();
+	static void removeStale();
 
 	[[nodiscard]] bool registered() const { return this->mRegistered; }
 	[[nodiscard]] HWND hwnd() const { return this->mHwnd; }

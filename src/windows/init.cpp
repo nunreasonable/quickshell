@@ -17,6 +17,7 @@
 
 #include "../core/logcat.hpp"
 #include "../core/plugin.hpp"
+#include "appbar.hpp"
 #include "desktopentry_backend.hpp"
 #include "panel_window.hpp"
 #include "util.hpp"
@@ -142,6 +143,7 @@ class WindowsPlugin: public QsEnginePlugin {
 
 	void init() override {
 		qs::windows::optOutOfProcessPowerThrottling();
+		qs::windows::WinAppBar::removeStale();
 		auto timer = QElapsedTimer();
 		timer.start();
 		loadBundledFonts();
