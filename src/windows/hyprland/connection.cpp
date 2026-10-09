@@ -5,6 +5,7 @@
 #include <qbytearray.h>
 #include <qbytearrayview.h>
 #include <qcontainerfwd.h>
+#include <qelapsedtimer.h>
 #include <qguiapplication.h>
 #include <qlist.h>
 #include <qlogging.h>
@@ -92,7 +93,15 @@ HyprlandIpc* HyprlandIpc::instance() {
 	static HyprlandIpc* instance = nullptr; // NOLINT
 
 	if (instance == nullptr) {
+		auto timer = QElapsedTimer();
+		timer.start();
 		instance = new HyprlandIpc();
+
+		qCInfo(logHyprlandIpc) << "Hyprland compatibility module ready:"
+		                       << instance->mMonitors.valueList().length() << "monitors,"
+		                       << instance->mWorkspaces.valueList().length() << "workspaces,"
+		                       << instance->mToplevels.valueList().length() << "toplevels in"
+		                       << timer.elapsed() << "ms";
 	}
 
 	return instance;
@@ -140,10 +149,6 @@ HyprlandIpc::HyprlandIpc()
 
 	for (auto* window: this->mTracker->windows()) this->onWindowAdded(window);
 	this->onActiveWindowChanged();
-
-	qCInfo(logHyprlandIpc) << "Hyprland compatibility module ready:" << this->mMonitors.valueList().length()
-	                       << "monitors," << this->mWorkspaces.valueList().length() << "workspaces,"
-	                       << this->mToplevels.valueList().length() << "toplevels";
 
 	emit this->connected();
 }

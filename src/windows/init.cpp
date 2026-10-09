@@ -82,11 +82,16 @@ void loadBundledFonts() {
 		}
 	};
 
+	auto timer = QElapsedTimer();
+	timer.start();
 	load(skipPeruser ? Select::ExceptPeruser : Select::All);
+	qCDebug(logStartup) << "Added the bundled font files in" << timer.restart() << "ms";
 
 	if (skipPeruser && !QFontDatabase::families().contains(QString(PERUSER_FONT_FAMILY))) {
 		load(Select::PeruserOnly);
 	}
+
+	if (skipPeruser) qCDebug(logStartup) << "Listed the system fonts in" << timer.restart() << "ms";
 
 	QFont::insertSubstitution("JetBrains Mono NF", PERUSER_FONT_FAMILY);
 	QFont::insertSubstitution("JetBrains Mono", PERUSER_FONT_FAMILY);
