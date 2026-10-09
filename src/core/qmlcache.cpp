@@ -12,6 +12,7 @@
 #include <qcryptographichash.h>
 #include <qdatetime.h>
 #include <qdir.h>
+#include <qelapsedtimer.h>
 #include <qendian.h>
 #include <qfile.h>
 #include <qfileinfo.h>
@@ -230,6 +231,9 @@ Bundle* parseBundle(std::span<const char> data, QString* error) {
 }
 
 Bundle* loadBundle(const QString& path) {
+	auto timer = QElapsedTimer();
+	timer.start();
+
 	auto file = QFile(path);
 	if (!file.open(QFile::ReadOnly)) {
 		qCWarning(logQmlCache) << "Could not open QML bundle" << path << file.errorString();
@@ -263,7 +267,8 @@ Bundle* loadBundle(const QString& path) {
 		return nullptr;
 	}
 
-	qCInfo(logQmlCache) << "Loaded QML bundle with" << bundle->units.size() << "units from" << path;
+	qCInfo(logQmlCache) << "Loaded QML bundle with" << bundle->units.size() << "units from" << path
+	                    << "in" << timer.elapsed() << "ms";
 	return bundle;
 }
 
@@ -306,22 +311,46 @@ const QQmlPrivate::CachedQmlUnit* lookup(const QUrl& url) {
 	return &unit.cached;
 }
 
+bool cacheDisabled() {
+	static const bool disabled = qEnvironmentVariableIsSet("QS_DISABLE_QMLCACHE");
+	return disabled;
+}
+
+BundleKey bundleKey(const QDir& configRoot) {
+	if (!configRoot.isAbsolute()) return {};
+
+	auto path = configRoot.filePath(QStringLiteral(".qmlcache/bundle.bin"));
+	auto info = QFileInfo(path);
+	if (!info.isFile()) return {};
+
+	return {.path = path, .size = info.size(), .modified = info.lastModified()};
+}
+
 } // namespace
+
+void preload(const QDir& configRoot) {
+	if (cacheDisabled()) return;
+
+	auto key = bundleKey(configRoot);
+	if (key.path.isEmpty()) return;
+
+	auto& state = globalState();
+	auto locker = QMutexLocker(&state.mutex);
+
+	if (key != state.key) {
+		state.key = key;
+		state.bundle = loadBundle(key.path);
+	}
+}
 
 void activate(
     const QDir& configRoot,
     const QHash<QString, QByteArray>& fileHashes,
     const QHash<QString, QString>& fileIntercepts
 ) {
-	static const bool disabled = qEnvironmentVariableIsSet("QS_DISABLE_QMLCACHE");
-	if (disabled) return;
+	if (cacheDisabled()) return;
 
-	auto key = BundleKey();
-	if (configRoot.isAbsolute()) {
-		auto path = configRoot.filePath(QStringLiteral(".qmlcache/bundle.bin"));
-		auto info = QFileInfo(path);
-		if (info.isFile()) key = {.path = path, .size = info.size(), .modified = info.lastModified()};
-	}
+	auto key = bundleKey(configRoot);
 
 	auto hashes = QHash<QString, QByteArray>();
 	auto intercepts = QSet<QString>();

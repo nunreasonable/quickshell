@@ -90,6 +90,8 @@ QString QmlScanner::canonicalDirPath(const QDir& dir, const QString& absolutePat
 }
 
 void QmlScanner::scanDir(const QDir& dir) {
+	if (this->preprocessingDeferred) return;
+
 	auto absolutePath = QDir::cleanPath(dir.absolutePath());
 	if (this->seenDirPaths.contains(absolutePath)) return;
 	this->seenDirPaths.insert(absolutePath);
@@ -184,6 +186,7 @@ bool QmlScanner::scanQmlFile(
     bool& singleton,
     bool& internal
 ) {
+	if (this->preprocessingDeferred) return false;
 	if (this->scannedFileSet.contains(path)) return false;
 	this->scannedFileSet.insert(path);
 	this->scannedFiles.push_back(path);
@@ -214,6 +217,11 @@ bool QmlScanner::scanQmlFile(
 	}
 
 	auto mayPreprocess = fileData.contains("//@ if") || fileData.contains("//@ endif");
+	if (mayPreprocess && this->deferPreprocessing) {
+		this->preprocessingDeferred = true;
+		return false;
+	}
+
 	auto stream = QTextStream(&fileData);
 	auto imports = QVector<QString>();
 

@@ -317,6 +317,8 @@ int launch(const LaunchArgs& args, char** argv) {
 	LogManager::initFs();
 	qCDebug(logStartup) << "Created the application in" << appMs << "ms, logging in" << timer.restart() << "ms";
 
+	RootWrapper::prefetch(args.configPath);
+
 	QGuiApplication::setDesktopFileName(appId);
 
 	if (args.debugPort != -1) {

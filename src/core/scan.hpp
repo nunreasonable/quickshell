@@ -38,6 +38,9 @@ public:
 
 	QVector<ScanError> scanErrors;
 
+	bool deferPreprocessing = false;
+	bool preprocessingDeferred = false;
+
 	bool readAndHashFile(const QString& path, QByteArray& data);
 	[[nodiscard]] bool hasFileContentChanged(const QString& path) const;
 

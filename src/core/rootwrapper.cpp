@@ -1,5 +1,8 @@
 #include "rootwrapper.hpp"
 #include <cstdlib>
+#include <future>
+#include <optional>
+#include <thread>
 #include <utility>
 
 #include <qdir.h>
@@ -11,6 +14,7 @@
 #include <qqmlcomponent.h>
 #include <qqmlengine.h>
 #include <qquickitem.h>
+#include <qtenvironmentvariables.h>
 #include <qtmetamacros.h>
 #include <qurl.h>
 
@@ -20,12 +24,77 @@
 #include "instanceinfo.hpp"
 #include "logcat.hpp"
 #include "paths.hpp"
+#include "qmlcache.hpp"
 #include "qmlglobal.hpp"
 #include "scan.hpp"
 #include "toolsupport.hpp"
 
 namespace {
 QS_LOGGING_CATEGORY(logStartup, "quickshell.startup", QtWarningMsg);
+
+QString scanCachePath() { return QsPaths::instance()->shellCacheDir().filePath("qmlscan.bin"); }
+
+QmlScanner scanConfig(const QString& rootPath, const QString& cachePath, bool deferPreprocessing) {
+	auto scanner = QmlScanner(QFileInfo(rootPath).dir());
+	scanner.deferPreprocessing = deferPreprocessing;
+	scanner.loadCache(cachePath);
+	scanner.scanQmlRoot(rootPath);
+	if (!scanner.preprocessingDeferred) scanner.saveCache(cachePath);
+	return scanner;
+}
+
+struct ScanPrefetch {
+	QString rootPath;
+	QString cachePath;
+	std::future<QmlScanner> result;
+};
+
+ScanPrefetch* gScanPrefetch = nullptr; // NOLINT
+
+std::optional<QmlScanner> takePrefetchedScan(const QString& rootPath) {
+	auto* prefetch = gScanPrefetch;
+	if (prefetch == nullptr) return std::nullopt;
+	gScanPrefetch = nullptr;
+
+	auto timer = QElapsedTimer();
+	timer.start();
+	auto scanner = prefetch->result.get();
+	auto matches = prefetch->rootPath == rootPath && prefetch->cachePath == scanCachePath();
+	delete prefetch;
+
+	qCDebug(logStartup) << "Waited" << timer.elapsed() << "ms for the prefetched scan";
+
+	if (!matches || scanner.preprocessingDeferred) return std::nullopt;
+	return scanner;
+}
+
+} // namespace
+
+void RootWrapper::prefetch(const QString& rootPath) {
+	if (gScanPrefetch != nullptr || qEnvironmentVariableIsSet("QS_DISABLE_SCAN_PREFETCH")) return;
+
+	auto* prefetch = new ScanPrefetch();
+	prefetch->rootPath = rootPath;
+	prefetch->cachePath = scanCachePath();
+	auto task = std::packaged_task<QmlScanner()>(
+	    [rootPath = prefetch->rootPath, cachePath = prefetch->cachePath]() {
+		    auto timer = QElapsedTimer();
+		    timer.start();
+		    auto scanner = scanConfig(rootPath, cachePath, true);
+		    qCDebug(logStartup) << "Scanned" << scanner.scannedFiles.size() << "files on the prefetch thread in"
+		                        << timer.restart() << "ms";
+
+		    if (!scanner.preprocessingDeferred) {
+			    qs::qmlcache::preload(QFileInfo(rootPath).dir());
+		    }
+
+		    return scanner;
+	    }
+	);
+
+	prefetch->result = task.get_future();
+	gScanPrefetch = prefetch;
+	std::thread(std::move(task)).detach();
 }
 
 RootWrapper::RootWrapper(QString rootPath, QString shellId)
@@ -66,12 +135,14 @@ void RootWrapper::reloadGraph(bool hard) {
 	auto rootPath = rootFile.dir();
 	auto timer = QElapsedTimer();
 	timer.start();
-	auto scanCache = QsPaths::instance()->shellCacheDir().filePath("qmlscan.bin");
-	auto scanner = QmlScanner(rootPath);
-	scanner.loadCache(scanCache);
-	scanner.scanQmlRoot(this->rootPath);
-	scanner.saveCache(scanCache);
-	qCDebug(logStartup) << "Scanned" << scanner.scannedFiles.size() << "files in" << timer.restart() << "ms";
+
+	auto prefetched = this->generation == nullptr ? takePrefetchedScan(this->rootPath) : std::nullopt;
+	auto scanner = prefetched ? std::move(*prefetched)
+	                          : scanConfig(this->rootPath, scanCachePath(), false);
+	if (!prefetched) {
+		qCDebug(logStartup) << "Scanned" << scanner.scannedFiles.size() << "files in" << timer.elapsed() << "ms";
+	}
+	timer.restart();
 
 	qs::core::QmlToolingSupport::updateTooling(rootPath, scanner);
 	qCDebug(logStartup) << "Updated tooling in" << timer.restart() << "ms";

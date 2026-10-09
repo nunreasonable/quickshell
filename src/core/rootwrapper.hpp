@@ -17,6 +17,8 @@ public:
 	~RootWrapper() override;
 	Q_DISABLE_COPY_MOVE(RootWrapper);
 
+	static void prefetch(const QString& rootPath);
+
 	void reloadGraph(bool hard);
 
 private slots:
