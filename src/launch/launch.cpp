@@ -205,6 +205,10 @@ int launch(const LaunchArgs& args, char** argv) {
 	pragmas.dropExpensiveFonts |= qEnvironmentVariableIntValue("QS_DROP_EXPENSIVE_FONTS") == 1;
 
 #ifdef _WIN32
+	if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+		qputenv("QT_QPA_PLATFORM", "windows:fontengine=freetype");
+	}
+
 	if (pragmas.dropExpensiveFonts) {
 		qWarning() << "DropExpensiveFonts is not supported on Windows, ignoring";
 	}
