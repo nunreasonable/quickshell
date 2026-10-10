@@ -16,6 +16,7 @@ public:
 	QList<ParsedDesktopEntryData> scan() override;
 	QStringList watchPaths() override;
 	void execute(const QVector<QString>& command, const QString& workingDirectory) override;
+	QString aliasFor(const QString& name) override;
 
 	static void install();
 
@@ -23,9 +24,16 @@ public:
 	static QString idForParsingName(const QString& token);
 	static void launch(const QString& token, const QString& workingDirectory = QString());
 
+	static void noteWindowExe(const QString& appId, const QString& exePath);
+	static QString exeForAppId(const QString& appId);
+
 private:
 	static QMutex sRegistryMutex;
 	static QHash<QString, QString> sRegistry;
+	static QHash<QString, QString> sTargets;
+	static QHash<QString, QString> sExeNames;
+	static QMutex sWindowExeMutex;
+	static QHash<QString, QString> sWindowExes;
 };
 
 } // namespace qs::windows

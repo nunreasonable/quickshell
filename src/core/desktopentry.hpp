@@ -55,6 +55,8 @@ public:
 	virtual QStringList watchPaths() = 0;
 
 	virtual void execute(const QVector<QString>& command, const QString& workingDirectory) = 0;
+
+	virtual QString aliasFor(const QString& /*name*/) { return QString(); }
 };
 
 /// A desktop entry. See @@DesktopEntries for details.

@@ -13,6 +13,8 @@ namespace qs::windows {
 
 [[nodiscard]] bool isShellIconKey(const QString& key);
 
+[[nodiscard]] bool hasShellIcon(const QString& key);
+
 void requestShellIcon(
     const QString& key,
     const QSize& size,

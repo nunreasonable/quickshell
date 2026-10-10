@@ -3,6 +3,7 @@
 #include <utility>
 
 #include <qdebug.h>
+#include <qdir.h>
 #include <qfileinfo.h>
 #include <qloggingcategory.h>
 #include <qmutex.h>
@@ -13,6 +14,7 @@
 #include <qt_windows.h>
 
 #include <objbase.h>
+#include <propkey.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -51,10 +53,64 @@ QString takeComString(PWSTR raw) {
 
 const auto APPS_FOLDER_PREFIX = QStringLiteral("shell:AppsFolder\\");
 
+QString normalizedExe(const QString& path) { return QDir::toNativeSeparators(path).toLower(); }
+
+QString exeNameOf(const QString& path) {
+	if (!path.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive)) return QString();
+	return QFileInfo(QDir::fromNativeSeparators(path)).completeBaseName().toLower();
+}
+
+QString linkTarget(const ComPtr<IShellItem>& item) {
+	ComPtr<IShellItem2> item2;
+	if (FAILED(item.As(&item2))) return QString();
+
+	PWSTR raw = nullptr;
+	if (FAILED(item2->GetString(PKEY_Link_TargetParsingPath, &raw))) return QString();
+	return takeComString(raw);
+}
+
 } // namespace
 
 QMutex WindowsDesktopEntryBackend::sRegistryMutex;
-QHash<QString, QString> WindowsDesktopEntryBackend::sRegistry; // NOLINT
+QHash<QString, QString> WindowsDesktopEntryBackend::sRegistry;  // NOLINT
+QHash<QString, QString> WindowsDesktopEntryBackend::sTargets;   // NOLINT
+QHash<QString, QString> WindowsDesktopEntryBackend::sExeNames;  // NOLINT
+QMutex WindowsDesktopEntryBackend::sWindowExeMutex;
+QHash<QString, QString> WindowsDesktopEntryBackend::sWindowExes; // NOLINT
+
+void WindowsDesktopEntryBackend::noteWindowExe(const QString& appId, const QString& exePath) {
+	if (appId.isEmpty() || exePath.isEmpty()) return;
+	QMutexLocker locker(&WindowsDesktopEntryBackend::sWindowExeMutex);
+	WindowsDesktopEntryBackend::sWindowExes.insert(appId.toLower(), exePath);
+}
+
+QString WindowsDesktopEntryBackend::exeForAppId(const QString& appId) {
+	if (appId.isEmpty()) return QString();
+	QMutexLocker locker(&WindowsDesktopEntryBackend::sWindowExeMutex);
+	return WindowsDesktopEntryBackend::sWindowExes.value(appId.toLower());
+}
+
+QString WindowsDesktopEntryBackend::aliasFor(const QString& name) {
+	static const QHash<QString, QString> shellAliases = {
+	    {QStringLiteral("explorer"), QStringLiteral("microsoft.windows.explorer")},
+	};
+
+	auto key = name.toLower();
+	auto exe = WindowsDesktopEntryBackend::exeForAppId(key);
+
+	QMutexLocker locker(&WindowsDesktopEntryBackend::sRegistryMutex);
+
+	if (!exe.isEmpty()) {
+		auto id = WindowsDesktopEntryBackend::sTargets.value(normalizedExe(exe));
+		if (!id.isEmpty()) return id;
+	}
+
+	auto id = WindowsDesktopEntryBackend::sExeNames.value(key);
+	if (!id.isEmpty()) return id;
+
+	id = shellAliases.value(key);
+	return WindowsDesktopEntryBackend::sRegistry.contains(id) ? id : QString();
+}
 
 QString WindowsDesktopEntryBackend::parsingNameForId(const QString& id) {
 	QMutexLocker locker(&WindowsDesktopEntryBackend::sRegistryMutex);
@@ -125,6 +181,8 @@ QList<ParsedDesktopEntryData> WindowsDesktopEntryBackend::scan() {
 	}
 
 	auto registry = QHash<QString, QString>();
+	auto targets = QHash<QString, QString>();
+	auto exeNames = QHash<QString, QString>();
 
 	ComPtr<IShellItem> item;
 	while (enumItems->Next(1, item.GetAddressOf(), nullptr) == S_OK) {
@@ -182,11 +240,23 @@ QList<ParsedDesktopEntryData> WindowsDesktopEntryBackend::scan() {
 
 		registry.insert(id, token);
 		results.append(std::move(data));
+
+		auto target = linkTarget(current);
+		if (!exeNameOf(target).isEmpty() && !targets.contains(normalizedExe(target))) {
+			targets.insert(normalizedExe(target), id);
+		}
+
+		for (const auto& path: {target, token}) {
+			auto exeName = exeNameOf(path);
+			if (!exeName.isEmpty() && !exeNames.contains(exeName)) exeNames.insert(exeName, id);
+		}
 	}
 
 	{
 		QMutexLocker locker(&WindowsDesktopEntryBackend::sRegistryMutex);
 		WindowsDesktopEntryBackend::sRegistry = registry;
+		WindowsDesktopEntryBackend::sTargets = targets;
+		WindowsDesktopEntryBackend::sExeNames = exeNames;
 	}
 
 	qCDebug(logAppsFolder) << "Scanned" << results.size() << "apps from the Windows Apps folder";

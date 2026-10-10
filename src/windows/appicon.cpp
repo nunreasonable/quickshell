@@ -8,6 +8,8 @@
 #include <qcache.h>
 #include <qcoreapplication.h>
 #include <qdeadlinetimer.h>
+#include <qdir.h>
+#include <qfileinfo.h>
 #include <qimage.h>
 #include <qlist.h>
 #include <qloggingcategory.h>
@@ -142,6 +144,9 @@ QString parsingNameForKey(const QString& key) {
 		parsingName.replace(u'/', u'\\');
 		return parsingName;
 	}
+
+	auto exe = WindowsDesktopEntryBackend::exeForAppId(key);
+	if (!exe.isEmpty()) return QDir::toNativeSeparators(exe);
 
 	return QString();
 }
@@ -350,7 +355,14 @@ QPixmap iconForKey(const QString& key, const QSize& size) {
 
 bool isShellIconKey(const QString& key) {
 	if (key.startsWith(QStringLiteral("appicon:"))) return true;
-	return looksLikeWindowsPath(key) && !isPlainImage(key);
+	if (looksLikeWindowsPath(key)) return !isPlainImage(key);
+	return !WindowsDesktopEntryBackend::exeForAppId(key).isEmpty();
+}
+
+bool hasShellIcon(const QString& key) {
+	auto parsingName = parsingNameForKey(key);
+	if (parsingName.isEmpty()) return false;
+	return !looksLikeWindowsPath(parsingName) || QFileInfo::exists(parsingName);
 }
 
 void requestShellIcon(

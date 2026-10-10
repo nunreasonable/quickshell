@@ -33,6 +33,10 @@
 #include "rootwrapper.hpp"
 #include "scanenv.hpp"
 
+#ifdef Q_OS_WIN
+#include "../windows/appicon.hpp"
+#endif
+
 QuickshellSettings::QuickshellSettings() {
 	QObject::connect(
 	    static_cast<QGuiApplication*>(QGuiApplication::instance()), // NOLINT
@@ -334,6 +338,9 @@ QString QuickshellGlobal::iconPath(const QString& icon) {
 }
 
 QString QuickshellGlobal::iconPath(const QString& icon, bool check) {
+#ifdef Q_OS_WIN
+	if (check && qs::windows::hasShellIcon(icon)) return IconImageProvider::requestString(icon);
+#endif
 	if (check && QIcon::fromTheme(icon).isNull()) return "";
 	return IconImageProvider::requestString(icon);
 }

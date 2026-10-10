@@ -23,6 +23,7 @@
 #include <qtimer.h>
 #include <qtypes.h>
 
+#include "desktopentry_backend.hpp"
 #include "startup.hpp"
 #include "util.hpp"
 #include "virtual_desktops.hpp"
@@ -265,6 +266,8 @@ void TrackedWindow::refreshIdentity() {
 		appId = QFileInfo(exe).fileName().toLower();
 		if (appId.endsWith(".exe")) appId.chop(4);
 	}
+
+	WindowsDesktopEntryBackend::noteWindowExe(appId, exe);
 
 	Qt::beginPropertyUpdateGroup();
 	this->bPid = pid;

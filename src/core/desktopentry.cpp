@@ -463,6 +463,10 @@ DesktopEntry* DesktopEntryManager::byId(const QString& id) {
 		return entry;
 	} else if (auto* entry = this->lowercaseDesktopEntries.value(id.toLower())) {
 		return entry;
+	} else if (DesktopEntryManager::sBackend != nullptr) {
+		auto alias = DesktopEntryManager::sBackend->aliasFor(id);
+		if (alias.isEmpty()) return nullptr;
+		return this->lowercaseDesktopEntries.value(alias.toLower());
 	} else {
 		return nullptr;
 	}
