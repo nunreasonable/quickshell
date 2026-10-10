@@ -21,6 +21,8 @@
 #include "../../core/model.hpp"
 #include "../../core/qmlscreen.hpp"
 #include "../hotkeys.hpp"
+#include "../input_mask.hpp"
+#include "../util.hpp"
 #include "../virtual_desktops.hpp"
 #include "../window_tracker.hpp"
 #include "dispatcher.hpp"
@@ -134,6 +136,15 @@ HyprlandIpc::HyprlandIpc()
 	QObject::connect(this->mDesktops, &VirtualDesktops::desktopsChanged, this, &HyprlandIpc::onDesktopsChanged);
 	QObject::connect(this->mDesktops, &VirtualDesktops::currentChanged, this, &HyprlandIpc::onCurrentDesktopChanged);
 	// clang-format on
+
+	auto* masks = qs::windows::InputMaskTracker::instance();
+	masks->acquireButtonEvents();
+	QObject::connect(
+	    masks,
+	    &qs::windows::InputMaskTracker::buttonPressed,
+	    this,
+	    &HyprlandIpc::onButtonPressed
+	);
 
 	QObject::connect(this, &HyprlandIpc::dispatchGlobal, this, [](const QString& name) {
 		qs::windows::hotkeys::HotkeyManager::instance()->triggerGlobal(name);
@@ -404,7 +415,9 @@ void HyprlandIpc::updateFocusedWorkspace() {
 }
 
 void HyprlandIpc::updateFocusedMonitor(HyprlandMonitor* monitor) {
-	if (monitor == nullptr || monitor == this->bFocusedMonitor.value()) return;
+	if (monitor == nullptr) return;
+	qs::windows::setFocusedScreen(monitor->screen());
+	if (monitor == this->bFocusedMonitor.value()) return;
 	this->bFocusedMonitor = monitor;
 
 	this->emitEvent(
@@ -521,5 +534,12 @@ void HyprlandIpc::onCurrentDesktopChanged() {
 }
 
 void HyprlandIpc::onScreensChanged() { this->syncMonitors(false); }
+
+void HyprlandIpc::onButtonPressed(QPoint position, quint32 /*time*/) {
+	auto point = POINT {.x = position.x(), .y = position.y()};
+	auto* monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONULL);
+	auto* screen = qs::windows::screenForMonitor(monitor);
+	if (screen != nullptr) this->updateFocusedMonitor(this->monitorForScreen(screen));
+}
 
 } // namespace qs::hyprland::ipc

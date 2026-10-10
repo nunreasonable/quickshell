@@ -17,6 +17,9 @@ struct MonitorRects {
 };
 
 [[nodiscard]] HMONITOR monitorForScreen(QScreen* screen);
+[[nodiscard]] QScreen* screenForMonitor(HMONITOR monitor);
+[[nodiscard]] QScreen* focusedScreen();
+void setFocusedScreen(QScreen* screen);
 void prioritizeInputThread(int priority);
 void optOutOfProcessPowerThrottling();
 [[nodiscard]] MonitorRects monitorRects(HMONITOR monitor);

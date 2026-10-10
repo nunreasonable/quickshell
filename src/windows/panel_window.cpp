@@ -17,6 +17,8 @@
 #include <qquickwindow.h>
 #include <qrect.h>
 #include <qregion.h>
+#include <qcursor.h>
+#include <qguiapplication.h>
 #include <qscreen.h>
 #include <qtenvironmentvariables.h>
 #include <qtimer.h>
@@ -443,6 +445,27 @@ void WinPanelWindow::setScreen(QuickshellScreenInfo* screen) {
 }
 
 bool WinPanelWindow::aboveWindows() const { return this->bLayer.value() > PanelLayer::Bottom; }
+
+void WinPanelWindow::setVisibleDirect(bool visible) {
+	if (visible && this->mScreen == nullptr && !this->isVisibleDirect()) {
+		if (this->window == nullptr) this->createWindow();
+		this->followFocusedScreen();
+	}
+
+	this->ProxyWindowBase::setVisibleDirect(visible);
+}
+
+void WinPanelWindow::followFocusedScreen() {
+	if (this->window == nullptr || this->mEmbedParent != nullptr) return;
+
+	auto* screen = focusedScreen();
+	if (screen == nullptr) screen = QGuiApplication::screenAt(QCursor::pos());
+	if (screen == nullptr || this->window->screen() == screen) return;
+
+	this->window->setScreen(screen);
+	this->updateScreen();
+	this->updateDimensions();
+}
 
 void WinPanelWindow::setAboveWindows(bool aboveWindows) {
 	this->setLayer(aboveWindows ? PanelLayer::Top : PanelLayer::Bottom);

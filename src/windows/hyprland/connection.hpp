@@ -7,6 +7,7 @@
 #include <qlist.h>
 #include <qobject.h>
 #include <qpointer.h>
+#include <qpoint.h>
 #include <qproperty.h>
 #include <qqmlintegration.h>
 #include <qscreen.h>
@@ -129,6 +130,7 @@ private slots:
 	void onDesktopsChanged();
 	void onCurrentDesktopChanged();
 	void onScreensChanged();
+	void onButtonPressed(QPoint position, quint32 time);
 	void emitGeometryEvent();
 	void emitTitleEvents();
 

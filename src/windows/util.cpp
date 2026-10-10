@@ -4,6 +4,8 @@
 #include <cmath>
 
 #include <qbytearray.h>
+#include <qguiapplication.h>
+#include <qpointer.h>
 #include <qpoint.h>
 #include <qrect.h>
 #include <qscreen.h>
@@ -20,6 +22,23 @@ HMONITOR monitorForScreen(QScreen* screen) {
 	auto* native = screen->nativeInterface<QNativeInterface::QWindowsScreen>();
 	return native == nullptr ? nullptr : native->handle();
 }
+
+QScreen* screenForMonitor(HMONITOR monitor) {
+	if (monitor == nullptr) return nullptr;
+
+	for (auto* screen: QGuiApplication::screens()) {
+		if (monitorForScreen(screen) == monitor) return screen;
+	}
+
+	return nullptr;
+}
+
+namespace {
+QPointer<QScreen> gFocusedScreen; // NOLINT
+}
+
+QScreen* focusedScreen() { return gFocusedScreen.data(); }
+void setFocusedScreen(QScreen* screen) { gFocusedScreen = screen; }
 
 MonitorRects monitorRects(HMONITOR monitor) {
 	MonitorRects rects;

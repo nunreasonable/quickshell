@@ -93,6 +93,7 @@ public:
 	void trySetHeight(qint32 implicitHeight) override;
 
 	void setScreen(QuickshellScreenInfo* screen) override;
+	void setVisibleDirect(bool visible) override;
 
 	[[nodiscard]] Anchors anchors() const { return this->bAnchors; }
 	void setAnchors(Anchors anchors) { this->bAnchors = anchors; }
@@ -150,6 +151,7 @@ private slots:
 	void onWindowVisibleChanged();
 	void onDesktopAccessorReady();
 	void updateScreen();
+	void followFocusedScreen();
 	void scheduleUpdateDimensions();
 	void onScreenScaleChanged();
 	void updateDimensions();
