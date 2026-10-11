@@ -28,6 +28,12 @@ namespace qs::windows::services::mpris {
 namespace {
 constexpr int EMPTY_REREAD_MS = 400;
 constexpr int MAX_EMPTY_REREADS = 8;
+constexpr int ART_RETRY_MS = 350;
+constexpr int MAX_ART_RETRIES = 6;
+
+bool isBlankTrack(const QString& trackKey) {
+	return QString(trackKey).remove(QChar(0x1f)).trimmed().isEmpty();
+}
 
 Q_LOGGING_CATEGORY(logMprisWorker, "quickshell.windows.mpris.worker", QtWarningMsg);
 
@@ -219,14 +225,11 @@ void GsmtcWorker::addSession(const GlobalSystemMediaTransportControlsSession& se
 
 		entry->trackKey = trackKey;
 		entry->uniqueId = 1;
+		this->updateArt(*entry, id, props);
 
-		QString artUrl;
-		if (auto thumb = props.Thumbnail()) artUrl = cacheThumbnail(thumb, trackKey);
-		entry->cachedArtUrl = artUrl;
-
-		media = {entry->uniqueId, title, artist, album, albumArtist, artUrl};
+		media = {entry->uniqueId, title, artist, album, albumArtist, entry->cachedArtUrl};
 		qCDebug(logMprisWorker) << "New session" << id << "title" << title << "artist" << artist
-		                        << "art" << !artUrl.isEmpty();
+		                        << "art" << !entry->cachedArtUrl.isEmpty();
 		if (title.isEmpty()) this->scheduleReread(id);
 	} catch (const winrt::hresult_error& e) {
 		qCDebug(logMprisWorker) << "TryGetMediaPropertiesAsync failed for new session:" << Qt::hex
@@ -362,6 +365,38 @@ void GsmtcWorker::scheduleReread(quint64 sessionId) {
 	QTimer::singleShot(EMPTY_REREAD_MS, this, [this, sessionId] { this->refreshMediaProperties(sessionId); });
 }
 
+void GsmtcWorker::updateArt(
+    SessionEntry& entry,
+    quint64 sessionId,
+    const winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties&
+        props
+) {
+	auto thumb = props.Thumbnail();
+	if (thumb == nullptr) return;
+
+	auto art = cacheThumbnail(thumb);
+	if (art.url.isEmpty()) return;
+
+	if (isBlankTrack(entry.trackKey)) {
+		entry.cachedArtUrl = art.url;
+		return;
+	}
+
+	if (!entry.staleArtHash.isEmpty() && art.hash == entry.staleArtHash
+	    && entry.artRetries < MAX_ART_RETRIES)
+	{
+		entry.artRetries++;
+		QTimer::singleShot(ART_RETRY_MS, this, [this, sessionId] {
+			this->refreshMediaProperties(sessionId);
+		});
+		return;
+	}
+
+	entry.staleArtHash.clear();
+	entry.artHash = art.hash;
+	entry.cachedArtUrl = art.url;
+}
+
 void GsmtcWorker::refreshMediaProperties(quint64 sessionId) {
 	auto it = this->mEntries.find(sessionId);
 	if (it == this->mEntries.end()) return;
@@ -376,15 +411,15 @@ void GsmtcWorker::refreshMediaProperties(quint64 sessionId) {
 		auto trackKey = title + QChar(0x1f) + artist + QChar(0x1f) + album;
 
 		if (trackKey != entry.trackKey) {
+			if (!isBlankTrack(entry.trackKey)) entry.staleArtHash = entry.artHash;
 			entry.trackKey = trackKey;
 			entry.uniqueId++;
 			entry.cachedArtUrl.clear();
+			entry.artRetries = 0;
 			entry.emptyReads = 0;
 		}
 
-		if (entry.cachedArtUrl.isEmpty()) {
-			if (auto thumb = props.Thumbnail()) entry.cachedArtUrl = cacheThumbnail(thumb, trackKey);
-		}
+		this->updateArt(entry, sessionId, props);
 
 		qCDebug(logMprisWorker) << "Session" << sessionId << "title" << title << "artist" << artist
 		                        << "art" << !entry.cachedArtUrl.isEmpty() << "reads" << entry.emptyReads;

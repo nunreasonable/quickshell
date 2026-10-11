@@ -3,6 +3,7 @@
 #include <memory>
 #include <unordered_map>
 
+#include <qbytearray.h>
 #include <qobject.h>
 #include <qstring.h>
 #include <qtclasshelpermacros.h>
@@ -48,7 +49,10 @@ private:
 		QString trackKey;
 		quint32 uniqueId = 0;
 		QString cachedArtUrl;
+		QByteArray artHash;
+		QByteArray staleArtHash;
 		int emptyReads = 0;
+		int artRetries = 0;
 	};
 
 	void resyncSessions();
@@ -62,6 +66,12 @@ private:
 	void refreshTimeline(quint64 sessionId);
 	void refreshMediaProperties(quint64 sessionId);
 	void scheduleReread(quint64 sessionId);
+	void updateArt(
+	    SessionEntry& entry,
+	    quint64 sessionId,
+	    const winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties&
+	        props
+	);
 
 	[[nodiscard]] MprisPlayer::PlaybackSnapshot
 	buildPlaybackSnapshot(const winrt::Windows::Media::Control::GlobalSystemMediaTransportControlsSession& session

@@ -40,19 +40,8 @@ void pruneCache(const QString& dir) {
 }
 } // namespace
 
-QString cacheThumbnail(const IRandomAccessStreamReference& thumbnail, const QString& trackKey) {
+CachedArt cacheThumbnail(const IRandomAccessStreamReference& thumbnail) {
 	if (thumbnail == nullptr) return {};
-
-	auto dir = cacheDir();
-	auto keyed = !QString(trackKey).remove(QChar(0x1f)).trimmed().isEmpty();
-	auto hash = QCryptographicHash::hash(trackKey.toUtf8(), QCryptographicHash::Sha1).toHex();
-
-	if (keyed) {
-		auto existing = QDir(dir).entryList({hash + ".png"}, QDir::Files);
-		if (!existing.isEmpty()) {
-			return QUrl::fromLocalFile(dir + "/" + existing.first()).toString();
-		}
-	}
 
 	try {
 		auto stream = thumbnail.OpenReadAsync().get();
@@ -68,22 +57,24 @@ QString cacheThumbnail(const IRandomAccessStreamReference& thumbnail, const QStr
 		    reinterpret_cast<uint8_t*>(bytes.data()) + bytes.size() // NOLINT
 		));
 
+		auto hash = QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex();
+		auto dir = cacheDir();
+		auto path = dir + "/" + hash + ".png";
+		if (QFileInfo::exists(path)) return {QUrl::fromLocalFile(path).toString(), hash};
+
 		QImage image;
 		if (!image.loadFromData(bytes)) {
-			qCWarning(logMprisArt) << "Could not decode thumbnail for track" << trackKey;
+			qCWarning(logMprisArt) << "Could not decode a thumbnail of" << size << "bytes";
 			return {};
 		}
 
-		if (!keyed) hash = QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex();
-		auto path = dir + "/" + hash + ".png";
-		if (!keyed && QFileInfo::exists(path)) return QUrl::fromLocalFile(path).toString();
 		if (!image.save(path, "PNG")) {
 			qCWarning(logMprisArt) << "Could not save thumbnail to" << path;
 			return {};
 		}
 
 		pruneCache(dir);
-		return QUrl::fromLocalFile(path).toString();
+		return {QUrl::fromLocalFile(path).toString(), hash};
 	} catch (const winrt::hresult_error& e) {
 		qCWarning(logMprisArt) << "Failed reading thumbnail:" << QString::fromWCharArray(e.message().c_str());
 		return {};

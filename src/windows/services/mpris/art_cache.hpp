@@ -1,14 +1,18 @@
 #pragma once
 
+#include <qbytearray.h>
 #include <qstring.h>
 
 #include <winrt/Windows.Storage.Streams.h>
 
 namespace qs::windows::services::mpris {
 
-QString cacheThumbnail(
-    const winrt::Windows::Storage::Streams::IRandomAccessStreamReference& thumbnail,
-    const QString& trackKey
-);
+struct CachedArt {
+	QString url;
+	QByteArray hash;
+};
+
+CachedArt
+cacheThumbnail(const winrt::Windows::Storage::Streams::IRandomAccessStreamReference& thumbnail);
 
 } // namespace qs::windows::services::mpris
