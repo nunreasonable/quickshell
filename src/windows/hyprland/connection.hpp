@@ -69,6 +69,7 @@ public:
 
 	[[nodiscard]] HyprlandMonitor* monitorFor(QuickshellScreenInfo* screen);
 	[[nodiscard]] HyprlandMonitor* monitorForScreen(QScreen* screen) const;
+	[[nodiscard]] HyprlandMonitor* cursorMonitor() const;
 
 	[[nodiscard]] QBindable<HyprlandMonitor*> bindableFocusedMonitor() const {
 		return &this->bFocusedMonitor;
@@ -131,6 +132,7 @@ private slots:
 	void onCurrentDesktopChanged();
 	void onScreensChanged();
 	void onButtonPressed(QPoint position, quint32 time);
+	void onCursorMonitorChanged(quintptr monitor);
 	void emitGeometryEvent();
 	void emitTitleEvents();
 

@@ -139,6 +139,13 @@ HyprlandIpc::HyprlandIpc()
 
 	auto* masks = qs::windows::InputMaskTracker::instance();
 	masks->acquireButtonEvents();
+	masks->acquireMonitorEvents();
+	QObject::connect(
+	    masks,
+	    &qs::windows::InputMaskTracker::cursorMonitorChanged,
+	    this,
+	    &HyprlandIpc::onCursorMonitorChanged
+	);
 	QObject::connect(
 	    masks,
 	    &qs::windows::InputMaskTracker::buttonPressed,
@@ -320,8 +327,9 @@ void HyprlandIpc::syncMonitors(bool initial) {
 	}
 
 	if (this->bFocusedMonitor.value() == nullptr && !ordered.isEmpty()) {
-		auto* primary = this->monitorForScreen(QGuiApplication::primaryScreen());
-		this->updateFocusedMonitor(primary == nullptr ? ordered.first() : primary);
+		auto* start = this->cursorMonitor();
+		if (start == nullptr) start = this->monitorForScreen(QGuiApplication::primaryScreen());
+		this->updateFocusedMonitor(start == nullptr ? ordered.first() : start);
 	}
 }
 
@@ -494,7 +502,6 @@ void HyprlandIpc::onActiveWindowChanged() {
 		return;
 	}
 
-	this->updateFocusedMonitor(toplevel->bindableMonitor().value());
 	this->emitEvent("activewindowv2", toplevel->addressStr().toUtf8());
 	this->emitEvent(
 	    "activewindow",
@@ -503,10 +510,6 @@ void HyprlandIpc::onActiveWindowChanged() {
 }
 
 void HyprlandIpc::onTrackerFlushed() {
-	if (auto* toplevel = this->bActiveToplevel.value()) {
-		this->updateFocusedMonitor(toplevel->bindableMonitor().value());
-	}
-
 	if (this->geometryAfterFlush) {
 		this->geometryAfterFlush = false;
 		this->scheduleGeometryEvent(true);
@@ -533,7 +536,23 @@ void HyprlandIpc::onCurrentDesktopChanged() {
 	}
 }
 
-void HyprlandIpc::onScreensChanged() { this->syncMonitors(false); }
+void HyprlandIpc::onScreensChanged() {
+	qs::windows::InputMaskTracker::instance()->resetCursorMonitor();
+	this->syncMonitors(false);
+	this->updateFocusedMonitor(this->cursorMonitor());
+}
+
+HyprlandMonitor* HyprlandIpc::cursorMonitor() const {
+	POINT cursor {};
+	if (!GetCursorPos(&cursor)) return nullptr;
+	auto* screen = qs::windows::screenForMonitor(MonitorFromPoint(cursor, MONITOR_DEFAULTTONULL));
+	return screen == nullptr ? nullptr : this->monitorForScreen(screen);
+}
+
+void HyprlandIpc::onCursorMonitorChanged(quintptr monitor) {
+	auto* screen = qs::windows::screenForMonitor(reinterpret_cast<HMONITOR>(monitor));
+	if (screen != nullptr) this->updateFocusedMonitor(this->monitorForScreen(screen));
+}
 
 void HyprlandIpc::onButtonPressed(QPoint position, quint32 /*time*/) {
 	auto point = POINT {.x = position.x(), .y = position.y()};

@@ -38,6 +38,10 @@ public:
 	void acquireCursorEvents();
 	void releaseCursorEvents();
 
+	void acquireMonitorEvents();
+	void releaseMonitorEvents();
+	void resetCursorMonitor();
+
 	void acquireHook();
 	void releaseHook();
 	[[nodiscard]] bool hookActive() const { return this->hookRunning; }
@@ -45,6 +49,7 @@ public:
 signals:
 	void buttonPressed(QPoint position, quint32 time);
 	void cursorMoved(QPoint position);
+	void cursorMonitorChanged(quintptr monitor);
 
 private:
 	explicit InputMaskTracker(QObject* parent);
@@ -76,6 +81,7 @@ private:
 	bool hookFailed = false;
 	quint32 hookGeneration = 0;
 	int cursorWatchers = 0;
+	int monitorWatchers = 0;
 	int hookHolders = 0;
 	QPoint lastCursor;
 	QTimer pollTimer;

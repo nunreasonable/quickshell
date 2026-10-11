@@ -27,6 +27,7 @@ Q_LOGGING_CATEGORY(logInputMask, "quickshell.windows.inputmask", QtWarningMsg);
 constexpr UINT WM_QS_CURSOR_MOVED = WM_APP + 1;
 constexpr UINT WM_QS_BUTTON_PRESSED = WM_APP + 2;
 constexpr UINT WM_QS_HOOK_FAILED = WM_APP + 3;
+constexpr UINT WM_QS_MONITOR_CHANGED = WM_APP + 4;
 constexpr auto MESSAGE_WINDOW_CLASS = L"QuickshellInputMaskTracker";
 constexpr int CURSOR_INTERVAL_MS = 33;
 
@@ -49,6 +50,11 @@ std::atomic<bool> hookStopRequested = false;         // NOLINT
 std::atomic<int> buttonWatchers = 0;                 // NOLINT
 std::atomic<bool> cursorWatched = false;             // NOLINT
 std::atomic<DWORD> lastCursorWake = 0;               // NOLINT
+std::atomic<bool> monitorWatched = false;            // NOLINT
+std::atomic<LONG> monitorLeft = 0;                   // NOLINT
+std::atomic<LONG> monitorTop = 0;                    // NOLINT
+std::atomic<LONG> monitorRight = 0;                  // NOLINT
+std::atomic<LONG> monitorBottom = 0;                 // NOLINT
 std::atomic<std::shared_ptr<const MaskList>> gMasks; // NOLINT
 
 constexpr DWORD LATE_INPUT_MS = 100;
@@ -96,6 +102,37 @@ bool cursorWakeDue() {
 
 	lastCursorWake.store(now, std::memory_order_relaxed);
 	return true;
+}
+
+void noteCursorMonitor(POINT cursor) {
+	if (cursor.x >= monitorLeft.load(std::memory_order_relaxed)
+	    && cursor.x < monitorRight.load(std::memory_order_relaxed)
+	    && cursor.y >= monitorTop.load(std::memory_order_relaxed)
+	    && cursor.y < monitorBottom.load(std::memory_order_relaxed))
+	{
+		return;
+	}
+
+	auto* monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+	MONITORINFO info {};
+	info.cbSize = sizeof(info);
+	if (monitor == nullptr || !GetMonitorInfoW(monitor, &info)) return;
+
+	monitorLeft.store(info.rcMonitor.left, std::memory_order_relaxed);
+	monitorTop.store(info.rcMonitor.top, std::memory_order_relaxed);
+	monitorRight.store(info.rcMonitor.right, std::memory_order_relaxed);
+	monitorBottom.store(info.rcMonitor.bottom, std::memory_order_relaxed);
+
+	if (auto* target = hookTarget.load()) {
+		PostMessageW(target, WM_QS_MONITOR_CHANGED, reinterpret_cast<WPARAM>(monitor), 0);
+	}
+}
+
+void forgetCursorMonitor() {
+	monitorLeft.store(0, std::memory_order_relaxed);
+	monitorTop.store(0, std::memory_order_relaxed);
+	monitorRight.store(0, std::memory_order_relaxed);
+	monitorBottom.store(0, std::memory_order_relaxed);
 }
 
 void wakeTracker() {
@@ -267,6 +304,20 @@ void InputMaskTracker::releaseButtonEvents() {
 	this->updateHookState();
 }
 
+void InputMaskTracker::acquireMonitorEvents() {
+	this->monitorWatchers++;
+	forgetCursorMonitor();
+	this->updateHookState();
+}
+
+void InputMaskTracker::releaseMonitorEvents() {
+	if (this->monitorWatchers <= 0) return;
+	this->monitorWatchers--;
+	this->updateHookState();
+}
+
+void InputMaskTracker::resetCursorMonitor() { forgetCursorMonitor(); }
+
 void InputMaskTracker::acquireCursorEvents() {
 	this->cursorWatchers++;
 	this->updateHookState();
@@ -357,7 +408,7 @@ void InputMaskTracker::evaluate(POINT cursor) {
 
 void InputMaskTracker::updateHookState() {
 	auto needed = !this->entries.isEmpty() || buttonWatchers.load() > 0 || this->cursorWatchers > 0
-	           || this->hookHolders > 0;
+	           || this->monitorWatchers > 0 || this->hookHolders > 0;
 
 	if (needed && !this->hookRunning && !this->hookFailed) {
 		if (this->messageWindow == nullptr || !this->startHook()) {
@@ -367,6 +418,7 @@ void InputMaskTracker::updateHookState() {
 	}
 
 	cursorWatched.store(this->hookRunning && this->cursorWatchers > 0);
+	monitorWatched.store(this->hookRunning && this->monitorWatchers > 0);
 	if (this->cursorWatchers <= 0) this->cursorTrailTimer.stop();
 
 	if (needed && this->hookFailed && (!this->entries.isEmpty() || this->cursorWatchers > 0)
@@ -462,6 +514,8 @@ LRESULT CALLBACK InputMaskTracker::mouseHookProc(int code, WPARAM wParam, LPARAM
 		cursorX.store(info->pt.x);
 		cursorY.store(info->pt.y);
 
+		if (monitorWatched.load(std::memory_order_relaxed)) noteCursorMonitor(info->pt);
+
 		if (cursorWakeDue() || masksNeedEvaluation(info->pt)) wakeTracker();
 
 		if (SuperDragManager::onMouseHook(wParam, info)) return 1;
@@ -494,6 +548,11 @@ InputMaskTracker::messageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 	if (msg == WM_QS_BUTTON_PRESSED) {
 		auto position = QPoint(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 		InputMaskTracker::instance()->onButtonPressed(position, static_cast<quint32>(wParam));
+		return 0;
+	}
+
+	if (msg == WM_QS_MONITOR_CHANGED) {
+		emit InputMaskTracker::instance()->cursorMonitorChanged(static_cast<quintptr>(wParam));
 		return 0;
 	}
 

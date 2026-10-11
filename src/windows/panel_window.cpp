@@ -458,7 +458,12 @@ void WinPanelWindow::setVisibleDirect(bool visible) {
 void WinPanelWindow::followFocusedScreen() {
 	if (this->window == nullptr || this->mEmbedParent != nullptr) return;
 
-	auto* screen = focusedScreen();
+	QScreen* screen = nullptr;
+	POINT cursor {};
+	if (GetCursorPos(&cursor)) {
+		screen = screenForMonitor(MonitorFromPoint(cursor, MONITOR_DEFAULTTONULL));
+	}
+	if (screen == nullptr) screen = focusedScreen();
 	if (screen == nullptr) screen = QGuiApplication::screenAt(QCursor::pos());
 	if (screen == nullptr || this->window->screen() == screen) return;
 
