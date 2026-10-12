@@ -19,6 +19,7 @@ qt_add_library(quickshell-windows STATIC
 	taskbar.cpp
 	capture.cpp
 	desktop_host.cpp
+	desktop_drop.cpp
 	video_wallpaper.cpp
 	desktopentry_backend.cpp
 	appicon.cpp

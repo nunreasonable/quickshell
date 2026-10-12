@@ -38,6 +38,11 @@ State& state() {
 	return *instance;
 }
 
+QPointer<qs::windows::StartupGate>& gateInstance() {
+	static QPointer<qs::windows::StartupGate> gate;
+	return gate;
+}
+
 void runNext() {
 	auto& s = state();
 
@@ -58,6 +63,8 @@ void settle() {
 	s.settled = true;
 	qCDebug(logStartupGate) << "Startup settled, running" << s.pending.size() << "deferred tasks";
 	runNext();
+
+	if (auto* gate = gateInstance().data()) emit gate->settledChanged();
 }
 
 void arm() {
@@ -107,3 +114,11 @@ void watchWindow(QQuickWindow* window) {
 bool settled() { return state().settled; }
 
 } // namespace qs::windows::startup
+
+namespace qs::windows {
+
+StartupGate::StartupGate(QObject* parent): QObject(parent) {
+	startup::gateInstance() = this;
+}
+
+} // namespace qs::windows
