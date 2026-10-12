@@ -237,6 +237,12 @@ private:
 };
 
 bool WinProxiedWindow::event(QEvent* event) {
+	if (event->type() == QEvent::Resize && this->mPanel != nullptr) {
+		auto handled = this->ProxiedWindow::event(event);
+		this->mPanel->boundInputMask();
+		return handled;
+	}
+
 	if (event->type() == QEvent::PlatformSurface) {
 		auto* surfaceEvent = static_cast<QPlatformSurfaceEvent*>(event); // NOLINT
 
@@ -322,6 +328,7 @@ ProxiedWindow* WinPanelWindow::retrieveWindow(QObject* oldInstance) {
 	this->mEmbedRect = old->mEmbedRect;
 	this->mInputMask = old->mInputMask;
 	this->mHasInputMask = old->mHasInputMask;
+	this->mRequestedMask = old->mRequestedMask;
 	this->mAppliedRegion = old->mAppliedRegion;
 	this->mRegionApplied = old->mRegionApplied;
 
@@ -1132,6 +1139,19 @@ void WinPanelWindow::scheduleFocusGrab() {
 
 void WinPanelWindow::applyInputMask(const QRegion& region, bool hasMask) {
 	if (this->window == nullptr) return;
+
+	this->mRequestedMask = region;
+	this->applyBoundedMask(hasMask);
+}
+
+void WinPanelWindow::boundInputMask() {
+	if (this->window == nullptr || !this->maskRouted || !this->mHasInputMask) return;
+	this->applyBoundedMask(true);
+}
+
+void WinPanelWindow::applyBoundedMask(bool hasMask) {
+	auto region = hasMask ? this->mRequestedMask.intersected(QRect(QPoint(0, 0), this->window->size()))
+	                      : this->mRequestedMask;
 
 	if (this->maskRouted && hasMask == this->mHasInputMask && region == this->mInputMask) return;
 

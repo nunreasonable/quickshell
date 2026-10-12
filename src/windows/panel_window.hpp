@@ -84,6 +84,8 @@ public:
 	~WinPanelWindow() override;
 	Q_DISABLE_COPY_MOVE(WinPanelWindow);
 
+	void boundInputMask();
+
 	ProxiedWindow* retrieveWindow(QObject* oldInstance) override;
 	ProxiedWindow* createQQuickWindow() override;
 	void connectWindow() override;
@@ -183,6 +185,7 @@ private:
 	void placeEmbedded();
 	void keepAboveIcons();
 	void routeInputMask();
+	void applyBoundedMask(bool hasMask);
 	void applyInputRegion();
 	void setButtonHeld(bool held);
 	[[nodiscard]] QRect embeddedRect() const;
@@ -212,6 +215,7 @@ private:
 	bool mEmbedAboveIcons = false;
 	QRegion mInputMask;
 	bool mHasInputMask = false;
+	QRegion mRequestedMask;
 	QRegion mAppliedRegion;
 	bool mRegionApplied = false;
 	bool mButtonHeld = false;
