@@ -131,6 +131,30 @@ bool readString(HKEY root, const wchar_t* subkey, const wchar_t* name, QString& 
 	return true;
 }
 
+QString expandEnvironment(const QString& value) {
+	auto wide = value.toStdWString();
+	auto needed = ExpandEnvironmentStringsW(wide.c_str(), nullptr, 0);
+	if (needed == 0) return value;
+	std::vector<wchar_t> buffer(needed + 1, 0);
+	if (ExpandEnvironmentStringsW(wide.c_str(), buffer.data(), needed) == 0) return value;
+	return QString::fromWCharArray(buffer.data());
+}
+
+QString cursorSchemeLabel(const QString& name) {
+	if (name == QStringLiteral("Windows Aero")) return QStringLiteral("Windows Default");
+	if (name == QStringLiteral("Windows Aero L")) return QStringLiteral("Windows Default (large)");
+	if (name.startsWith(QStringLiteral("Windows Aero XL"))) {
+		return QStringLiteral("Windows Default (extra large)");
+	}
+	return name;
+}
+
+QStringList splitScheme(const QString& scheme) {
+	auto tokens = scheme.split(QLatin1Char(','));
+	for (auto& token: tokens) token = expandEnvironment(token.trimmed()).toLower();
+	return tokens;
+}
+
 bool writeString(HKEY root, const wchar_t* subkey, const wchar_t* name, const QString& value, DWORD type = REG_SZ) {
 	HKEY key = nullptr;
 	if (RegCreateKeyExW(root, subkey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr)
@@ -700,6 +724,7 @@ void InputSettings::setTouchpadSensitivity(int value) {
 
 void InputSettings::refreshCursor() {
 	QStringList names;
+	QStringList schemes;
 
 	for (auto [root, path]: {std::pair {HKEY_CURRENT_USER, CURSOR_SCHEMES_KEY},
 	                         std::pair {HKEY_LOCAL_MACHINE, SYSTEM_CURSOR_SCHEMES_KEY}})
@@ -724,19 +749,57 @@ void InputSettings::refreshCursor() {
 			if (result != ERROR_SUCCESS) break;
 
 			auto name = QString::fromWCharArray(nameBuf);
-			if (!name.isEmpty() && !names.contains(name)) names.append(name);
+			if (name.isEmpty() || names.contains(name)) continue;
+			QString scheme;
+			readString(root, path, nameBuf, scheme);
+			names.append(name);
+			schemes.append(scheme);
 		}
 
 		RegCloseKey(key);
 	}
+
+	QStringList labels;
+	for (const auto& name: names) labels.append(cursorSchemeLabel(name));
 
 	if (names != this->mCursorSchemeNames) {
 		this->mCursorSchemeNames = names;
 		emit this->cursorSchemeNamesChanged();
 	}
 
+	if (labels != this->mCursorSchemeLabels) {
+		this->mCursorSchemeLabels = labels;
+		emit this->cursorSchemeLabelsChanged();
+	}
+
+	QString savedName;
+	readString(HKEY_CURRENT_USER, CURSORS_KEY, L"", savedName);
+
 	QString currentName;
-	readString(HKEY_CURRENT_USER, CURSORS_KEY, L"", currentName);
+	if (names.contains(savedName)) currentName = savedName;
+	else if (labels.contains(savedName)) currentName = names.at(labels.indexOf(savedName));
+	else {
+		QStringList current;
+		for (const auto& role: CURSOR_ROLES_17) {
+			QString path;
+			readString(HKEY_CURRENT_USER, CURSORS_KEY, role.toStdWString().c_str(), path);
+			current.append(expandEnvironment(path).toLower());
+		}
+
+		for (int i = 0; i < names.size(); i++) {
+			auto tokens = splitScheme(schemes.at(i));
+			if (tokens.size() != CURSOR_ROLES_15.size() && tokens.size() != CURSOR_ROLES_17.size()) continue;
+			auto matches = true;
+			for (int role = 0; role < tokens.size() && matches; role++) {
+				matches = tokens.at(role) == current.at(role);
+			}
+			if (matches) {
+				currentName = names.at(i);
+				break;
+			}
+		}
+	}
+
 	if (currentName != this->mCursorSchemeName) {
 		this->mCursorSchemeName = currentName;
 		emit this->cursorSchemeNameChanged();
@@ -792,7 +855,7 @@ bool InputSettings::setCursorScheme(const QString& name) {
 		}
 	}
 
-	writeString(HKEY_CURRENT_USER, CURSORS_KEY, L"", name);
+	writeString(HKEY_CURRENT_USER, CURSORS_KEY, L"", source == 2 ? cursorSchemeLabel(name) : name);
 	writeDword(HKEY_CURRENT_USER, CURSORS_KEY, L"Scheme Source", source);
 
 	SystemParametersInfoW(SPI_SETCURSORS, 0, nullptr, SPIF_SENDCHANGE);

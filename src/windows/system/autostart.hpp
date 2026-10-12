@@ -16,7 +16,7 @@ class Autostart: public QObject {
 	Q_PROPERTY(QVariantList entries READ entries NOTIFY entriesChanged);
 
 public:
-	explicit Autostart(QObject* parent = nullptr): QObject(parent) {}
+	explicit Autostart(QObject* parent = nullptr): QObject(parent) { this->refresh(); }
 
 	[[nodiscard]] QVariantList entries() const { return this->mEntries; }
 

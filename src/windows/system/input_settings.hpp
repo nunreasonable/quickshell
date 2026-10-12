@@ -33,6 +33,7 @@ class InputSettings: public QObject {
 	Q_PROPERTY(int touchpadSensitivity READ touchpadSensitivity WRITE setTouchpadSensitivity NOTIFY touchpadSensitivityChanged);
 
 	Q_PROPERTY(QStringList cursorSchemeNames READ cursorSchemeNames NOTIFY cursorSchemeNamesChanged);
+	Q_PROPERTY(QStringList cursorSchemeLabels READ cursorSchemeLabels NOTIFY cursorSchemeLabelsChanged);
 	Q_PROPERTY(QString cursorSchemeName READ cursorSchemeName NOTIFY cursorSchemeNameChanged);
 	Q_PROPERTY(int cursorSize READ cursorSize WRITE setCursorSize NOTIFY cursorSizeChanged);
 
@@ -91,6 +92,7 @@ public:
 	void setTouchpadSensitivity(int value);
 
 	[[nodiscard]] QStringList cursorSchemeNames() const { return this->mCursorSchemeNames; }
+	[[nodiscard]] QStringList cursorSchemeLabels() const { return this->mCursorSchemeLabels; }
 	[[nodiscard]] QString cursorSchemeName() const { return this->mCursorSchemeName; }
 	Q_INVOKABLE bool setCursorScheme(const QString& name);
 
@@ -126,6 +128,7 @@ signals:
 	void touchpadSensitivityChanged();
 
 	void cursorSchemeNamesChanged();
+	void cursorSchemeLabelsChanged();
 	void cursorSchemeNameChanged();
 	void cursorSizeChanged();
 
@@ -160,6 +163,7 @@ private:
 	int mTouchpadSensitivity = 2;
 
 	QStringList mCursorSchemeNames;
+	QStringList mCursorSchemeLabels;
 	QString mCursorSchemeName;
 	int mCursorSize = 1;
 

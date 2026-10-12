@@ -318,7 +318,7 @@ struct WebAppCreateJob {
 	int fallbackIndex = 0;
 };
 
-WebApps::WebApps(QObject* parent): QObject(parent) {}
+WebApps::WebApps(QObject* parent): QObject(parent) { this->refresh(); }
 
 void WebApps::refresh() {
 	auto items = QVariantList();
