@@ -35,6 +35,15 @@ public:
 
 	void cmdScheme(int requestId, const QString& imagePath);
 
+	void cmdFindContentRegions(
+	    int requestId,
+	    const QString& imagePath,
+	    int minWidth,
+	    int minHeight,
+	    int maxWidth,
+	    int maxHeight
+	);
+
 private:
 	static constexpr qsizetype MaxCacheEntries = 64;
 

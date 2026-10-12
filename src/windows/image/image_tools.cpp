@@ -24,6 +24,7 @@
 #include <qvariant.h>
 
 #include "image_tools_backend.hpp"
+#include "region_finder.hpp"
 
 namespace qs::windows::image {
 
@@ -509,12 +510,60 @@ int ImageTools::requestSchemeForImage(const QString& imagePath) {
 	return requestId;
 }
 
+QVariantList ImageTools::findContentRegions(
+    const QString& imagePath,
+    int minWidth,
+    int minHeight,
+    int maxWidth,
+    int maxHeight
+) {
+	auto image = QImageReader(imagePath).read();
+	if (image.isNull()) {
+		qCWarning(logImageTools) << "findContentRegions: could not load" << imagePath;
+		return {};
+	}
+
+	RegionFinderOptions options;
+	options.minWidth = minWidth;
+	options.minHeight = minHeight;
+	options.maxWidth = maxWidth;
+	options.maxHeight = maxHeight;
+
+	auto boxes = detectContentRegions(image, options);
+
+	QVariantList regions;
+	regions.reserve(boxes.size());
+	for (const auto& box : boxes) {
+		QVariantMap region;
+		region["at"] = QVariantList {box.x(), box.y()};
+		region["size"] = QVariantList {box.width(), box.height()};
+		regions.append(region);
+	}
+	return regions;
+}
+
+int ImageTools::requestFindContentRegions(
+    const QString& imagePath,
+    int minWidth,
+    int minHeight,
+    int maxWidth,
+    int maxHeight
+) {
+	auto requestId = this->mNextRequestId++;
+	this->mBackend->requestFindContentRegions(requestId, imagePath, minWidth, minHeight, maxWidth, maxHeight);
+	return requestId;
+}
+
 void ImageTools::backendDone(int requestId, const QVariantMap& result) {
 	emit this->leastBusyRegionReady(requestId, result);
 }
 
 void ImageTools::backendSchemeDone(int requestId, const QString& scheme) {
 	emit this->schemeForImageReady(requestId, scheme);
+}
+
+void ImageTools::backendFindContentRegionsDone(int requestId, const QVariantList& regions) {
+	emit this->findContentRegionsReady(requestId, regions);
 }
 
 } // namespace qs::windows::image

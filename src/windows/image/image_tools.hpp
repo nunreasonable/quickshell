@@ -54,12 +54,30 @@ public:
 
 	Q_INVOKABLE int requestSchemeForImage(const QString& imagePath);
 
+	Q_INVOKABLE static QVariantList findContentRegions(
+	    const QString& imagePath,
+	    int minWidth,
+	    int minHeight,
+	    int maxWidth,
+	    int maxHeight
+	);
+
+	Q_INVOKABLE int requestFindContentRegions(
+	    const QString& imagePath,
+	    int minWidth,
+	    int minHeight,
+	    int maxWidth,
+	    int maxHeight
+	);
+
 	void backendDone(int requestId, const QVariantMap& result);
 	void backendSchemeDone(int requestId, const QString& scheme);
+	void backendFindContentRegionsDone(int requestId, const QVariantList& regions);
 
 signals:
 	void leastBusyRegionReady(int requestId, const QVariantMap& result);
 	void schemeForImageReady(int requestId, const QString& scheme);
+	void findContentRegionsReady(int requestId, const QVariantList& regions);
 
 private:
 	std::unique_ptr<ImageToolsBackend> mBackend;

@@ -113,4 +113,25 @@ void ImageToolsWorker::cmdScheme(int requestId, const QString& imagePath) {
 	);
 }
 
+void ImageToolsWorker::cmdFindContentRegions(
+    int requestId,
+    const QString& imagePath,
+    int minWidth,
+    int minHeight,
+    int maxWidth,
+    int maxHeight
+) {
+	auto scope = BackgroundWorkScope();
+
+	auto regions = ImageTools::findContentRegions(imagePath, minWidth, minHeight, maxWidth, maxHeight);
+
+	QMetaObject::invokeMethod(
+	    QCoreApplication::instance(),
+	    [frontend = this->mFrontend, requestId, regions] {
+		    if (frontend) frontend->backendFindContentRegionsDone(requestId, regions);
+	    },
+	    Qt::QueuedConnection
+	);
+}
+
 } // namespace qs::windows::image

@@ -76,6 +76,26 @@ void ImageToolsBackend::requestScheme(int requestId, const QString& imagePath) {
 	);
 }
 
+void ImageToolsBackend::requestFindContentRegions(
+    int requestId,
+    const QString& imagePath,
+    int minWidth,
+    int minHeight,
+    int maxWidth,
+    int maxHeight
+) {
+	this->ensureStarted();
+
+	auto* worker = this->mWorker;
+	QMetaObject::invokeMethod(
+	    worker,
+	    [worker, requestId, imagePath, minWidth, minHeight, maxWidth, maxHeight] {
+		    worker->cmdFindContentRegions(requestId, imagePath, minWidth, minHeight, maxWidth, maxHeight);
+	    },
+	    Qt::QueuedConnection
+	);
+}
+
 void ImageToolsBackend::ensureStarted() {
 	if (this->mStarted) return;
 

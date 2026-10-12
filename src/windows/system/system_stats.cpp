@@ -1,6 +1,7 @@
 #include "system_stats.hpp"
 
 #include <algorithm>
+#include <array>
 
 #include <pdhmsg.h>
 
@@ -8,6 +9,12 @@
 #include <qloggingcategory.h>
 #include <qstring.h>
 #include <qtimer.h>
+
+#include <winsock2.h>
+#include <ws2ipdef.h>
+
+#include <iphlpapi.h>
+#include <netioapi.h>
 
 #include "../../core/logcat.hpp"
 
@@ -32,6 +39,38 @@ QString readCpuName() {
 
 	if (status != ERROR_SUCCESS) return QString();
 	return QString::fromWCharArray(buffer).trimmed();
+}
+
+bool looksVirtualAdapter(const MIB_IF_ROW2& row) {
+	static constexpr std::array<const char*, 13> kVirtualHints = {
+	    "virtual",
+	    "vmware",
+	    "virtualbox",
+	    "hyper-v",
+	    "tap-windows",
+	    "teredo",
+	    "isatap",
+	    "loopback",
+	    "tunnel",
+	    "pseudo",
+	    "wan miniport",
+	    "bluetooth device",
+	    "vpn",
+	};
+
+	auto description = QString::fromWCharArray(row.Description);
+	for (const auto* hint : kVirtualHints) {
+		if (description.contains(QLatin1String(hint), Qt::CaseInsensitive)) return true;
+	}
+	return false;
+}
+
+bool isCountedNetworkInterface(const MIB_IF_ROW2& row) {
+	if (row.OperStatus != IfOperStatusUp) return false;
+	if (row.Type == IF_TYPE_SOFTWARE_LOOPBACK || row.Type == IF_TYPE_TUNNEL) return false;
+	if (row.Type != IF_TYPE_ETHERNET_CSMACD && row.Type != IF_TYPE_IEEE80211) return false;
+	if (looksVirtualAdapter(row)) return false;
+	return true;
 }
 
 } // namespace
@@ -80,6 +119,23 @@ void SystemStats::setGpuEnabled(bool enabled) {
 	} else if (!enabled) {
 		this->teardownGpuCounters();
 		this->bGpuUsage = -1.0;
+	}
+}
+
+void SystemStats::setNetworkEnabled(bool enabled) {
+	if (this->mNetworkEnabled == enabled) return;
+	this->mNetworkEnabled = enabled;
+	emit this->networkEnabledChanged();
+
+	if (enabled) {
+		this->havePrevNetworkSample = false;
+		this->bNetworkDownloadedBytes = 0.0;
+		this->bNetworkUploadedBytes = 0.0;
+		if (this->mActive) this->sampleNetwork();
+	} else {
+		this->havePrevNetworkSample = false;
+		this->bNetworkDownloadBytesPerSec = -1.0;
+		this->bNetworkUploadBytesPerSec = -1.0;
 	}
 }
 
@@ -144,6 +200,7 @@ void SystemStats::sample() {
 	this->bUptimeSeconds = static_cast<qint64>(GetTickCount64() / 1000);
 
 	this->sampleGpu();
+	if (this->mNetworkEnabled) this->sampleNetwork();
 }
 
 void SystemStats::setupGpuCounters() {
@@ -216,6 +273,52 @@ void SystemStats::sampleGpu() {
 	}
 
 	this->bGpuUsage = std::clamp(sum / 100.0, 0.0, 1.0);
+}
+
+void SystemStats::sampleNetwork() {
+	MIB_IF_TABLE2* table = nullptr;
+	if (GetIfTable2(&table) != NO_ERROR || table == nullptr) {
+		this->bNetworkDownloadBytesPerSec = -1.0;
+		this->bNetworkUploadBytesPerSec = -1.0;
+		this->havePrevNetworkSample = false;
+		return;
+	}
+
+	quint64 inBytes = 0;
+	quint64 outBytes = 0;
+	for (ULONG i = 0; i < table->NumEntries; i++) {
+		const auto& row = table->Table[i];
+		if (!isCountedNetworkInterface(row)) continue;
+		inBytes += row.InOctets;
+		outBytes += row.OutOctets;
+	}
+
+	FreeMibTable(table);
+
+	auto nowMs = static_cast<qint64>(GetTickCount64());
+	if (this->havePrevNetworkSample) {
+		auto elapsedMs = nowMs - this->prevNetworkTimestampMs;
+		if (elapsedMs > 0) {
+			auto inDelta =
+			    inBytes >= this->prevNetworkInBytes ? inBytes - this->prevNetworkInBytes : 0;
+			auto outDelta =
+			    outBytes >= this->prevNetworkOutBytes ? outBytes - this->prevNetworkOutBytes : 0;
+
+			this->bNetworkDownloadBytesPerSec =
+			    static_cast<qreal>(inDelta) * 1000.0 / static_cast<qreal>(elapsedMs);
+			this->bNetworkUploadBytesPerSec =
+			    static_cast<qreal>(outDelta) * 1000.0 / static_cast<qreal>(elapsedMs);
+			this->bNetworkDownloadedBytes = this->bNetworkDownloadedBytes.value()
+			                              + static_cast<qreal>(inDelta);
+			this->bNetworkUploadedBytes =
+			    this->bNetworkUploadedBytes.value() + static_cast<qreal>(outDelta);
+		}
+	}
+
+	this->prevNetworkInBytes = inBytes;
+	this->prevNetworkOutBytes = outBytes;
+	this->prevNetworkTimestampMs = nowMs;
+	this->havePrevNetworkSample = true;
 }
 
 } // namespace qs::windows::sys

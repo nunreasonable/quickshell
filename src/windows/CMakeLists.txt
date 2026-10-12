@@ -47,6 +47,7 @@ qt_add_library(quickshell-windows STATIC
 	image/image_tools.cpp
 	image/image_tools_backend.cpp
 	image/image_tools_worker.cpp
+	image/region_finder.cpp
 	image/thumbnailer.cpp
 	system/ocr.cpp
 	system/ocr_backend.cpp
