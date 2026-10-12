@@ -28,6 +28,7 @@ qt_add_library(quickshell-windows STATIC
 	system/clipboard.cpp
 	system/credentials.cpp
 	system/input.cpp
+	system/input_settings.cpp
 	system/night_light.cpp
 	system/gamma.cpp
 	system/screenshot.cpp
