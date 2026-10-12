@@ -15,6 +15,7 @@
 #include <qwindow.h>
 #include <windowsx.h>
 
+#include "desktop_drop.hpp"
 #include "super_drag.hpp"
 #include "util.hpp"
 
@@ -519,6 +520,7 @@ LRESULT CALLBACK InputMaskTracker::mouseHookProc(int code, WPARAM wParam, LPARAM
 		if (cursorWakeDue() || masksNeedEvaluation(info->pt)) wakeTracker();
 
 		if (SuperDragManager::onMouseHook(wParam, info)) return 1;
+		DesktopDropManager::onMouseHook(wParam, info);
 
 		auto button = wParam == WM_LBUTTONDOWN || wParam == WM_RBUTTONDOWN || wParam == WM_MBUTTONDOWN
 		           || wParam == WM_XBUTTONDOWN;
