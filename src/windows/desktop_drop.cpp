@@ -36,17 +36,12 @@ constexpr int SAFETY_MS = 60000;
 
 std::atomic<bool> gFeatureEnabled = false; // NOLINT
 std::atomic<bool> gTrackingDown = false;   // NOLINT
+std::atomic<bool> gDragging = false;       // NOLINT
+std::atomic<DWORD> gLastCheck = 0;         // NOLINT
 std::atomic<bool> gArmed = false;          // NOLINT
 std::atomic<LONG> gDownX = 0;              // NOLINT
 std::atomic<LONG> gDownY = 0;              // NOLINT
 std::atomic<HWND> gGuiWindow = nullptr;    // NOLINT
-
-void setChildStyle(HWND hwnd, bool child) {
-	auto style = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE));
-	auto newStyle = child ? ((style & ~static_cast<DWORD>(WS_POPUP)) | WS_CHILD)
-	                      : ((style & ~static_cast<DWORD>(WS_CHILD)) | WS_POPUP);
-	if (newStyle != style) SetWindowLongPtrW(hwnd, GWL_STYLE, static_cast<LONG_PTR>(newStyle));
-}
 
 bool isDesktopSurface(POINT pt) {
 	auto* hit = WindowFromPoint(pt);
@@ -272,12 +267,14 @@ void DesktopDropManager::onMouseHook(WPARAM message, const MSLLHOOKSTRUCT* info)
 	if (message == WM_LBUTTONDOWN) {
 		gDownX.store(info->pt.x, std::memory_order_relaxed);
 		gDownY.store(info->pt.y, std::memory_order_relaxed);
+		gDragging.store(false, std::memory_order_relaxed);
 		gTrackingDown.store(!isDesktopSurface(info->pt), std::memory_order_relaxed);
 		return;
 	}
 
 	if (message == WM_LBUTTONUP) {
 		gTrackingDown.store(false, std::memory_order_relaxed);
+		gDragging.store(false, std::memory_order_relaxed);
 		return;
 	}
 
@@ -286,15 +283,21 @@ void DesktopDropManager::onMouseHook(WPARAM message, const MSLLHOOKSTRUCT* info)
 		return;
 	}
 
-	auto dx = info->pt.x - gDownX.load(std::memory_order_relaxed);
-	auto dy = info->pt.y - gDownY.load(std::memory_order_relaxed);
-	if (std::abs(dx) < GetSystemMetrics(SM_CXDRAG) && std::abs(dy) < GetSystemMetrics(SM_CYDRAG)) {
-		return;
+	if (!gDragging.load(std::memory_order_relaxed)) {
+		auto dx = info->pt.x - gDownX.load(std::memory_order_relaxed);
+		auto dy = info->pt.y - gDownY.load(std::memory_order_relaxed);
+		if (std::abs(dx) < GetSystemMetrics(SM_CXDRAG) && std::abs(dy) < GetSystemMetrics(SM_CYDRAG)) {
+			return;
+		}
+		gDragging.store(true, std::memory_order_relaxed);
 	}
 
-	gTrackingDown.store(false, std::memory_order_relaxed);
+	if (info->time - gLastCheck.load(std::memory_order_relaxed) < 40) return;
+	gLastCheck.store(info->time, std::memory_order_relaxed);
+
 	if (!isDesktopSurface(info->pt)) return;
 	if (shiftHeld()) return;
+	gTrackingDown.store(false, std::memory_order_relaxed);
 
 	gArmed.store(true, std::memory_order_relaxed);
 	if (auto* target = gGuiWindow.load()) PostMessageW(target, WM_DD_ARM, 0, 0);
@@ -310,6 +313,11 @@ void DesktopDropManager::onArmRequested() {
 		gArmed.store(false, std::memory_order_relaxed);
 		return;
 	}
+
+	POINT cursor {};
+	GetCursorPos(&cursor);
+	auto* screen = screenForMonitor(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST));
+	this->mActiveScreen = screen != nullptr ? screen->name() : QString();
 
 	this->armedState = true;
 	emit this->activeChanged();
@@ -345,28 +353,21 @@ bool DesktopDropManager::ensureOverlay(HWND parent) {
 			return false;
 		}
 
-		SetLayeredWindowAttributes(this->overlay, 0, 0, LWA_ALPHA);
-		setChildStyle(this->overlay, true);
+		SetLayeredWindowAttributes(this->overlay, 0, 1, LWA_ALPHA);
 	}
 
-	SetLastError(0);
-	if (SetParent(this->overlay, parent) == nullptr && GetLastError() != 0) {
-		qCWarning(logDesktopDrop) << "Could not put the desktop drop overlay above the icons, error"
-		                          << GetLastError();
-		return false;
-	}
-
-	RECT rect {};
-	if (!GetClientRect(parent, &rect)) return false;
+	auto* desktopRoot = GetAncestor(parent, GA_ROOT);
+	auto* above = desktopRoot != nullptr ? GetWindow(desktopRoot, GW_HWNDPREV) : nullptr;
+	if (above == this->overlay) above = GetWindow(this->overlay, GW_HWNDPREV);
 
 	SetWindowPos(
 	    this->overlay,
-	    HWND_TOP,
-	    0,
-	    0,
-	    rect.right - rect.left,
-	    rect.bottom - rect.top,
-	    SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED
+	    above != nullptr ? above : HWND_TOP,
+	    GetSystemMetrics(SM_XVIRTUALSCREEN),
+	    GetSystemMetrics(SM_YVIRTUALSCREEN),
+	    GetSystemMetrics(SM_CXVIRTUALSCREEN),
+	    GetSystemMetrics(SM_CYVIRTUALSCREEN),
+	    SWP_NOACTIVATE | SWP_SHOWWINDOW
 	);
 
 	return true;
