@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <qt_windows.h>
@@ -15,10 +16,6 @@
 #include "../../core/logcat.hpp"
 #include "../services/message_window.hpp"
 
-// The xwin SDK only exposes these when NTDDI_VERSION targets Windows 11, which
-// isn't guaranteed by this toolchain's default target. The struct these
-// actions operate on (TOUCHPAD_PARAMETERS_V1) is declared unconditionally, so
-// only the action codes themselves need a fallback definition.
 #ifndef SPI_GETTOUCHPADPARAMETERS
 #define SPI_GETTOUCHPADPARAMETERS 0x00AE
 #endif
@@ -36,48 +33,46 @@ const wchar_t* const PRECISION_TOUCHPAD_KEY =
     L"Software\\Microsoft\\Windows\\CurrentVersion\\PrecisionTouchPad";
 const wchar_t* const CURSORS_KEY = L"Control Panel\\Cursors";
 const wchar_t* const CURSOR_SCHEMES_KEY = L"Control Panel\\Cursors\\Schemes";
+const wchar_t* const SYSTEM_CURSOR_SCHEMES_KEY =
+    L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Control Panel\\Cursors\\Schemes";
 const wchar_t* const ACCESSIBILITY_KEY = L"Software\\Microsoft\\Accessibility";
 
-// Alphabetical order of the per-role values Windows keeps under
-// Control Panel\Cursors. This is the order the "Scheme" value under
-// Control Panel\Cursors\Schemes stores its comma-separated cursor paths in;
-// Microsoft doesn't document the layout, this is the widely used convention.
 const QStringList CURSOR_ROLES_17 = {
-    "AppStarting",
     "Arrow",
-    "Crosshair",
-    "Hand",
     "Help",
-    "IBeam",
-    "No",
-    "NWPen",
-    "Person",
-    "Pin",
-    "SizeAll",
-    "SizeNESW",
-    "SizeNS",
-    "SizeNWSE",
-    "SizeWE",
-    "UpArrow",
+    "AppStarting",
     "Wait",
+    "Crosshair",
+    "IBeam",
+    "NWPen",
+    "No",
+    "SizeNS",
+    "SizeWE",
+    "SizeNWSE",
+    "SizeNESW",
+    "SizeAll",
+    "UpArrow",
+    "Hand",
+    "Pin",
+    "Person",
 };
 
 const QStringList CURSOR_ROLES_15 = {
-    "AppStarting",
     "Arrow",
-    "Crosshair",
-    "Hand",
     "Help",
-    "IBeam",
-    "No",
-    "NWPen",
-    "SizeAll",
-    "SizeNESW",
-    "SizeNS",
-    "SizeNWSE",
-    "SizeWE",
-    "UpArrow",
+    "AppStarting",
     "Wait",
+    "Crosshair",
+    "IBeam",
+    "NWPen",
+    "No",
+    "SizeNS",
+    "SizeWE",
+    "SizeNWSE",
+    "SizeNESW",
+    "SizeAll",
+    "UpArrow",
+    "Hand",
 };
 
 bool readDword(HKEY root, const wchar_t* subkey, const wchar_t* name, DWORD& out) {
@@ -706,9 +701,11 @@ void InputSettings::setTouchpadSensitivity(int value) {
 void InputSettings::refreshCursor() {
 	QStringList names;
 
-	for (auto root: {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
+	for (auto [root, path]: {std::pair {HKEY_CURRENT_USER, CURSOR_SCHEMES_KEY},
+	                         std::pair {HKEY_LOCAL_MACHINE, SYSTEM_CURSOR_SCHEMES_KEY}})
+	{
 		HKEY key = nullptr;
-		if (RegOpenKeyExW(root, CURSOR_SCHEMES_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS) continue;
+		if (RegOpenKeyExW(root, path, 0, KEY_READ, &key) != ERROR_SUCCESS) continue;
 
 		for (DWORD index = 0;; index++) {
 			wchar_t nameBuf[256] {};
@@ -764,16 +761,14 @@ void InputSettings::refreshCursor() {
 
 bool InputSettings::setCursorScheme(const QString& name) {
 	QString scheme;
-	if (!readString(HKEY_CURRENT_USER, CURSOR_SCHEMES_KEY, reinterpret_cast<const wchar_t*>(name.utf16()), scheme)
-	    && !readString(
-	        HKEY_LOCAL_MACHINE,
-	        CURSOR_SCHEMES_KEY,
-	        reinterpret_cast<const wchar_t*>(name.utf16()),
-	        scheme
-	    ))
-	{
-		qCWarning(logInputSettings) << "no cursor scheme named" << name;
-		return false;
+	DWORD source = 1;
+	auto wideName = name.toStdWString();
+	if (!readString(HKEY_CURRENT_USER, CURSOR_SCHEMES_KEY, wideName.c_str(), scheme)) {
+		source = 2;
+		if (!readString(HKEY_LOCAL_MACHINE, SYSTEM_CURSOR_SCHEMES_KEY, wideName.c_str(), scheme)) {
+			qCWarning(logInputSettings) << "no cursor scheme named" << name;
+			return false;
+		}
 	}
 
 	auto tokens = scheme.split(QLatin1Char(','));
@@ -798,7 +793,7 @@ bool InputSettings::setCursorScheme(const QString& name) {
 	}
 
 	writeString(HKEY_CURRENT_USER, CURSORS_KEY, L"", name);
-	writeDword(HKEY_CURRENT_USER, CURSORS_KEY, L"Scheme Source", 0);
+	writeDword(HKEY_CURRENT_USER, CURSORS_KEY, L"Scheme Source", source);
 
 	SystemParametersInfoW(SPI_SETCURSORS, 0, nullptr, SPIF_SENDCHANGE);
 
