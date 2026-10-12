@@ -510,7 +510,12 @@ void Dispatcher::moveWindow(const QString& direction) {
 
 	auto edge = directionEdge(direction);
 	auto* tiling = TilingManager::active();
-	if (tiling != nullptr && edge && tiling->moveDirection(*edge)) return;
+	if (tiling != nullptr && edge) {
+		if (!tiling->moveDirection(*edge)) {
+			tiling->moveFloating(this->ipc->tracker()->activeWindow(), *edge);
+		}
+		return;
+	}
 
 	auto key = arrowKey(direction.trimmed());
 	if (key == 0) {

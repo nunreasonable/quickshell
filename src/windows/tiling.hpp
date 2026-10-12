@@ -69,6 +69,7 @@ public:
 
 	static void resizeFloating(TrackedWindow* window, qint32 dx, qint32 dy, bool exact);
 	static void center(TrackedWindow* window);
+	void moveFloating(TrackedWindow* window, Edge direction) const;
 
 signals:
 	void enabledChanged();

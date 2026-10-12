@@ -1349,6 +1349,29 @@ void TilingManager::center(TrackedWindow* window) {
 	setFrame(hwnd, frame);
 }
 
+void TilingManager::moveFloating(TrackedWindow* window, Edge direction) const {
+	if (window == nullptr || window->screen() == nullptr) return;
+
+	auto* hwnd = window->hwnd();
+	if (IsIconic(hwnd) || IsZoomed(hwnd)) return;
+
+	auto work = monitorRects(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST)).work;
+	if (!work.isValid()) return;
+
+	auto gap = toPhysical(this->mGapsOut, window->screen()->devicePixelRatio());
+	work.adjust(gap, gap, -gap, -gap);
+
+	auto frame = currentFrame(hwnd);
+	switch (direction) {
+	case Edge::Left: frame.moveLeft(work.left()); break;
+	case Edge::Right: frame.moveRight(work.right()); break;
+	case Edge::Top: frame.moveTop(work.top()); break;
+	case Edge::Bottom: frame.moveBottom(work.bottom()); break;
+	}
+
+	setFrame(hwnd, frame);
+}
+
 Tiling::Tiling(QObject* parent): QObject(parent) {
 	auto* manager = TilingManager::instance();
 	QObject::connect(manager, &TilingManager::enabledChanged, this, &Tiling::enabledChanged);
