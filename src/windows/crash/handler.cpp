@@ -25,6 +25,7 @@
 #include "../../core/logcat.hpp"
 #include "../../core/paths.hpp"
 #include "../taskbar.hpp"
+#include "../window_decorations.hpp"
 
 namespace qs::crash {
 
@@ -171,6 +172,7 @@ void handleCrash(const wchar_t* reason, EXCEPTION_POINTERS* ep) {
 		}
 
 		qs::windows::TaskbarManager::restoreForCrash();
+		qs::windows::DecorationManager::restoreForCrash();
 
 		auto elapsed = currentEpochMs() - gLaunchTimeMs;
 		if (gLaunchTimeMs == 0 || elapsed >= 10000) {
