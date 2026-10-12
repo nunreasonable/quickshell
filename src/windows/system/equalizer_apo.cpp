@@ -7,7 +7,6 @@
 #include <qfile.h>
 #include <qfileinfo.h>
 #include <qprocess.h>
-#include <qstandardpaths.h>
 #include <qstringlist.h>
 #include <quuid.h>
 
@@ -229,21 +228,23 @@ void EqualizerApo::hookElevated() {
 	                   "try { $text = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop } catch { $text = '' }\n"
 	                   "if ($null -eq $text) { $text = '' }\n"
 	                   "if ($text -notmatch [regex]::Escape($line)) {\n"
-	                   "    Add-Content -LiteralPath $configPath -Value \"`n$line\"\n"
+	                   "    [IO.File]::AppendAllText($configPath, \"`n$line`n\", (New-Object Text.UTF8Encoding $false))\n"
 	                   "}\n"
 	               )
 	                   .arg(psSingleQuote(this->configFilePath()), psSingleQuote(this->includeFilePath()));
 
-	auto scriptDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-	auto scriptPath = QDir(scriptDir).filePath(QStringLiteral("ii-equalizer-hook.ps1"));
-	if (!writeFileAtomically(scriptPath, script.toUtf8())) return;
+	auto encoded = QByteArray(
+	                   reinterpret_cast<const char*>(script.utf16()),
+	                   static_cast<qsizetype>(script.size() * sizeof(char16_t))
+	)
+	                   .toBase64();
 
 	auto outerCommand = QStringLiteral(
 	                         "Start-Process -FilePath 'powershell.exe' "
-	                         "-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%1' "
+	                         "-ArgumentList '-NoProfile','-EncodedCommand','%1' "
 	                         "-Verb RunAs"
 	                     )
-	                         .arg(scriptPath);
+	                         .arg(QString::fromLatin1(encoded));
 
 	QProcess::startDetached(
 	    QStringLiteral("powershell.exe"),
