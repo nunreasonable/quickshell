@@ -1374,6 +1374,10 @@ bool Displays::setEnabled(const QString& id, bool enabled) {
 	candidate->flags = DISPLAYCONFIG_PATH_ACTIVE;
 	candidate->sourceInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
 	candidate->targetInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+	candidate->targetInfo.rotation = DISPLAYCONFIG_ROTATION_IDENTITY;
+	candidate->targetInfo.scaling = DISPLAYCONFIG_SCALING_PREFERRED;
+	candidate->targetInfo.refreshRate = {0, 0};
+	candidate->targetInfo.scanLineOrdering = DISPLAYCONFIG_SCANLINE_ORDERING_UNSPECIFIED;
 	topology.paths.push_back(*candidate);
 	compactModes(topology);
 
