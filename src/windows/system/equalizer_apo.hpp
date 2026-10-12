@@ -38,28 +38,14 @@ public:
 	[[nodiscard]] QString defaultDeviceId() const { return this->mDefaultDeviceId; }
 	[[nodiscard]] bool ready() const { return this->mInstalled && this->mActiveOnDevice; }
 
-	// Re-runs every registry/filesystem probe below and emits changed() once.
 	Q_INVOKABLE void refresh();
 
-	// Called from QML whenever Audio.sink (Pipewire's defaultAudioSink) changes,
-	// so activeOnDefaultDevice/ready follow the system's actual default output.
 	Q_INVOKABLE void setDefaultDeviceId(const QString& id);
 
-	// Atomically (over)writes ii's own include file (includeFilePath) with the
-	// given Equalizer APO config text (Preamp/Filter/GraphicEQ lines). Never
-	// touches config.txt itself.
 	Q_INVOKABLE bool writeCurve(const QString& content) const;
 
-	// Appends the "Include: <includeFilePath>" line to config.txt directly.
-	// Only call this after configWritable is true - returns false otherwise
-	// without writing anything.
 	Q_INVOKABLE bool hookDirectly();
 
-	// Fire-and-forget: spawns one elevated step (a UAC prompt) that appends the
-	// same Include line via a tiny generated PowerShell script. Callers should
-	// poll refresh()/hooked afterwards (e.g. from a short-lived QML Timer) -
-	// there is no synchronous completion signal, since the elevated process is
-	// detached and may wait on the user's UAC response.
 	Q_INVOKABLE void hookElevated();
 
 signals:

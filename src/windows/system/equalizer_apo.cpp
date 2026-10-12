@@ -15,10 +15,6 @@ namespace qs::windows::sys {
 
 namespace {
 
-// Equalizer APO's own APO CLSIDs (public: registered by its installer under
-// HKLM\SOFTWARE\Classes\CLSID\{guid}\InprocServer32 pointing at
-// EqualizerAPO.dll). Either can show up in an endpoint's FxProperties
-// depending on whether it was wired in as the pre-mix (GFX) or post-mix APO.
 constexpr auto kApoClsidGfx = u"{EC1CC9CE-FAED-4822-828A-82A81A6F018F}";
 constexpr auto kApoClsidPostMix = u"{EACD2258-FCAC-4FF4-B36D-419E924A6D79}";
 
@@ -52,15 +48,13 @@ bool writeFileAtomically(const QString& path, const QByteArray& data) {
 	return true;
 }
 
-// Doubles embedded single quotes so `text` can be dropped into a PowerShell
-// single-quoted string literal ('...') without closing it early.
 QString psSingleQuote(const QString& text) {
 	QString escaped = text;
 	escaped.replace(u'\'', QStringLiteral("''"));
 	return escaped;
 }
 
-} // namespace
+}
 
 EqualizerApo::EqualizerApo(QObject* parent): QObject(parent) {
 	this->detectInstall();
@@ -89,9 +83,6 @@ void EqualizerApo::detectInstall() {
 		return;
 	}
 
-	// Equalizer APO's installer lets the user move the config folder
-	// elsewhere (ConfigPath); falls back to the default <install>\config
-	// when that value is absent (fresh/default installs).
 	auto configPath =
 	    readRegString(HKEY_LOCAL_MACHINE, L"SOFTWARE\\EqualizerAPO", L"ConfigPath");
 	this->mConfigPath = configPath.isEmpty() ? QDir(installPath).filePath(QStringLiteral("config"))
@@ -105,10 +96,6 @@ void EqualizerApo::detectWritable() {
 		return;
 	}
 
-	// Opening in Append mode (no truncate, no write) is a non-mutating probe
-	// of the real ACL - Windows itself decides whether this succeeds, so
-	// there's no need to re-implement an AccessCheck against the file's
-	// security descriptor ourselves.
 	QFile file(path);
 	auto ok = file.open(QIODevice::Append);
 	if (ok) file.close();
@@ -130,10 +117,6 @@ void EqualizerApo::detectHooked() {
 	auto text = QString::fromUtf8(file.readAll());
 	file.close();
 
-	// Lenient on purpose: matches whether our include file's name shows up
-	// anywhere in an (uncommented-or-not) Include line, rather than
-	// requiring an exact "Include: <absolute path>" match - tolerates the
-	// user having it on a relative path, with extra whitespace, etc.
 	auto includeName = QFileInfo(this->includeFilePath()).fileName();
 	this->mHooked = false;
 	for (const auto& rawLine: text.split(u'\n')) {
@@ -216,9 +199,6 @@ bool EqualizerApo::hookDirectly() {
 	if (!this->mConfigWritable) return false;
 	if (this->mHooked) return true;
 
-	// Make sure the included file exists before pointing config.txt at it -
-	// Equalizer APO logs (and some builds refuse to load) a config that
-	// Includes a missing file.
 	if (!QFileInfo::exists(this->includeFilePath())) {
 		this->writeCurve(QStringLiteral("Preamp: 0 dB\n"));
 	}
@@ -242,10 +222,6 @@ void EqualizerApo::hookElevated() {
 		this->writeCurve(QStringLiteral("Preamp: 0 dB\n"));
 	}
 
-	// The elevated step only ever runs this generated script - never an
-	// arbitrary inline command - so the config.txt/include paths (which may
-	// contain spaces) never need to survive multiple layers of shell/argv
-	// quoting.
 	auto script = QStringLiteral(
 	                   "$configPath = '%1'\n"
 	                   "$line = 'Include: %2'\n"
@@ -262,10 +238,6 @@ void EqualizerApo::hookElevated() {
 	auto scriptPath = QDir(scriptDir).filePath(QStringLiteral("ii-equalizer-hook.ps1"));
 	if (!writeFileAtomically(scriptPath, script.toUtf8())) return;
 
-	// One elevated step: an outer, unprivileged powershell asks Windows to
-	// relaunch a second powershell -Verb RunAs (the actual UAC prompt),
-	// which runs nothing but -File <our generated script>. Never cmd /c, so
-	// the quoting pitfalls docs/AGENTS.md warns about don't apply here.
 	auto outerCommand = QStringLiteral(
 	                         "Start-Process -FilePath 'powershell.exe' "
 	                         "-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%1' "
