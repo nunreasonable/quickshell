@@ -362,11 +362,13 @@ void WebApps::refresh() {
 }
 
 void WebApps::create(const QStringList& urls) {
-	for (const auto& rawUrl: urls) {
-		this->mPending++;
-		if (this->mPending == 1) emit this->busyChanged();
-		this->startJob(rawUrl);
-	}
+	if (urls.isEmpty()) return;
+
+	auto wasBusy = this->mPending > 0;
+	this->mPending += static_cast<int>(urls.size());
+	if (!wasBusy) emit this->busyChanged();
+
+	for (const auto& rawUrl: urls) this->startJob(rawUrl);
 }
 
 void WebApps::startJob(const QString& rawUrl) {
