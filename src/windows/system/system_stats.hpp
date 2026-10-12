@@ -31,6 +31,9 @@ class SystemStats: public QObject {
 	Q_PROPERTY(QString cpuName READ cpuName CONSTANT);
 	Q_PROPERTY(bool gpuEnabled READ gpuEnabled WRITE setGpuEnabled NOTIFY gpuEnabledChanged);
 	Q_PROPERTY(qreal gpuUsage READ default NOTIFY gpuUsageChanged BINDABLE bindableGpuUsage);
+	Q_PROPERTY(bool networkEnabled READ networkEnabled WRITE setNetworkEnabled NOTIFY networkEnabledChanged);
+	Q_PROPERTY(qreal networkDownloadBytesPerSec READ default NOTIFY networkDownloadBytesPerSecChanged BINDABLE bindableNetworkDownloadBytesPerSec);
+	Q_PROPERTY(qreal networkUploadBytesPerSec READ default NOTIFY networkUploadBytesPerSecChanged BINDABLE bindableNetworkUploadBytesPerSec);
 	// clang-format on
 
 public:
@@ -65,6 +68,16 @@ public:
 	}
 	[[nodiscard]] QBindable<qreal> bindableGpuUsage() const { return &this->bGpuUsage; }
 
+	[[nodiscard]] bool networkEnabled() const { return this->mNetworkEnabled; }
+	void setNetworkEnabled(bool enabled);
+
+	[[nodiscard]] QBindable<qreal> bindableNetworkDownloadBytesPerSec() const {
+		return &this->bNetworkDownloadBytesPerSec;
+	}
+	[[nodiscard]] QBindable<qreal> bindableNetworkUploadBytesPerSec() const {
+		return &this->bNetworkUploadBytesPerSec;
+	}
+
 signals:
 	void activeChanged();
 	void gpuEnabledChanged();
@@ -76,12 +89,16 @@ signals:
 	void swapAvailableKbChanged();
 	void uptimeSecondsChanged();
 	void gpuUsageChanged();
+	void networkEnabledChanged();
+	void networkDownloadBytesPerSecChanged();
+	void networkUploadBytesPerSecChanged();
 
 private:
 	void sample();
 	void setupGpuCounters();
 	void teardownGpuCounters();
 	void sampleGpu();
+	void sampleNetwork();
 
 	bool mActive = true;
 	bool mGpuEnabled = false;
@@ -98,6 +115,12 @@ private:
 	std::vector<PDH_HCOUNTER> gpuCounters;
 	bool gpuAvailable = false;
 
+	bool mNetworkEnabled = false;
+	bool havePrevNetworkSample = false;
+	qint64 prevNetworkTimestampMs = 0;
+	quint64 prevNetworkInBytes = 0;
+	quint64 prevNetworkOutBytes = 0;
+
 	// clang-format off
 	Q_OBJECT_BINDABLE_PROPERTY(SystemStats, qreal, bCpuUsage, &SystemStats::cpuUsageChanged);
 	Q_OBJECT_BINDABLE_PROPERTY(SystemStats, quint64, bMemoryTotalKb, &SystemStats::memoryTotalKbChanged);
@@ -106,6 +129,8 @@ private:
 	Q_OBJECT_BINDABLE_PROPERTY(SystemStats, quint64, bSwapAvailableKb, &SystemStats::swapAvailableKbChanged);
 	Q_OBJECT_BINDABLE_PROPERTY(SystemStats, qint64, bUptimeSeconds, &SystemStats::uptimeSecondsChanged);
 	Q_OBJECT_BINDABLE_PROPERTY(SystemStats, qreal, bGpuUsage, &SystemStats::gpuUsageChanged);
+	Q_OBJECT_BINDABLE_PROPERTY_WITH_ARGS(SystemStats, qreal, bNetworkDownloadBytesPerSec, -1.0, &SystemStats::networkDownloadBytesPerSecChanged);
+	Q_OBJECT_BINDABLE_PROPERTY_WITH_ARGS(SystemStats, qreal, bNetworkUploadBytesPerSec, -1.0, &SystemStats::networkUploadBytesPerSecChanged);
 	// clang-format on
 };
 
