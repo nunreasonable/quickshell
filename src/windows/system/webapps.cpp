@@ -255,7 +255,7 @@ bool saveAsSquareIcon(const QByteArray& iconBytes, const QString& icoPath) {
 	auto dir = QFileInfo(icoPath).absoluteDir();
 	if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) return false;
 
-	return canvas.save(icoPath, "ICO");
+	return canvas.save(icoPath, "ico");
 }
 
 bool createWebAppOnDisk(
