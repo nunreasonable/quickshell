@@ -14,6 +14,7 @@
 #include <qquickitem.h>
 #include <qquickwindow.h>
 #include <qsurfaceformat.h>
+#include <qtimer.h>
 #include <qtmetamacros.h>
 #include <qtypes.h>
 #include <qvariant.h>
@@ -233,6 +234,10 @@ protected:
 private:
 	void polishItems();
 	void updateMask();
+#ifdef _WIN32
+	void releaseHiddenGraphics();
+	QTimer mReleaseTimer;
+#endif
 };
 
 class ProxyWindowAttached: public QsWindowAttached {

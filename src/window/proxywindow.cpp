@@ -39,6 +39,11 @@ ProxyWindowBase::ProxyWindowBase(QObject* parent)
 	QQmlEngine::setObjectOwnership(this->mContentItem, QQmlEngine::CppOwnership);
 	this->mContentItem->setParent(this);
 
+#ifdef _WIN32
+	this->mReleaseTimer.setSingleShot(true);
+	QObject::connect(&this->mReleaseTimer, &QTimer::timeout, this, &ProxyWindowBase::releaseHiddenGraphics);
+#endif
+
 	// clang-format off
 	QObject::connect(this->mContentItem, &ProxyWindowContentItem::polished, this, &ProxyWindowBase::onPolished);
 
@@ -270,10 +275,33 @@ void ProxyWindowBase::onVisibleChanged() {
 		emit this->closed();
 	}
 
+#ifdef _WIN32
+	if (this->window->isVisible()) {
+		this->mReleaseTimer.stop();
+	} else {
+		static const int delay = qEnvironmentVariableIsSet("QS_RELEASE_HIDDEN_MS")
+		                           ? qEnvironmentVariableIntValue("QS_RELEASE_HIDDEN_MS")
+		                           : 10000;
+		if (delay >= 0) this->mReleaseTimer.start(delay);
+	}
+#endif
+
 	emit this->visibleChanged();
 }
 
 bool ProxyWindowBase::deleteOnInvisible() const { return false; }
+
+#ifdef _WIN32
+void ProxyWindowBase::releaseHiddenGraphics() {
+	if (this->window == nullptr || this->window->isVisible()) return;
+
+	this->window->setPersistentSceneGraph(false);
+	this->window->setPersistentGraphics(false);
+	this->window->releaseResources();
+	this->window->setPersistentSceneGraph(true);
+	this->window->setPersistentGraphics(true);
+}
+#endif
 
 QQuickWindow* ProxyWindowBase::backingWindow() const { return this->window; }
 QQuickItem* ProxyWindowBase::contentItem() const { return this->mContentItem; }
