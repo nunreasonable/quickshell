@@ -3,7 +3,6 @@
 #include <array>
 #include <atomic>
 #include <cwchar>
-#include <thread>
 
 #include <qcoreapplication.h>
 #include <qlogging.h>
@@ -20,7 +19,6 @@
 #include <objidl.h>
 #include <oleidl.h>
 #include <shellapi.h>
-#include <shlobj.h>
 
 namespace qs::windows {
 
@@ -111,6 +109,20 @@ QStringList extractDroppedPaths(IDataObject* obj) {
 	return paths;
 }
 
+bool isWallpaperFile(const QStringList& paths) {
+	if (paths.size() != 1) return false;
+	static const QStringList extensions = {
+	    QStringLiteral("png"), QStringLiteral("jpg"),  QStringLiteral("jpeg"), QStringLiteral("webp"),
+	    QStringLiteral("bmp"), QStringLiteral("gif"),  QStringLiteral("avif"), QStringLiteral("jxl"),
+	    QStringLiteral("tif"), QStringLiteral("tiff"), QStringLiteral("mp4"),  QStringLiteral("webm"),
+	    QStringLiteral("mkv"), QStringLiteral("avi"),  QStringLiteral("mov"),  QStringLiteral("m4v"),
+	    QStringLiteral("wmv"),
+	};
+	auto dot = paths.first().lastIndexOf(u'.');
+	if (dot < 0) return false;
+	return extensions.contains(paths.first().mid(dot + 1).toLower());
+}
+
 } // namespace
 
 class DesktopDropTarget final: public IDropTarget {
@@ -142,9 +154,10 @@ public:
 
 	HRESULT __stdcall DragEnter(IDataObject* obj, DWORD /*keyState*/, POINTL /*pt*/, DWORD* effect)
 	    override {
-		this->hasFiles = hasHDrop(obj);
+		this->hasFiles = hasHDrop(obj) && isWallpaperFile(extractDroppedPaths(obj));
 		*effect = this->hasFiles ? DROPEFFECT_COPY : DROPEFFECT_NONE;
 		this->owner->notifyDragEntered();
+		if (!this->hasFiles) this->owner->requestDisarm();
 		return S_OK;
 	}
 
@@ -160,8 +173,9 @@ public:
 
 	HRESULT __stdcall Drop(IDataObject* obj, DWORD /*keyState*/, POINTL pt, DWORD* effect) override {
 		auto paths = extractDroppedPaths(obj);
-		*effect = paths.isEmpty() ? DROPEFFECT_NONE : DROPEFFECT_COPY;
-		if (!paths.isEmpty()) this->owner->notifyDropped(paths, pt);
+		auto accepted = isWallpaperFile(paths);
+		*effect = accepted ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+		if (accepted) this->owner->notifyDropped(paths, pt);
 		this->owner->requestDisarm();
 		return S_OK;
 	}
@@ -417,41 +431,6 @@ void DesktopDropManager::notifyDropped(const QStringList& paths, POINTL pt) {
 	);
 }
 
-void DesktopDropManager::copyToDesktop(const QStringList& paths) {
-	if (paths.isEmpty()) return;
-
-	std::thread([paths]() {
-		auto comInit = SUCCEEDED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
-
-		PWSTR desktopRaw = nullptr;
-		if (FAILED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, nullptr, &desktopRaw))) {
-			if (comInit) CoUninitialize();
-			return;
-		}
-
-		std::wstring from;
-		for (const auto& path: paths) {
-			from += path.toStdWString();
-			from.push_back(L'\0');
-		}
-		from.push_back(L'\0');
-
-		std::wstring to = desktopRaw;
-		to.push_back(L'\0');
-		to.push_back(L'\0');
-		CoTaskMemFree(desktopRaw);
-
-		SHFILEOPSTRUCTW op {};
-		op.wFunc = FO_COPY;
-		op.pFrom = from.c_str();
-		op.pTo = to.c_str();
-		op.fFlags = FOF_ALLOWUNDO;
-		SHFileOperationW(&op);
-
-		if (comInit) CoUninitialize();
-	}).detach();
-}
-
 LRESULT CALLBACK
 DesktopDropManager::messageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	if (msg == WM_DD_ARM) {
@@ -473,7 +452,5 @@ bool DesktopDrop::enabled() const { return DesktopDropManager::instance()->enabl
 void DesktopDrop::setEnabled(bool enabled) { DesktopDropManager::instance()->setEnabled(enabled); }
 bool DesktopDrop::active() const { return DesktopDropManager::instance()->active(); }
 QString DesktopDrop::activeScreen() const { return DesktopDropManager::instance()->activeScreen(); }
-
-void DesktopDrop::copyToDesktop(const QStringList& paths) { DesktopDropManager::copyToDesktop(paths); }
 
 } // namespace qs::windows

@@ -38,7 +38,6 @@ public:
 	void notifyDropped(const QStringList& paths, POINTL pt);
 	void requestDisarm();
 
-	Q_INVOKABLE static void copyToDesktop(const QStringList& paths);
 
 signals:
 	void enabledChanged();
@@ -86,7 +85,6 @@ public:
 	[[nodiscard]] bool active() const;
 	[[nodiscard]] QString activeScreen() const;
 
-	Q_INVOKABLE static void copyToDesktop(const QStringList& paths);
 
 signals:
 	void enabledChanged();
