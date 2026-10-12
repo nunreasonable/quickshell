@@ -13,6 +13,8 @@ qt_add_library(quickshell-windows STATIC
 	window_tracker.cpp
 	tiling_layout.cpp
 	tiling.cpp
+	window_decorations.cpp
+	window_manager.cpp
 	super_drag.cpp
 	taskbar.cpp
 	capture.cpp

@@ -17,6 +17,7 @@
 
 #include "../tiling.hpp"
 #include "../virtual_desktops.hpp"
+#include "../window_manager.hpp"
 #include "../window_tracker.hpp"
 #include "connection.hpp"
 #include "workspace.hpp"
@@ -52,6 +53,12 @@ std::optional<TilingManager::Edge> directionEdge(const QString& direction) {
 	if (d.startsWith('u') || d.startsWith('t')) return TilingManager::Edge::Top;
 	if (d.startsWith('d') || d.startsWith('b')) return TilingManager::Edge::Bottom;
 	return std::nullopt;
+}
+
+bool isRelativeWorkspace(const QString& arg) {
+	auto a = arg.trimmed();
+	if (a.startsWith('e') || a.startsWith('r') || a.startsWith('m')) a = a.mid(1);
+	return a.startsWith('+') || a.startsWith('-');
 }
 
 WORD arrowKey(const QString& direction) {
@@ -301,9 +308,11 @@ qsizetype Dispatcher::resolveWorkspace(const QString& arg, bool& create) const {
 	auto current = desktops->currentIndex();
 	auto count = desktops->count();
 
-	if (a.isEmpty() || a.startsWith("special") || a == "previous" || a == "previous_per_monitor") {
-		return -1;
+	if (a == "previous" || a == "previous_per_monitor") {
+		return WorkspaceBehavior::instance()->previousDesktop();
 	}
+
+	if (a.isEmpty() || a.startsWith("special")) return -1;
 
 	if (a.startsWith("name:")) {
 		auto* workspace = this->ipc->workspaceByName(a.mid(5));
@@ -391,13 +400,26 @@ void Dispatcher::focusWorkspace(const QString& arg) {
 	auto index = this->resolveWorkspace(arg, create);
 
 	if (index < 0) {
-		this->unsupported("workspace " + arg.trimmed());
+		if (!arg.trimmed().startsWith("previous")) this->unsupported("workspace " + arg.trimmed());
 		return;
 	}
 
 	auto* desktops = this->ipc->desktops();
+	auto* behavior = WorkspaceBehavior::instance();
+
+	if (index == desktops->currentIndex()) {
+		auto previous = behavior->previousDesktop();
+		if (!behavior->backAndForth() || isRelativeWorkspace(arg) || previous < 0 || previous == index) {
+			behavior->warpToActive();
+			return;
+		}
+
+		index = previous;
+	}
+
 	if (index >= desktops->count() && (!create || !desktops->ensureCount(index + 1))) return;
 
+	behavior->prepareWarp(index);
 	desktops->switchTo(index);
 }
 
@@ -408,7 +430,7 @@ void Dispatcher::moveToWorkspace(TrackedWindow* window, const QString& arg, bool
 	auto index = this->resolveWorkspace(arg, create);
 
 	if (index < 0) {
-		this->unsupported("movetoworkspace " + arg.trimmed());
+		if (!arg.trimmed().startsWith("previous")) this->unsupported("movetoworkspace " + arg.trimmed());
 		return;
 	}
 
@@ -416,7 +438,10 @@ void Dispatcher::moveToWorkspace(TrackedWindow* window, const QString& arg, bool
 	if (index >= desktops->count() && (!create || !desktops->ensureCount(index + 1))) return;
 
 	if (!window->moveToDesktop(index)) return;
-	if (follow) window->activate();
+	if (!follow) return;
+
+	WorkspaceBehavior::instance()->prepareWarp(index, true);
+	window->activate();
 }
 
 void Dispatcher::fullscreen(TrackedWindow* window, int mode) {
@@ -577,11 +602,18 @@ void Dispatcher::layoutMessage(const QString& message) {
 		tiling->toggleSplit(window);
 	} else if (command == "swapsplit") {
 		tiling->swapSplit(window);
-	} else if (command == "splitratio" && parts.length() >= 2) {
+	} else if ((command == "splitratio" || command == "mfact") && parts.length() >= 2) {
 		auto exact = parts[1] == "exact";
 		auto ok = false;
 		auto value = parts.value(exact ? 2 : 1).toDouble(&ok);
-		if (ok) tiling->splitRatio(window, value, exact);
+		if (!ok) return;
+
+		if (command == "splitratio") tiling->splitRatio(window, value, exact);
+		else if (!tiling->masterRatio(window, value, exact)) this->unsupported("layoutmsg mfact (dwindle)");
+	} else if (command == "swapwithmaster") {
+		if (!tiling->swapWithMaster(window)) this->unsupported("layoutmsg swapwithmaster (dwindle)");
+	} else if (command == "focusmaster") {
+		if (!tiling->focusMaster(window)) this->unsupported("layoutmsg focusmaster (dwindle)");
 	} else {
 		this->unsupported("layoutmsg " + command);
 	}
