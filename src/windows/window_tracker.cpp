@@ -496,7 +496,10 @@ WindowTracker::WindowTracker() {
 
 	if (auto* app = qobject_cast<QGuiApplication*>(QGuiApplication::instance())) {
 		QObject::connect(app, &QGuiApplication::screenAdded, this, &WindowTracker::onScreensChanged);
-		QObject::connect(app, &QGuiApplication::screenRemoved, this, &WindowTracker::onScreensChanged);
+		QObject::connect(app, &QGuiApplication::screenRemoved, this, [this](QScreen* screen) {
+			for (auto* window: this->mWindows) window->forgetScreen(screen);
+			this->onScreensChanged();
+		});
 	}
 
 	QObject::connect(
@@ -847,6 +850,10 @@ void WindowTracker::updateScreens() {
 		auto* monitor = monitorForScreen(screen);
 		if (monitor != nullptr) this->screensByMonitor.insert(monitor, screen);
 	}
+}
+
+void TrackedWindow::forgetScreen(QScreen* screen) {
+	if (this->bScreen.value() == screen) this->bScreen = nullptr;
 }
 
 void WindowTracker::onScreensChanged() {

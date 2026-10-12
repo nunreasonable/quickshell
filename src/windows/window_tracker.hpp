@@ -91,6 +91,8 @@ signals:
 private:
 	friend class WindowTracker;
 
+	void forgetScreen(QScreen* screen);
+
 	explicit TrackedWindow(WindowTracker* tracker, HWND hwnd);
 
 	void refreshIdentity();
