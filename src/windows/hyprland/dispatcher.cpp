@@ -400,7 +400,7 @@ void Dispatcher::focusWorkspace(const QString& arg) {
 	auto index = this->resolveWorkspace(arg, create);
 
 	if (index < 0) {
-		this->unsupported("workspace " + arg.trimmed());
+		if (!arg.trimmed().startsWith("previous")) this->unsupported("workspace " + arg.trimmed());
 		return;
 	}
 
@@ -430,7 +430,7 @@ void Dispatcher::moveToWorkspace(TrackedWindow* window, const QString& arg, bool
 	auto index = this->resolveWorkspace(arg, create);
 
 	if (index < 0) {
-		this->unsupported("movetoworkspace " + arg.trimmed());
+		if (!arg.trimmed().startsWith("previous")) this->unsupported("movetoworkspace " + arg.trimmed());
 		return;
 	}
 
