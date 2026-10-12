@@ -11,9 +11,10 @@ class Wallpaper: public QObject {
 	Q_OBJECT;
 	QML_ELEMENT;
 	QML_SINGLETON;
+	Q_PROPERTY(bool lockScreenImageSupported READ lockScreenImageSupported NOTIFY lockScreenImageSupportedChanged);
 
 public:
-	explicit Wallpaper(QObject* parent = nullptr): QObject(parent) {}
+	explicit Wallpaper(QObject* parent = nullptr);
 
 	Q_INVOKABLE static QString currentWallpaper();
 
@@ -26,6 +27,22 @@ public:
 	Q_INVOKABLE static bool setAccentColor(const QString& hex);
 
 	Q_INVOKABLE static QString matugenPath();
+
+	[[nodiscard]] bool lockScreenImageSupported() const { return this->mLockScreenImageSupported; }
+
+	Q_INVOKABLE void setLockScreenImage(const QString& path);
+
+	Q_INVOKABLE static void openLockScreenPersonalizationSettings();
+
+signals:
+	void lockScreenImageSupportedChanged();
+	void lockScreenImageApplied(bool ok);
+
+private:
+	void applyLockScreenResult(bool ok, const QString& errorMessage);
+
+	bool mLockScreenImageSupported = true;
+	bool mLockScreenAttemptRunning = false;
 };
 
 } // namespace qs::windows::sys
