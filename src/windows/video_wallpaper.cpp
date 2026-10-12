@@ -29,6 +29,7 @@
 #include <qsgsimpletexturenode.h>
 #include <qsgtexture.h>
 #include <qtimer.h>
+#include <private/qsgplaintexture_p.h>
 #include <qurl.h>
 #include <rhi/qrhi.h>
 
@@ -528,8 +529,6 @@ public:
 			if (!this->reader.open(device, frame)) return true;
 
 			if (this->texture == nullptr || this->size != frame->size) {
-				this->releaseTexture();
-
 				D3D11_TEXTURE2D_DESC desc {};
 				desc.Width = static_cast<UINT>(frame->size.width());
 				desc.Height = static_cast<UINT>(frame->size.height());
@@ -540,28 +539,23 @@ public:
 				desc.Usage = D3D11_USAGE_DEFAULT;
 				desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 
-				auto hr = device->CreateTexture2D(&desc, nullptr, &this->texture);
+				ID3D11Texture2D* texture = nullptr;
+				auto hr = device->CreateTexture2D(&desc, nullptr, &texture);
 				if (FAILED(hr)) {
 					qCWarning(logVideo) << "CreateTexture2D on the scene graph device failed:" << hresultText(hr);
 					return true;
 				}
 
 				auto* rhi = this->window->rhi();
-				this->rhiTexture = rhi != nullptr ? rhi->newTexture(QRhiTexture::BGRA8, frame->size) : nullptr;
-				if (this->rhiTexture == nullptr
-				    || !this->rhiTexture->createFrom({reinterpret_cast<quint64>(this->texture), 0}))
-				{
+				auto* rhiTexture = rhi != nullptr ? rhi->newTexture(QRhiTexture::BGRA8, frame->size) : nullptr;
+				if (rhiTexture == nullptr || !rhiTexture->createFrom({reinterpret_cast<quint64>(texture), 0})) {
 					qCWarning(logVideo) << "Wrapping the video texture for the scene graph failed";
-					this->releaseTexture();
+					delete rhiTexture;
+					texture->Release();
 					return true;
 				}
 
 				this->size = frame->size;
-				this->sgTexture = this->window->createTextureFromRhiTexture(
-				    this->rhiTexture,
-				    QQuickWindow::TextureIsOpaque
-				);
-				this->setTexture(this->sgTexture);
 			}
 
 			this->serial = 0;
@@ -577,9 +571,20 @@ public:
 
 private:
 	void releaseTexture() {
+				auto* sgTexture = new QSGPlainTexture();
+				sgTexture->setOwnsTexture(false);
+				sgTexture->setTexture(rhiTexture);
+				sgTexture->setTextureSize(frame->size);
+				sgTexture->setHasAlphaChannel(false);
+				this->setTexture(sgTexture);
+
+				this->releaseTexture();
+				this->texture = texture;
+				this->rhiTexture = rhiTexture;
+				this->sgTexture = sgTexture;
 		delete this->sgTexture;
 		this->sgTexture = nullptr;
-		delete this->rhiTexture;
+		if (this->rhiTexture != nullptr) this->rhiTexture->deleteLater();
 		this->rhiTexture = nullptr;
 		if (this->texture != nullptr) this->texture->Release();
 		this->texture = nullptr;
