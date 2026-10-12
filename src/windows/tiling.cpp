@@ -533,6 +533,7 @@ TilingManager::State TilingManager::stateOf(const Managed& m) const {
 	auto* window = m.window;
 
 	if (window->desktop() < 0 || window->screen() == nullptr) return State::Out;
+	if (!QGuiApplication::screens().contains(window->screen())) return State::Out;
 	if (m.elevated) return State::Out;
 	if (m.override == Override::Float) return State::Out;
 	if (m.override != Override::Tile && (m.autoFloat || this->floatsByRule(m))) return State::Out;
@@ -607,7 +608,7 @@ TilingManager::Layout* TilingManager::layoutFor(TrackedWindow* window, bool crea
 }
 
 TilingManager::Layout* TilingManager::layoutAt(const GUID& desktop, QScreen* screen, bool create) {
-	if (screen == nullptr) return nullptr;
+	if (screen == nullptr || !QGuiApplication::screens().contains(screen)) return nullptr;
 
 	auto key = VirtualDesktops::guidToString(desktop) + '|' + screen->name();
 	auto iter = this->layouts.find(key);
