@@ -975,6 +975,7 @@ void Displays::onJobFinished(const QString& error, bool confirm, bool tookSnapsh
 	}
 
 	this->scheduleRefresh(300);
+	QTimer::singleShot(1500, this, [this] { this->load(true); });
 }
 
 void Displays::armConfirmation() {
@@ -1075,7 +1076,10 @@ bool Displays::setMode(const QString& id, int width, int height, int refreshRate
 	            keepTarget = sameRate,
 	            device,
 	            devMode]() mutable -> QString {
-		auto attempt = [&](bool keepTargetMode, DISPLAYCONFIG_RATIONAL rate, bool preferredScaling) {
+		auto attempt = [&](bool keepTargetMode,
+		                   DISPLAYCONFIG_RATIONAL rate,
+		                   bool preferredScaling,
+		                   bool allowChanges) {
 			auto candidate = topology;
 			auto& target = candidate.paths[index].targetInfo;
 			if (!keepTargetMode) {
@@ -1087,30 +1091,39 @@ bool Displays::setMode(const QString& id, int width, int height, int refreshRate
 			}
 			if (preferredScaling) target.scaling = DISPLAYCONFIG_SCALING_PREFERRED;
 			compactModes(candidate);
-			return applyBest(candidate, false);
+			return applyTopology(candidate, allowChanges, false);
 		};
 
-		LONG result = ERROR_INVALID_PARAMETER;
-		if (keepTarget) {
-			for (auto preferred: {false, true}) {
-				result = attempt(true, {}, preferred);
-				if (result == ERROR_SUCCESS) return {};
-			}
-		}
-
 		std::vector<DISPLAYCONFIG_RATIONAL> rates;
+		if (keepTarget) {
+			const auto& current = topology.paths[index].targetInfo.refreshRate;
+			if (current.Numerator != 0 && current.Denominator != 0) rates.push_back(current);
+		}
 		if (refreshRate > 1) {
-			rates.push_back({static_cast<UINT32>(refreshRate), 1});
-			rates.push_back({static_cast<UINT32>(refreshRate + 1) * 1000, 1001});
-		} else {
-			rates.push_back({0, 0});
+			const auto rate = static_cast<UINT32>(refreshRate);
+			rates.push_back({rate, 1});
+			rates.push_back({(rate + 1) * 1000, 1001});
+			rates.push_back({rate * 1000, 1001});
 		}
 
-		for (auto preferred: {false, true}) {
-			for (const auto& rate: rates) {
-				result = attempt(false, rate, preferred);
+		LONG result = ERROR_INVALID_PARAMETER;
+		for (auto allowChanges: {false, true}) {
+			for (auto preferred: {false, true}) {
+				for (const auto& rate: rates) {
+					result = attempt(false, rate, preferred, allowChanges);
+					if (result == ERROR_SUCCESS) return {};
+				}
+			}
+
+			if (keepTarget) {
+				result = attempt(true, {}, true, allowChanges);
 				if (result == ERROR_SUCCESS) return {};
 			}
+		}
+
+		if (rates.empty()) {
+			result = attempt(false, {0, 0}, true, true);
+			if (result == ERROR_SUCCESS) return {};
 		}
 
 		if (device.empty()) return errorText("SetDisplayConfig", result);
