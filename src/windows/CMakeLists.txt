@@ -44,6 +44,7 @@ qt_add_library(quickshell-windows STATIC
 	system/file_index.cpp
 	system/terminal_colors.cpp
 	system/terminal_colors_math.cpp
+	system/displays.cpp
 	image/image_tools.cpp
 	image/image_tools_backend.cpp
 	image/image_tools_worker.cpp

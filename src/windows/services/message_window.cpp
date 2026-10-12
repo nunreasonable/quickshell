@@ -20,15 +20,15 @@ ServiceMessageWindow::ServiceMessageWindow() {
 	this->mClassAtom = RegisterClassExW(&wc);
 
 	this->mHwnd = CreateWindowExW(
-	    0,
+	    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
 	    WINDOW_CLASS_NAME,
 	    L"",
+	    WS_POPUP,
 	    0,
 	    0,
 	    0,
 	    0,
-	    0,
-	    HWND_MESSAGE,
+	    nullptr,
 	    nullptr,
 	    GetModuleHandleW(nullptr),
 	    this
