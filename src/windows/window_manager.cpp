@@ -104,15 +104,14 @@ void WorkspaceBehavior::watchTracker() {
 	QObject::connect(this->tracker, &WindowTracker::flushed, this, retry);
 }
 
-void WorkspaceBehavior::prepareWarp(qsizetype desktop) {
+void WorkspaceBehavior::prepareWarp(qsizetype desktop, bool fromActive) {
 	this->cancelWarp();
 	if (this->mWarpOnChange == 0 || WorkspaceBehavior::cursorOverShell()) return;
 
 	this->watchTracker();
-	this->warpFrom = this->tracker->activeWindow();
+	this->warpFrom = fromActive ? nullptr : this->tracker->activeWindow();
 	this->warpDesktop = desktop;
 	this->warpDeadline = QDateTime::currentMSecsSinceEpoch() + WARP_TIMEOUT_MS;
-	this->tryWarp();
 }
 
 void WorkspaceBehavior::cancelWarp() {
@@ -184,12 +183,6 @@ void WorkspaceBehavior::warpToActive() {
 	auto desktop = window->desktop();
 	if (desktop != -1 && desktop != this->desktops->currentIndex()) return;
 
-	WorkspaceBehavior::warpCursor(window->hwnd());
-}
-
-void WorkspaceBehavior::warpTo(TrackedWindow* window) {
-	this->cancelWarp();
-	if (window == nullptr || this->mWarpOnChange == 0 || WorkspaceBehavior::cursorOverShell()) return;
 	WorkspaceBehavior::warpCursor(window->hwnd());
 }
 

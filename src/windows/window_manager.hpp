@@ -31,9 +31,8 @@ public:
 	void setWarpOnChange(qint32 mode);
 
 	[[nodiscard]] qsizetype previousDesktop() const;
-	void prepareWarp(qsizetype desktop);
+	void prepareWarp(qsizetype desktop, bool fromActive = false);
 	void warpToActive();
-	void warpTo(TrackedWindow* window);
 
 signals:
 	void backAndForthChanged();

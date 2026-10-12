@@ -55,6 +55,12 @@ std::optional<TilingManager::Edge> directionEdge(const QString& direction) {
 	return std::nullopt;
 }
 
+bool isRelativeWorkspace(const QString& arg) {
+	auto a = arg.trimmed();
+	if (a.startsWith('e') || a.startsWith('r') || a.startsWith('m')) a = a.mid(1);
+	return a.startsWith('+') || a.startsWith('-');
+}
+
 WORD arrowKey(const QString& direction) {
 	if (direction.startsWith('l')) return VK_LEFT;
 	if (direction.startsWith('r')) return VK_RIGHT;
@@ -403,7 +409,7 @@ void Dispatcher::focusWorkspace(const QString& arg) {
 
 	if (index == desktops->currentIndex()) {
 		auto previous = behavior->previousDesktop();
-		if (!behavior->backAndForth() || previous < 0 || previous == index) {
+		if (!behavior->backAndForth() || isRelativeWorkspace(arg) || previous < 0 || previous == index) {
 			behavior->warpToActive();
 			return;
 		}
@@ -434,8 +440,8 @@ void Dispatcher::moveToWorkspace(TrackedWindow* window, const QString& arg, bool
 	if (!window->moveToDesktop(index)) return;
 	if (!follow) return;
 
+	WorkspaceBehavior::instance()->prepareWarp(index, true);
 	window->activate();
-	WorkspaceBehavior::instance()->warpTo(window);
 }
 
 void Dispatcher::fullscreen(TrackedWindow* window, int mode) {
