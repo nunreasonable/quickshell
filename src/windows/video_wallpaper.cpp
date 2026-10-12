@@ -45,8 +45,25 @@ Q_LOGGING_CATEGORY(logVideo, "quickshell.windows.video", QtWarningMsg);
 constexpr UINT64 KEY_PRODUCER = 0;
 constexpr UINT64 KEY_CONSUMER = 1;
 constexpr int TICK_MS = 15;
+constexpr int SOFTWARE_TICK_MS = 66;
 constexpr int MAX_WIDTH = 3840;
 constexpr int MAX_HEIGHT = 2160;
+constexpr int SOFTWARE_MAX_WIDTH = 1280;
+constexpr int SOFTWARE_MAX_HEIGHT = 720;
+constexpr UINT MICROSOFT_VENDOR_ID = 0x1414;
+
+bool isSoftwareDevice(ID3D11Device* device) {
+	winrt::com_ptr<IDXGIDevice> dxgi;
+	winrt::com_ptr<IDXGIAdapter> adapter;
+	if (FAILED(device->QueryInterface(IID_PPV_ARGS(dxgi.put()))) || FAILED(dxgi->GetAdapter(adapter.put()))) {
+		return false;
+	}
+
+	auto adapter1 = adapter.try_as<IDXGIAdapter1>();
+	DXGI_ADAPTER_DESC1 desc {};
+	if (!adapter1 || FAILED(adapter1->GetDesc1(&desc))) return false;
+	return (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0 || desc.VendorId == MICROSOFT_VENDOR_ID;
+}
 constexpr DXGI_FORMAT FRAME_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 
 QString hresultText(HRESULT hr) {
@@ -150,6 +167,7 @@ private:
 	bool loaded = false;
 	bool wantPlaying = false;
 	bool warnedTransfer = false;
+	bool software = false;
 	winrt::com_ptr<ID3D11Device> device;
 	winrt::com_ptr<ID3D11DeviceContext> context;
 	winrt::com_ptr<IMFDXGIDeviceManager> manager;
@@ -235,8 +253,9 @@ bool VideoWorker::createDevice() {
 		);
 
 		if (SUCCEEDED(hr)) {
-			if (type == D3D_DRIVER_TYPE_WARP) {
-				qCInfo(logVideo) << "No hardware video device, decoding on WARP";
+			this->software = type == D3D_DRIVER_TYPE_WARP || isSoftwareDevice(this->device.get());
+			if (this->software) {
+				qCInfo(logVideo) << "No GPU for video; playing at up to 720p and 15 fps";
 			}
 			if (auto multithread = this->device.try_as<ID3D10Multithread>()) {
 				multithread->SetMultithreadProtected(TRUE);
@@ -291,7 +310,7 @@ void VideoWorker::start() {
 
 	this->timer = new QTimer(this);
 	this->timer->setTimerType(Qt::PreciseTimer);
-	this->timer->setInterval(TICK_MS);
+	this->timer->setInterval(this->software ? SOFTWARE_TICK_MS : TICK_MS);
 	QObject::connect(this->timer, &QTimer::timeout, this, &VideoWorker::tick);
 
 	auto url = QUrl::fromLocalFile(this->path).toString().toStdWString();
@@ -337,8 +356,10 @@ void VideoWorker::resizeFrame() {
 	if (FAILED(this->engine->GetNativeVideoSize(&width, &height)) || width == 0 || height == 0) return;
 
 	auto size = QSize(static_cast<int>(width), static_cast<int>(height));
-	if (size.width() > MAX_WIDTH || size.height() > MAX_HEIGHT) {
-		size = size.scaled(MAX_WIDTH, MAX_HEIGHT, Qt::KeepAspectRatio);
+	auto maxWidth = this->software ? SOFTWARE_MAX_WIDTH : MAX_WIDTH;
+	auto maxHeight = this->software ? SOFTWARE_MAX_HEIGHT : MAX_HEIGHT;
+	if (size.width() > maxWidth || size.height() > maxHeight) {
+		size = size.scaled(maxWidth, maxHeight, Qt::KeepAspectRatio);
 	}
 
 	if (this->frame && this->frame->size == size) return;
@@ -555,6 +576,17 @@ public:
 					return true;
 				}
 
+				auto* sgTexture = new QSGPlainTexture();
+				sgTexture->setOwnsTexture(false);
+				sgTexture->setTexture(rhiTexture);
+				sgTexture->setTextureSize(frame->size);
+				sgTexture->setHasAlphaChannel(false);
+				this->setTexture(sgTexture);
+
+				this->releaseTexture();
+				this->texture = texture;
+				this->rhiTexture = rhiTexture;
+				this->sgTexture = sgTexture;
 				this->size = frame->size;
 			}
 
@@ -571,17 +603,6 @@ public:
 
 private:
 	void releaseTexture() {
-				auto* sgTexture = new QSGPlainTexture();
-				sgTexture->setOwnsTexture(false);
-				sgTexture->setTexture(rhiTexture);
-				sgTexture->setTextureSize(frame->size);
-				sgTexture->setHasAlphaChannel(false);
-				this->setTexture(sgTexture);
-
-				this->releaseTexture();
-				this->texture = texture;
-				this->rhiTexture = rhiTexture;
-				this->sgTexture = sgTexture;
 		delete this->sgTexture;
 		this->sgTexture = nullptr;
 		if (this->rhiTexture != nullptr) this->rhiTexture->deleteLater();
