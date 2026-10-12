@@ -43,6 +43,10 @@ qt_add_library(quickshell-windows STATIC
 	system/file_index.cpp
 	system/terminal_colors.cpp
 	system/terminal_colors_math.cpp
+	system/registry_util.cpp
+	system/shell_link.cpp
+	system/webapps.cpp
+	system/autostart.cpp
 	image/image_tools.cpp
 	image/image_tools_backend.cpp
 	image/image_tools_worker.cpp
@@ -90,6 +94,7 @@ add_library(quickshell-windows-init OBJECT init.cpp)
 target_link_libraries(quickshell-windows PRIVATE
 	Qt::Quick
 	Qt::QuickPrivate
+	Qt::Network
 	quickshell-windows-services
 	user32
 	shell32
