@@ -33,6 +33,15 @@ public:
 
 	void requestScheme(int requestId, const QString& imagePath);
 
+	void requestFindContentRegions(
+	    int requestId,
+	    const QString& imagePath,
+	    int minWidth,
+	    int minHeight,
+	    int maxWidth,
+	    int maxHeight
+	);
+
 private:
 	void ensureStarted();
 
