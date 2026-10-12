@@ -200,7 +200,6 @@ QString dataRoot() {
 
 QString iconsDir() { return dataRoot() + QStringLiteral("/icons"); }
 
-QString profilesDir() { return dataRoot() + QStringLiteral("/profiles"); }
 
 QString webAppsStartMenuFolder() {
 	auto appData = qEnvironmentVariable("AppData");
@@ -274,9 +273,6 @@ bool createWebAppOnDisk(
 	auto icoPath = iconsDir() + u'/' + slug + QStringLiteral(".ico");
 	auto hasIcon = saveAsSquareIcon(iconBytes, icoPath);
 
-	auto profileDir = profilesDir() + u'/' + slug;
-	QDir().mkpath(profileDir);
-
 	auto folder = webAppsStartMenuFolder();
 	if (folder.isEmpty() || !QDir().mkpath(folder)) {
 		error = QStringLiteral("could not create the Start menu folder");
@@ -285,8 +281,7 @@ bool createWebAppOnDisk(
 
 	auto data = ShellLinkData();
 	data.targetPath = browser;
-	data.arguments = QStringLiteral("--app=%1 --user-data-dir=\"%2\"")
-	                      .arg(url, QDir::toNativeSeparators(profileDir));
+	data.arguments = QStringLiteral("--app=%1").arg(url);
 	data.description = name;
 	data.workingDirectory = QFileInfo(browser).absolutePath();
 	data.iconPath = hasIcon ? icoPath : browser;
@@ -622,9 +617,6 @@ void WebApps::remove(const QString& id) {
 	auto folder = webAppsStartMenuFolder();
 	QFile::remove(folder + u'/' + id + QStringLiteral(".lnk"));
 	QFile::remove(iconsDir() + u'/' + id + QStringLiteral(".ico"));
-
-	auto profileDir = QDir(profilesDir() + u'/' + id);
-	if (profileDir.exists()) profileDir.removeRecursively();
 
 	this->refresh();
 	rescanDesktopEntriesLater();
