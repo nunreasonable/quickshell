@@ -129,6 +129,8 @@ void SystemStats::setNetworkEnabled(bool enabled) {
 
 	if (enabled) {
 		this->havePrevNetworkSample = false;
+		this->bNetworkDownloadedBytes = 0.0;
+		this->bNetworkUploadedBytes = 0.0;
 		if (this->mActive) this->sampleNetwork();
 	} else {
 		this->havePrevNetworkSample = false;
@@ -306,6 +308,10 @@ void SystemStats::sampleNetwork() {
 			    static_cast<qreal>(inDelta) * 1000.0 / static_cast<qreal>(elapsedMs);
 			this->bNetworkUploadBytesPerSec =
 			    static_cast<qreal>(outDelta) * 1000.0 / static_cast<qreal>(elapsedMs);
+			this->bNetworkDownloadedBytes = this->bNetworkDownloadedBytes.value()
+			                              + static_cast<qreal>(inDelta);
+			this->bNetworkUploadedBytes =
+			    this->bNetworkUploadedBytes.value() + static_cast<qreal>(outDelta);
 		}
 	}
 

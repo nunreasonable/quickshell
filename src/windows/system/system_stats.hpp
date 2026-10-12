@@ -34,6 +34,8 @@ class SystemStats: public QObject {
 	Q_PROPERTY(bool networkEnabled READ networkEnabled WRITE setNetworkEnabled NOTIFY networkEnabledChanged);
 	Q_PROPERTY(qreal networkDownloadBytesPerSec READ default NOTIFY networkDownloadBytesPerSecChanged BINDABLE bindableNetworkDownloadBytesPerSec);
 	Q_PROPERTY(qreal networkUploadBytesPerSec READ default NOTIFY networkUploadBytesPerSecChanged BINDABLE bindableNetworkUploadBytesPerSec);
+	Q_PROPERTY(qreal networkDownloadedBytes READ default NOTIFY networkDownloadedBytesChanged BINDABLE bindableNetworkDownloadedBytes);
+	Q_PROPERTY(qreal networkUploadedBytes READ default NOTIFY networkUploadedBytesChanged BINDABLE bindableNetworkUploadedBytes);
 	// clang-format on
 
 public:
@@ -77,6 +79,12 @@ public:
 	[[nodiscard]] QBindable<qreal> bindableNetworkUploadBytesPerSec() const {
 		return &this->bNetworkUploadBytesPerSec;
 	}
+	[[nodiscard]] QBindable<qreal> bindableNetworkDownloadedBytes() const {
+		return &this->bNetworkDownloadedBytes;
+	}
+	[[nodiscard]] QBindable<qreal> bindableNetworkUploadedBytes() const {
+		return &this->bNetworkUploadedBytes;
+	}
 
 signals:
 	void activeChanged();
@@ -92,6 +100,8 @@ signals:
 	void networkEnabledChanged();
 	void networkDownloadBytesPerSecChanged();
 	void networkUploadBytesPerSecChanged();
+	void networkDownloadedBytesChanged();
+	void networkUploadedBytesChanged();
 
 private:
 	void sample();
@@ -131,6 +141,8 @@ private:
 	Q_OBJECT_BINDABLE_PROPERTY(SystemStats, qreal, bGpuUsage, &SystemStats::gpuUsageChanged);
 	Q_OBJECT_BINDABLE_PROPERTY_WITH_ARGS(SystemStats, qreal, bNetworkDownloadBytesPerSec, -1.0, &SystemStats::networkDownloadBytesPerSecChanged);
 	Q_OBJECT_BINDABLE_PROPERTY_WITH_ARGS(SystemStats, qreal, bNetworkUploadBytesPerSec, -1.0, &SystemStats::networkUploadBytesPerSecChanged);
+	Q_OBJECT_BINDABLE_PROPERTY(SystemStats, qreal, bNetworkDownloadedBytes, &SystemStats::networkDownloadedBytesChanged);
+	Q_OBJECT_BINDABLE_PROPERTY(SystemStats, qreal, bNetworkUploadedBytes, &SystemStats::networkUploadedBytesChanged);
 	// clang-format on
 };
 
