@@ -6,6 +6,7 @@
 #include <qt_windows.h>
 
 #include <audioclient.h>
+#include <audiopolicy.h>
 #include <mmdeviceapi.h>
 #include <mmreg.h>
 
@@ -169,6 +170,13 @@ bool AudioCapture::open(QString* error, bool* blocked) {
 
 		hr = this->client->SetEventHandle(this->packetEvent);
 		if (FAILED(hr)) return fail(hr, "cannot set the microphone's capture event");
+
+		winrt::com_ptr<IAudioSessionControl> session;
+		if (SUCCEEDED(this->client->GetService(IID_PPV_ARGS(session.put())))) {
+			if (auto session2 = session.try_as<IAudioSessionControl2>()) {
+				session2->SetDuckingPreference(TRUE);
+			}
+		}
 	}
 
 	hr = this->client->GetService(IID_PPV_ARGS(this->capture.put()));
@@ -197,6 +205,14 @@ void AudioCapture::stop() {
 	if (!this->thread.joinable()) return;
 	SetEvent(this->stopEvent);
 	this->thread.join();
+}
+
+void AudioCapture::finish(qint64 until) {
+	if (this->thread.joinable() || this->outRate <= 0) return;
+
+	this->produced.clear();
+	this->stream.padTo(static_cast<std::int64_t>(this->framesAt(until)), this->produced);
+	this->mQueue.append(this->produced);
 }
 
 double AudioCapture::framesAt(qint64 time) const {

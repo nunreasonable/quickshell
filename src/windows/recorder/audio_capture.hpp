@@ -31,6 +31,7 @@ public:
 
 	void start(qint64 origin, int outputRate);
 	void stop();
+	void finish(qint64 until);
 
 	[[nodiscard]] FrameQueue* queue() { return &this->mQueue; }
 	[[nodiscard]] Source kind() const { return this->source; }

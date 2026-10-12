@@ -363,7 +363,11 @@ bool RecordingJob::record(QString* error) {
 
 	if (timer != nullptr) CloseHandle(timer);
 
-	for (auto& source: sources) source->stop();
+	auto end = qpc100ns();
+	for (auto& source: sources) {
+		source->stop();
+		source->finish(end);
+	}
 
 	if (mixer && !failed) {
 		mixer->mix(true, pcm);
