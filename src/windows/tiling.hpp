@@ -49,6 +49,22 @@ public:
 	void setPreserveSplit(bool preserve);
 	[[nodiscard]] QStringList excluded() const { return this->mExcluded; }
 	void setExcluded(const QStringList& excluded);
+	[[nodiscard]] QString layout() const { return this->mLayout; }
+	void setLayout(const QString& layout);
+	[[nodiscard]] bool smartSplit() const { return this->mSmartSplit; }
+	void setSmartSplit(bool smart);
+	[[nodiscard]] qint32 forceSplit() const { return this->mForceSplit; }
+	void setForceSplit(qint32 force);
+	[[nodiscard]] double defaultSplitRatio() const { return this->mDefaultSplitRatio; }
+	void setDefaultSplitRatio(double ratio);
+	[[nodiscard]] QString masterNewStatus() const { return this->mMasterNewStatus; }
+	void setMasterNewStatus(const QString& status);
+	[[nodiscard]] bool masterNewOnTop() const { return this->mMasterNewOnTop; }
+	void setMasterNewOnTop(bool onTop);
+	[[nodiscard]] QString masterOrientation() const { return this->mMasterOrientation; }
+	void setMasterOrientation(const QString& orientation);
+	[[nodiscard]] double masterFactor() const { return this->mMasterFactor; }
+	void setMasterFactor(double factor);
 
 	void relayout();
 
@@ -60,6 +76,9 @@ public:
 	bool toggleSplit(TrackedWindow* window);
 	bool swapSplit(TrackedWindow* window);
 	bool splitRatio(TrackedWindow* window, double value, bool exact);
+	bool masterRatio(TrackedWindow* window, double value, bool exact);
+	bool swapWithMaster(TrackedWindow* window);
+	bool focusMaster(TrackedWindow* window);
 	bool resizeTiled(TrackedWindow* window, qint32 dx, qint32 dy);
 	bool setFloating(TrackedWindow* window, bool floating, bool toggle);
 
@@ -77,6 +96,14 @@ signals:
 	void gapsOutChanged();
 	void preserveSplitChanged();
 	void excludedChanged();
+	void layoutChanged();
+	void smartSplitChanged();
+	void forceSplitChanged();
+	void defaultSplitRatioChanged();
+	void masterNewStatusChanged();
+	void masterNewOnTopChanged();
+	void masterOrientationChanged();
+	void masterFactorChanged();
 	void windowTilingChanged(TrackedWindow* window);
 
 private:
@@ -87,7 +114,7 @@ private:
 	struct Layout {
 		GUID desktop {};
 		QPointer<QScreen> screen;
-		tiling::DwindleLayout tree;
+		std::unique_ptr<tiling::LayoutEngine> tree;
 		TrackedWindow* lastFocused = nullptr;
 	};
 
@@ -137,8 +164,11 @@ private:
 	[[nodiscard]] Layout* layoutFor(TrackedWindow* window, bool create);
 	[[nodiscard]] Layout* layoutAt(const GUID& desktop, QScreen* screen, bool create);
 	[[nodiscard]] bool layoutAlive(const Layout* layout) const;
-	[[nodiscard]] static tiling::DwindleLayout::Id idOf(TrackedWindow* window);
-	[[nodiscard]] TrackedWindow* windowOf(tiling::DwindleLayout::Id id) const;
+	[[nodiscard]] static tiling::LayoutEngine::Id idOf(TrackedWindow* window);
+	[[nodiscard]] TrackedWindow* windowOf(tiling::LayoutEngine::Id id) const;
+	[[nodiscard]] tiling::Kind layoutKind() const;
+	[[nodiscard]] tiling::Options options() const;
+	void rebuildLayouts();
 
 	void markWindow(TrackedWindow* window);
 	void markLayout(Layout* layout);
@@ -180,6 +210,14 @@ private:
 	qint32 mGapsOut = 5;
 	bool mPreserveSplit = true;
 	QStringList mExcluded;
+	QString mLayout = QStringLiteral("dwindle");
+	bool mSmartSplit = false;
+	qint32 mForceSplit = 0;
+	double mDefaultSplitRatio = 1.0;
+	QString mMasterNewStatus = QStringLiteral("slave");
+	bool mMasterNewOnTop = false;
+	QString mMasterOrientation = QStringLiteral("left");
+	double mMasterFactor = 0.55;
 	QList<QRegularExpression> excludedPatterns;
 	QList<QRegularExpression> excludedTitles;
 
@@ -209,6 +247,14 @@ class Tiling: public QObject {
 	Q_PROPERTY(qint32 gapsOut READ gapsOut WRITE setGapsOut NOTIFY gapsOutChanged);
 	Q_PROPERTY(bool preserveSplit READ preserveSplit WRITE setPreserveSplit NOTIFY preserveSplitChanged);
 	Q_PROPERTY(QStringList excluded READ excluded WRITE setExcluded NOTIFY excludedChanged);
+	Q_PROPERTY(QString layout READ layout WRITE setLayout NOTIFY layoutChanged);
+	Q_PROPERTY(bool smartSplit READ smartSplit WRITE setSmartSplit NOTIFY smartSplitChanged);
+	Q_PROPERTY(qint32 forceSplit READ forceSplit WRITE setForceSplit NOTIFY forceSplitChanged);
+	Q_PROPERTY(double defaultSplitRatio READ defaultSplitRatio WRITE setDefaultSplitRatio NOTIFY defaultSplitRatioChanged);
+	Q_PROPERTY(QString masterNewStatus READ masterNewStatus WRITE setMasterNewStatus NOTIFY masterNewStatusChanged);
+	Q_PROPERTY(bool masterNewOnTop READ masterNewOnTop WRITE setMasterNewOnTop NOTIFY masterNewOnTopChanged);
+	Q_PROPERTY(QString masterOrientation READ masterOrientation WRITE setMasterOrientation NOTIFY masterOrientationChanged);
+	Q_PROPERTY(double masterFactor READ masterFactor WRITE setMasterFactor NOTIFY masterFactorChanged);
 	// clang-format on
 
 public:
@@ -226,6 +272,22 @@ public:
 	void setPreserveSplit(bool preserve);
 	[[nodiscard]] QStringList excluded() const;
 	void setExcluded(const QStringList& excluded);
+	[[nodiscard]] QString layout() const;
+	void setLayout(const QString& layout);
+	[[nodiscard]] bool smartSplit() const;
+	void setSmartSplit(bool smart);
+	[[nodiscard]] qint32 forceSplit() const;
+	void setForceSplit(qint32 force);
+	[[nodiscard]] double defaultSplitRatio() const;
+	void setDefaultSplitRatio(double ratio);
+	[[nodiscard]] QString masterNewStatus() const;
+	void setMasterNewStatus(const QString& status);
+	[[nodiscard]] bool masterNewOnTop() const;
+	void setMasterNewOnTop(bool onTop);
+	[[nodiscard]] QString masterOrientation() const;
+	void setMasterOrientation(const QString& orientation);
+	[[nodiscard]] double masterFactor() const;
+	void setMasterFactor(double factor);
 
 signals:
 	void enabledChanged();
@@ -233,6 +295,14 @@ signals:
 	void gapsOutChanged();
 	void preserveSplitChanged();
 	void excludedChanged();
+	void layoutChanged();
+	void smartSplitChanged();
+	void forceSplitChanged();
+	void defaultSplitRatioChanged();
+	void masterNewStatusChanged();
+	void masterNewOnTopChanged();
+	void masterOrientationChanged();
+	void masterFactorChanged();
 };
 
 } // namespace qs::windows

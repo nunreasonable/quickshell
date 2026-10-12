@@ -213,6 +213,140 @@ void TilingManager::setExcluded(const QStringList& excluded) {
 	emit this->excludedChanged();
 }
 
+void TilingManager::setLayout(const QString& layout) {
+	auto master = layout.trimmed().compare(QStringLiteral("master"), Qt::CaseInsensitive) == 0;
+	auto normalized = master ? QStringLiteral("master") : QStringLiteral("dwindle");
+	if (normalized == this->mLayout) return;
+	this->mLayout = normalized;
+	if (this->mEnabled) this->rebuildLayouts();
+	emit this->layoutChanged();
+}
+
+void TilingManager::setSmartSplit(bool smart) {
+	if (smart == this->mSmartSplit) return;
+	this->mSmartSplit = smart;
+	this->markAll();
+	emit this->smartSplitChanged();
+}
+
+void TilingManager::setForceSplit(qint32 force) {
+	force = qBound(0, force, 2);
+	if (force == this->mForceSplit) return;
+	this->mForceSplit = force;
+	emit this->forceSplitChanged();
+}
+
+void TilingManager::setDefaultSplitRatio(double ratio) {
+	ratio = qBound(0.1, ratio, 1.9);
+	if (qFuzzyCompare(ratio, this->mDefaultSplitRatio)) return;
+	this->mDefaultSplitRatio = ratio;
+	emit this->defaultSplitRatioChanged();
+}
+
+void TilingManager::setMasterNewStatus(const QString& status) {
+	auto value = status.trimmed().toLower();
+	if (value != QStringLiteral("master") && value != QStringLiteral("inherit")) {
+		value = QStringLiteral("slave");
+	}
+
+	if (value == this->mMasterNewStatus) return;
+	this->mMasterNewStatus = value;
+	this->markAll();
+	emit this->masterNewStatusChanged();
+}
+
+void TilingManager::setMasterNewOnTop(bool onTop) {
+	if (onTop == this->mMasterNewOnTop) return;
+	this->mMasterNewOnTop = onTop;
+	this->markAll();
+	emit this->masterNewOnTopChanged();
+}
+
+void TilingManager::setMasterOrientation(const QString& orientation) {
+	static const auto known = QStringList {
+	    QStringLiteral("left"),
+	    QStringLiteral("right"),
+	    QStringLiteral("top"),
+	    QStringLiteral("bottom"),
+	    QStringLiteral("center"),
+	};
+
+	auto value = orientation.trimmed().toLower();
+	if (!known.contains(value)) value = QStringLiteral("left");
+	if (value == this->mMasterOrientation) return;
+	this->mMasterOrientation = value;
+	this->markAll();
+	emit this->masterOrientationChanged();
+}
+
+void TilingManager::setMasterFactor(double factor) {
+	factor = qBound(0.05, factor, 0.95);
+	if (qFuzzyCompare(factor, this->mMasterFactor)) return;
+	this->mMasterFactor = factor;
+	this->markAll();
+	emit this->masterFactorChanged();
+}
+
+tiling::Kind TilingManager::layoutKind() const {
+	return this->mLayout == QStringLiteral("master") ? tiling::Kind::Master : tiling::Kind::Dwindle;
+}
+
+tiling::Options TilingManager::options() const {
+	auto options = tiling::Options();
+	options.preserveSplit = this->mPreserveSplit;
+	options.smartSplit = this->mSmartSplit;
+	options.forceSplit = this->mForceSplit;
+	options.defaultSplitRatio = this->mDefaultSplitRatio;
+	options.newOnTop = this->mMasterNewOnTop;
+	options.mfact = this->mMasterFactor;
+
+	if (this->mMasterNewStatus == QStringLiteral("master")) {
+		options.newStatus = tiling::NewStatus::Master;
+	} else if (this->mMasterNewStatus == QStringLiteral("inherit")) {
+		options.newStatus = tiling::NewStatus::Inherit;
+	}
+
+	const auto& o = this->mMasterOrientation;
+	if (o == QStringLiteral("right")) options.orientation = tiling::Orientation::Right;
+	else if (o == QStringLiteral("top")) options.orientation = tiling::Orientation::Top;
+	else if (o == QStringLiteral("bottom")) options.orientation = tiling::Orientation::Bottom;
+	else if (o == QStringLiteral("center")) options.orientation = tiling::Orientation::Center;
+
+	return options;
+}
+
+void TilingManager::rebuildLayouts() {
+	auto kind = this->layoutKind();
+	auto options = this->options();
+
+	auto seed = options;
+	seed.smartSplit = false;
+	seed.forceSplit = 0;
+	seed.newStatus = tiling::NewStatus::Slave;
+	seed.newOnTop = false;
+
+	for (auto& [key, layout]: this->layouts) {
+		if (layout->tree->kind() == kind) continue;
+
+		auto fresh = tiling::LayoutEngine::create(kind);
+		fresh->configure(seed);
+		auto area = layout->tree->area();
+		if (area.isValid()) fresh->compute(area);
+
+		auto previous = tiling::LayoutEngine::Id(0);
+		for (auto id: layout->tree->ids()) {
+			fresh->insert(id, previous, nullptr);
+			previous = id;
+		}
+
+		fresh->configure(options);
+		layout->tree = std::move(fresh);
+	}
+
+	this->edgeDragState = EdgeDrag();
+	this->relayout();
+}
+
 void TilingManager::relayout() {
 	if (!this->mEnabled) return;
 
@@ -457,11 +591,11 @@ bool TilingManager::isExcluded(TrackedWindow* window) const {
 	return false;
 }
 
-tiling::DwindleLayout::Id TilingManager::idOf(TrackedWindow* window) {
-	return reinterpret_cast<tiling::DwindleLayout::Id>(window);
+tiling::LayoutEngine::Id TilingManager::idOf(TrackedWindow* window) {
+	return reinterpret_cast<tiling::LayoutEngine::Id>(window);
 }
 
-TrackedWindow* TilingManager::windowOf(tiling::DwindleLayout::Id id) const {
+TrackedWindow* TilingManager::windowOf(tiling::LayoutEngine::Id id) const {
 	auto* window = reinterpret_cast<TrackedWindow*>(id); // NOLINT(performance-no-int-to-ptr)
 	return this->managed.contains(window) ? window : nullptr;
 }
@@ -483,9 +617,10 @@ TilingManager::Layout* TilingManager::layoutAt(const GUID& desktop, QScreen* scr
 	auto layout = std::make_unique<Layout>();
 	layout->desktop = desktop;
 	layout->screen = screen;
-	layout->tree.setPreserveSplit(this->mPreserveSplit);
+	layout->tree = tiling::LayoutEngine::create(this->layoutKind());
+	layout->tree->configure(this->options());
 	auto rects = monitorRects(monitorForScreen(screen));
-	if (rects.valid) layout->tree.compute(rects.work);
+	if (rects.valid) layout->tree->compute(rects.work);
 
 	auto* raw = layout.get();
 	this->layouts.emplace(key, std::move(layout));
@@ -524,7 +659,7 @@ void TilingManager::sync() {
 			continue;
 		}
 
-		for (auto id: layout->tree.ids()) {
+		for (auto id: layout->tree->ids()) {
 			if (auto* window = this->windowOf(id)) {
 				auto& m = this->managed.at(window);
 				m.layout = nullptr;
@@ -618,11 +753,12 @@ void TilingManager::insertInto(
 		if (readFrame(window->hwnd(), raw, frame)) m.preTiling = raw;
 	}
 
-	if (target == nullptr || !layout->tree.contains(idOf(target))) target = layout->lastFocused;
-	if (target != nullptr && layout->tree.isHidden(idOf(target))) target = nullptr;
-	auto targetId = target == nullptr ? tiling::DwindleLayout::Id(0) : idOf(target);
+	if (target == nullptr || !layout->tree->contains(idOf(target))) target = layout->lastFocused;
+	if (target != nullptr && layout->tree->isHidden(idOf(target))) target = nullptr;
+	auto targetId = target == nullptr ? tiling::LayoutEngine::Id(0) : idOf(target);
 
-	layout->tree.insert(idOf(window), targetId, cursor);
+	layout->tree->configure(this->options());
+	layout->tree->insert(idOf(window), targetId, cursor);
 	m.layout = layout;
 	m.parked = false;
 	m.target = QRect();
@@ -640,7 +776,7 @@ void TilingManager::takeOut(Managed& m) {
 	auto* layout = m.layout;
 	if (layout == nullptr) return;
 
-	layout->tree.remove(idOf(m.window));
+	layout->tree->remove(idOf(m.window));
 	if (layout->lastFocused == m.window) layout->lastFocused = nullptr;
 
 	m.layout = nullptr;
@@ -655,7 +791,7 @@ void TilingManager::takeOut(Managed& m) {
 
 void TilingManager::dropEmptyLayouts() {
 	for (auto iter = this->layouts.begin(); iter != this->layouts.end();) {
-		if (iter->second->tree.isEmpty()) {
+		if (iter->second->tree->isEmpty()) {
 			this->dirtyLayouts.remove(iter->second.get());
 			iter = this->layouts.erase(iter);
 		} else {
@@ -670,16 +806,16 @@ void TilingManager::apply(Layout* layout) {
 	auto rects = monitorRects(monitorForScreen(layout->screen));
 	if (!rects.valid) return;
 
-	layout->tree.setPreserveSplit(this->mPreserveSplit);
-	for (auto id: layout->tree.ids()) {
+	layout->tree->configure(this->options());
+	for (auto id: layout->tree->ids()) {
 		auto* window = this->windowOf(id);
 		auto hidden = window != nullptr && this->stateOf(this->managed.at(window)) == State::Hidden;
-		layout->tree.setHidden(id, hidden);
+		layout->tree->setHidden(id, hidden);
 	}
 
-	layout->tree.compute(rects.work);
+	layout->tree->compute(rects.work);
 
-	for (auto id: layout->tree.ids()) {
+	for (auto id: layout->tree->ids()) {
 		auto* window = this->windowOf(id);
 		if (window == nullptr || window == this->dragging) continue;
 
@@ -691,8 +827,8 @@ void TilingManager::apply(Layout* layout) {
 }
 
 QRect TilingManager::tileRect(const Layout* layout, TrackedWindow* window) const {
-	auto box = layout->tree.box(idOf(window));
-	auto area = layout->tree.area();
+	auto box = layout->tree->box(idOf(window));
+	auto area = layout->tree->area();
 	auto dpr = layout->screen->devicePixelRatio();
 	auto in = toPhysical(this->mGapsIn, dpr);
 	auto out = toPhysical(this->mGapsOut, dpr);
@@ -966,10 +1102,10 @@ void TilingManager::onMoveSizeEnded(TrackedWindow* window) {
 	auto in = toPhysical(this->mGapsIn, layout->screen->devicePixelRatio());
 	auto id = idOf(window);
 
-	if (movedLeft) layout->tree.moveEdge(id, Edge::Left, frame.left() - in);
-	if (movedRight) layout->tree.moveEdge(id, Edge::Right, rightOf(frame) + in);
-	if (movedTop) layout->tree.moveEdge(id, Edge::Top, frame.top() - in);
-	if (movedBottom) layout->tree.moveEdge(id, Edge::Bottom, bottomOf(frame) + in);
+	if (movedLeft) layout->tree->moveEdge(id, Edge::Left, frame.left() - in);
+	if (movedRight) layout->tree->moveEdge(id, Edge::Right, rightOf(frame) + in);
+	if (movedTop) layout->tree->moveEdge(id, Edge::Top, frame.top() - in);
+	if (movedBottom) layout->tree->moveEdge(id, Edge::Bottom, bottomOf(frame) + in);
 
 	this->markLayout(layout);
 }
@@ -983,7 +1119,7 @@ void TilingManager::drop(Managed& m, const QPoint& cursor) {
 			continue;
 		}
 
-		for (auto id: layout->tree.ids()) {
+		for (auto id: layout->tree->ids()) {
 			if (id == self) continue;
 			auto* other = this->windowOf(id);
 			if (other == nullptr) continue;
@@ -991,7 +1127,7 @@ void TilingManager::drop(Managed& m, const QPoint& cursor) {
 			auto& o = this->managed.at(other);
 			if (this->stateOf(o) != State::Tiled) continue;
 
-			if (layout->tree.box(id).contains(cursor)) {
+			if (layout->tree->box(id).contains(cursor)) {
 				this->swapWindows(m, o);
 				return;
 			}
@@ -1023,7 +1159,7 @@ TilingManager::Managed* TilingManager::tiledActive() {
 TilingManager::Managed* TilingManager::neighbour(const Managed& from, Edge direction) {
 	if (from.layout == nullptr) return nullptr;
 
-	auto source = from.layout->tree.box(idOf(from.window));
+	auto source = from.layout->tree->box(idOf(from.window));
 	Managed* best = nullptr;
 	auto bestDistance = std::numeric_limits<int>::max();
 
@@ -1032,14 +1168,14 @@ TilingManager::Managed* TilingManager::neighbour(const Managed& from, Edge direc
 			continue;
 		}
 
-		for (auto id: layout->tree.ids()) {
+		for (auto id: layout->tree->ids()) {
 			auto* window = this->windowOf(id);
 			if (window == nullptr || window == from.window) continue;
 
 			auto& m = this->managed.at(window);
 			if (this->stateOf(m) != State::Tiled) continue;
 
-			auto box = layout->tree.box(id);
+			auto box = layout->tree->box(id);
 			auto distance = 0;
 			auto overlap = 0;
 
@@ -1122,10 +1258,10 @@ void TilingManager::swapWindows(Managed& a, Managed& b) {
 	if (layoutA == nullptr || layoutB == nullptr) return;
 
 	if (layoutA == layoutB) {
-		layoutA->tree.swap(idOf(a.window), idOf(b.window));
+		layoutA->tree->swap(idOf(a.window), idOf(b.window));
 	} else {
-		layoutA->tree.replace(idOf(a.window), idOf(b.window));
-		layoutB->tree.replace(idOf(b.window), idOf(a.window));
+		layoutA->tree->replace(idOf(a.window), idOf(b.window));
+		layoutB->tree->replace(idOf(b.window), idOf(a.window));
 		a.layout = layoutB;
 		b.layout = layoutA;
 		if (layoutA->lastFocused == a.window) layoutA->lastFocused = b.window;
@@ -1140,13 +1276,14 @@ void TilingManager::moveToLayout(Managed& m, Layout* layout, TrackedWindow* targ
 	auto* from = m.layout;
 	if (from == nullptr || layout == nullptr || from == layout) return;
 
-	from->tree.remove(idOf(m.window));
+	from->tree->remove(idOf(m.window));
 	if (from->lastFocused == m.window) from->lastFocused = nullptr;
 	this->markLayout(from);
 
-	if (target == nullptr || !layout->tree.contains(idOf(target))) target = layout->lastFocused;
-	if (target != nullptr && layout->tree.isHidden(idOf(target))) target = nullptr;
-	layout->tree.insert(idOf(m.window), target == nullptr ? 0 : idOf(target));
+	if (target == nullptr || !layout->tree->contains(idOf(target))) target = layout->lastFocused;
+	if (target != nullptr && layout->tree->isHidden(idOf(target))) target = nullptr;
+	layout->tree->configure(this->options());
+	layout->tree->insert(idOf(m.window), target == nullptr ? 0 : idOf(target), nullptr);
 	layout->lastFocused = m.window;
 	m.layout = layout;
 	m.target = QRect();
@@ -1194,7 +1331,7 @@ bool TilingManager::toggleSplit(TrackedWindow* window) {
 	if (iter == this->managed.end() || iter->second.layout == nullptr) return false;
 
 	auto* layout = iter->second.layout;
-	if (layout->tree.toggleSplit(idOf(window))) this->markLayout(layout);
+	if (layout->tree->toggleSplit(idOf(window))) this->markLayout(layout);
 	return true;
 }
 
@@ -1203,7 +1340,7 @@ bool TilingManager::swapSplit(TrackedWindow* window) {
 	if (iter == this->managed.end() || iter->second.layout == nullptr) return false;
 
 	auto* layout = iter->second.layout;
-	if (layout->tree.swapSplit(idOf(window))) this->markLayout(layout);
+	if (layout->tree->swapSplit(idOf(window))) this->markLayout(layout);
 	return true;
 }
 
@@ -1212,7 +1349,45 @@ bool TilingManager::splitRatio(TrackedWindow* window, double value, bool exact) 
 	if (iter == this->managed.end() || iter->second.layout == nullptr) return false;
 
 	auto* layout = iter->second.layout;
-	if (layout->tree.splitRatio(idOf(window), value, exact)) this->markLayout(layout);
+	if (layout->tree->splitRatio(idOf(window), value, exact)) this->markLayout(layout);
+	return true;
+}
+
+bool TilingManager::masterRatio(TrackedWindow* window, double value, bool exact) {
+	auto iter = this->managed.find(window);
+	if (iter == this->managed.end() || iter->second.layout == nullptr) return false;
+
+	auto* layout = iter->second.layout;
+	if (layout->tree->kind() != tiling::Kind::Master) return false;
+	if (layout->tree->splitRatio(idOf(window), value * 2.0, exact)) this->markLayout(layout);
+	return true;
+}
+
+bool TilingManager::swapWithMaster(TrackedWindow* window) {
+	auto iter = this->managed.find(window);
+	if (iter == this->managed.end() || iter->second.layout == nullptr) return false;
+
+	auto& m = iter->second;
+	if (m.layout->tree->kind() != tiling::Kind::Master) return false;
+
+	const auto& engine = static_cast<const tiling::MasterLayout&>(*m.layout->tree);
+	auto master = engine.master();
+	auto* other = this->windowOf(master == idOf(window) ? engine.firstInStack() : master);
+	if (other != nullptr && other != window) this->swapWindows(m, this->managed.at(other));
+	return true;
+}
+
+bool TilingManager::focusMaster(TrackedWindow* window) {
+	auto iter = this->managed.find(window);
+	if (iter == this->managed.end() || iter->second.layout == nullptr) return false;
+
+	auto& m = iter->second;
+	if (m.layout->tree->kind() != tiling::Kind::Master) return false;
+
+	const auto& engine = static_cast<const tiling::MasterLayout&>(*m.layout->tree);
+	auto master = engine.master();
+	auto* target = this->windowOf(master == idOf(window) ? engine.firstInStack() : master);
+	if (target != nullptr && target != window) target->activate();
 	return true;
 }
 
@@ -1222,7 +1397,7 @@ bool TilingManager::resizeTiled(TrackedWindow* window, qint32 dx, qint32 dy) {
 
 	auto* layout = iter->second.layout;
 	auto dpr = layout->screen->devicePixelRatio();
-	if (layout->tree.resize(idOf(window), toPhysical(dx, dpr), toPhysical(dy, dpr))) {
+	if (layout->tree->resize(idOf(window), toPhysical(dx, dpr), toPhysical(dy, dpr))) {
 		this->markLayout(layout);
 	}
 
@@ -1261,15 +1436,15 @@ bool TilingManager::beginEdgeDrag(TrackedWindow* window, bool left, bool top) {
 	auto* layout = m.layout;
 	auto id = idOf(window);
 	auto pick = [&](Edge preferred, Edge other) -> std::optional<Edge> {
-		if (layout->tree.hasEdge(id, preferred)) return preferred;
-		if (layout->tree.hasEdge(id, other)) return other;
+		if (layout->tree->hasEdge(id, preferred)) return preferred;
+		if (layout->tree->hasEdge(id, other)) return other;
 		return std::nullopt;
 	};
 
 	auto& drag = this->edgeDragState;
 	drag.window = window;
 	drag.layout = layout;
-	drag.box = layout->tree.box(id);
+	drag.box = layout->tree->box(id);
 	drag.horizontal = left ? pick(Edge::Left, Edge::Right) : pick(Edge::Right, Edge::Left);
 	drag.vertical = top ? pick(Edge::Top, Edge::Bottom) : pick(Edge::Bottom, Edge::Top);
 	return true;
@@ -1297,7 +1472,7 @@ void TilingManager::edgeDrag(const QPoint& delta) {
 		return 0;
 	};
 
-	auto& tree = drag.layout->tree;
+	auto& tree = *drag.layout->tree;
 	auto id = idOf(drag.window);
 	auto changed = false;
 
@@ -1381,6 +1556,16 @@ Tiling::Tiling(QObject* parent): QObject(parent) {
 	QObject::connect(manager, &TilingManager::preserveSplitChanged, this, &Tiling::preserveSplitChanged);
 	// clang-format on
 	QObject::connect(manager, &TilingManager::excludedChanged, this, &Tiling::excludedChanged);
+	QObject::connect(manager, &TilingManager::layoutChanged, this, &Tiling::layoutChanged);
+	QObject::connect(manager, &TilingManager::smartSplitChanged, this, &Tiling::smartSplitChanged);
+	QObject::connect(manager, &TilingManager::forceSplitChanged, this, &Tiling::forceSplitChanged);
+	// clang-format off
+	QObject::connect(manager, &TilingManager::defaultSplitRatioChanged, this, &Tiling::defaultSplitRatioChanged);
+	QObject::connect(manager, &TilingManager::masterNewStatusChanged, this, &Tiling::masterNewStatusChanged);
+	QObject::connect(manager, &TilingManager::masterNewOnTopChanged, this, &Tiling::masterNewOnTopChanged);
+	QObject::connect(manager, &TilingManager::masterOrientationChanged, this, &Tiling::masterOrientationChanged);
+	// clang-format on
+	QObject::connect(manager, &TilingManager::masterFactorChanged, this, &Tiling::masterFactorChanged);
 }
 
 void Tiling::relayout() { TilingManager::instance()->relayout(); }
@@ -1399,5 +1584,28 @@ QStringList Tiling::excluded() const { return TilingManager::instance()->exclude
 void Tiling::setExcluded(const QStringList& excluded) {
 	TilingManager::instance()->setExcluded(excluded);
 }
+
+QString Tiling::layout() const { return TilingManager::instance()->layout(); }
+void Tiling::setLayout(const QString& layout) { TilingManager::instance()->setLayout(layout); }
+bool Tiling::smartSplit() const { return TilingManager::instance()->smartSplit(); }
+void Tiling::setSmartSplit(bool smart) { TilingManager::instance()->setSmartSplit(smart); }
+qint32 Tiling::forceSplit() const { return TilingManager::instance()->forceSplit(); }
+void Tiling::setForceSplit(qint32 force) { TilingManager::instance()->setForceSplit(force); }
+double Tiling::defaultSplitRatio() const { return TilingManager::instance()->defaultSplitRatio(); }
+void Tiling::setDefaultSplitRatio(double ratio) {
+	TilingManager::instance()->setDefaultSplitRatio(ratio);
+}
+QString Tiling::masterNewStatus() const { return TilingManager::instance()->masterNewStatus(); }
+void Tiling::setMasterNewStatus(const QString& status) {
+	TilingManager::instance()->setMasterNewStatus(status);
+}
+bool Tiling::masterNewOnTop() const { return TilingManager::instance()->masterNewOnTop(); }
+void Tiling::setMasterNewOnTop(bool onTop) { TilingManager::instance()->setMasterNewOnTop(onTop); }
+QString Tiling::masterOrientation() const { return TilingManager::instance()->masterOrientation(); }
+void Tiling::setMasterOrientation(const QString& orientation) {
+	TilingManager::instance()->setMasterOrientation(orientation);
+}
+double Tiling::masterFactor() const { return TilingManager::instance()->masterFactor(); }
+void Tiling::setMasterFactor(double factor) { TilingManager::instance()->setMasterFactor(factor); }
 
 } // namespace qs::windows
