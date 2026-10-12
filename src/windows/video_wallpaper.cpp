@@ -28,9 +28,9 @@
 #include <qsgrendererinterface.h>
 #include <qsgsimpletexturenode.h>
 #include <qsgtexture.h>
-#include <qsgtexture_platform.h>
 #include <qtimer.h>
 #include <qurl.h>
+#include <rhi/qrhi.h>
 
 #include <winrt/base.h>
 
@@ -503,10 +503,7 @@ public:
 		this->setOwnsTexture(false);
 	}
 
-	~VideoNode() override {
-		delete this->sgTexture;
-		if (this->texture != nullptr) this->texture->Release();
-	}
+	~VideoNode() override { this->releaseTexture(); }
 
 	Q_DISABLE_COPY_MOVE(VideoNode);
 
@@ -531,10 +528,7 @@ public:
 			if (!this->reader.open(device, frame)) return true;
 
 			if (this->texture == nullptr || this->size != frame->size) {
-				delete this->sgTexture;
-				this->sgTexture = nullptr;
-				if (this->texture != nullptr) this->texture->Release();
-				this->texture = nullptr;
+				this->releaseTexture();
 
 				D3D11_TEXTURE2D_DESC desc {};
 				desc.Width = static_cast<UINT>(frame->size.width());
@@ -552,11 +546,19 @@ public:
 					return true;
 				}
 
+				auto* rhi = this->window->rhi();
+				this->rhiTexture = rhi != nullptr ? rhi->newTexture(QRhiTexture::BGRA8, frame->size) : nullptr;
+				if (this->rhiTexture == nullptr
+				    || !this->rhiTexture->createFrom({reinterpret_cast<quint64>(this->texture), 0}))
+				{
+					qCWarning(logVideo) << "Wrapping the video texture for the scene graph failed";
+					this->releaseTexture();
+					return true;
+				}
+
 				this->size = frame->size;
-				this->sgTexture = QNativeInterface::QSGD3D11Texture::fromNative(
-				    this->texture,
-				    this->window,
-				    frame->size,
+				this->sgTexture = this->window->createTextureFromRhiTexture(
+				    this->rhiTexture,
 				    QQuickWindow::TextureIsOpaque
 				);
 				this->setTexture(this->sgTexture);
@@ -574,9 +576,19 @@ public:
 	}
 
 private:
+	void releaseTexture() {
+		delete this->sgTexture;
+		this->sgTexture = nullptr;
+		delete this->rhiTexture;
+		this->rhiTexture = nullptr;
+		if (this->texture != nullptr) this->texture->Release();
+		this->texture = nullptr;
+	}
+
 	QQuickWindow* window;
 	capture::SharedFrameReader reader;
 	ID3D11Texture2D* texture = nullptr;
+	QRhiTexture* rhiTexture = nullptr;
 	QSGTexture* sgTexture = nullptr;
 	QSize size;
 	quint64 serial = 0;
