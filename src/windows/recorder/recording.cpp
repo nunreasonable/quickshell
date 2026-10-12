@@ -1,7 +1,9 @@
 #include "recording.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include <qt_windows.h>
 
@@ -21,8 +23,9 @@
 #include <winrt/base.h>
 
 #include "../util.hpp"
+#include "audio_capture.hpp"
+#include "audio_dsp.hpp"
 #include "clock.hpp"
-#include "loopback.hpp"
 #include "mp4_writer.hpp"
 #include "region_capture.hpp"
 
@@ -120,6 +123,15 @@ QString checkAvailability() {
 	return {};
 }
 
+int chooseAudioRate(const std::vector<std::unique_ptr<AudioCapture>>& sources) {
+	for (const auto& source: sources) {
+		auto rate = source->nativeRate();
+		if (rate == 44100 || rate == 48000) return rate;
+	}
+
+	return sources.empty() ? 0 : 48000;
+}
+
 } // namespace
 
 class RecordingJob {
@@ -149,6 +161,20 @@ private:
 	void post(F&& function) {
 		auto* controller = RecorderController::instance();
 		QMetaObject::invokeMethod(controller, std::forward<F>(function), Qt::QueuedConnection);
+	}
+
+	void postSoundUnavailable(const QString& reason) {
+		auto* self = this;
+		this->post([self, reason] {
+			RecorderController::instance()->onJobSoundUnavailable(self, reason);
+		});
+	}
+
+	void postMicrophoneUnavailable(const QString& reason, bool blocked) {
+		auto* self = this;
+		this->post([self, reason, blocked] {
+			RecorderController::instance()->onJobMicrophoneUnavailable(self, reason, blocked);
+		});
 	}
 
 	HANDLE stopEvent;
@@ -203,36 +229,34 @@ bool RecordingJob::record(QString* error) {
 	RegionCapture capture;
 	if (!capture.start(device.get(), request.region, request.cursor, error)) return false;
 
-	std::unique_ptr<LoopbackCapture> audio;
-	if (request.sound) {
-		QString audioError;
-		audio = std::make_unique<LoopbackCapture>();
+	std::vector<std::unique_ptr<AudioCapture>> sources;
 
-		if (!audio->open(&audioError)) {
-			audio.reset();
-			auto* self = this;
-			this->post([self, audioError] {
-				RecorderController::instance()->onJobSoundUnavailable(self, audioError);
-			});
-		}
+	if (request.systemAudio) {
+		auto source = std::make_unique<AudioCapture>(AudioCapture::Source::SystemAudio);
+		QString reason;
+		if (source->open(&reason)) sources.push_back(std::move(source));
+		else this->postSoundUnavailable(reason);
+	}
+
+	if (request.microphone) {
+		auto source = std::make_unique<AudioCapture>(AudioCapture::Source::Microphone);
+		QString reason;
+		auto blocked = false;
+		if (source->open(&reason, &blocked)) sources.push_back(std::move(source));
+		else this->postMicrophoneUnavailable(reason, blocked);
 	}
 
 	Mp4Writer writer;
 	auto size = request.region.size();
-	auto audioRate = audio ? audio->sampleRate() : 0;
+	auto audioRate = chooseAudioRate(sources);
 	auto opened = writer.open(request.path, size, request.fps, audioRate, device.get(), error);
 
-	if (!opened && audio) {
+	if (!opened && audioRate > 0) {
 		auto reason = *error;
-		audio.reset();
+		sources.clear();
+		audioRate = 0;
 		opened = writer.open(request.path, size, request.fps, 0, device.get(), error);
-
-		if (opened) {
-			auto* self = this;
-			this->post([self, reason] {
-				RecorderController::instance()->onJobSoundUnavailable(self, reason);
-			});
-		}
+		if (opened) this->postSoundUnavailable(reason);
 	}
 
 	if (!opened) return false;
@@ -248,7 +272,18 @@ bool RecordingJob::record(QString* error) {
 	}
 
 	auto origin = qpc100ns();
-	if (audio) audio->start(origin);
+
+	std::unique_ptr<AudioMixer> mixer;
+	if (audioRate > 0) {
+		mixer = std::make_unique<AudioMixer>(audioRate);
+		for (auto& source: sources) {
+			mixer->addSource(source->queue());
+			source->start(origin, audioRate);
+		}
+	}
+
+	std::vector<bool> lostNotified(sources.size(), false);
+	std::vector<std::int16_t> pcm;
 
 	{
 		auto* self = this;
@@ -264,21 +299,25 @@ bool RecordingJob::record(QString* error) {
 	if (timer == nullptr) timer = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
 
 	auto failed = false;
-	auto audioLostNotified = false;
 	qint64 tick = 0;
 
 	while (true) {
 		auto now = qpc100ns() - origin;
 
-		if (audio && !audioLostNotified && audio->lost()) {
-			audioLostNotified = true;
-			auto* self = this;
-			this->post([self] {
-				RecorderController::instance()->onJobSoundUnavailable(
-				    self,
-				    "the audio output device was lost; the rest of the recording has no sound"
+		for (std::size_t i = 0; i < sources.size(); ++i) {
+			if (lostNotified[i] || !sources[i]->lost()) continue;
+			lostNotified[i] = true;
+
+			if (sources[i]->kind() == AudioCapture::Source::Microphone) {
+				this->postMicrophoneUnavailable(
+				    "the microphone was lost; the rest of the recording goes on without it",
+				    false
 				);
-			});
+			} else {
+				this->postSoundUnavailable(
+				    "the audio output device was lost; the rest of the recording has no system audio"
+				);
+			}
 		}
 
 		if (now - this->tickTime(tick) > this->tickTime(MAX_CATCH_UP)) {
@@ -294,10 +333,10 @@ bool RecordingJob::record(QString* error) {
 			tick++;
 		}
 
-		if (audio && !failed) {
-			auto samples = audio->take();
-			auto frames = static_cast<qsizetype>(samples.size() / LoopbackCapture::CHANNELS);
-			if (frames > 0) failed = !writer.writeAudio(samples.data(), frames, error);
+		if (mixer && !failed) {
+			mixer->mix(false, pcm);
+			auto frames = static_cast<qsizetype>(pcm.size() / 2);
+			if (frames > 0) failed = !writer.writeAudio(pcm.data(), frames, error);
 		}
 
 		if (failed || stopping) break;
@@ -324,14 +363,12 @@ bool RecordingJob::record(QString* error) {
 
 	if (timer != nullptr) CloseHandle(timer);
 
-	if (audio) {
-		audio->stop();
+	for (auto& source: sources) source->stop();
 
-		if (!failed) {
-			auto samples = audio->take();
-			auto frames = static_cast<qsizetype>(samples.size() / LoopbackCapture::CHANNELS);
-			if (frames > 0) failed = !writer.writeAudio(samples.data(), frames, error);
-		}
+	if (mixer && !failed) {
+		mixer->mix(true, pcm);
+		auto frames = static_cast<qsizetype>(pcm.size() / 2);
+		if (frames > 0) failed = !writer.writeAudio(pcm.data(), frames, error);
 	}
 
 	capture.stop();
@@ -410,6 +447,15 @@ void RecorderController::onJobStarted(RecordingJob* job) {
 void RecorderController::onJobSoundUnavailable(RecordingJob* job, const QString& reason) {
 	if (job != this->job.get()) return;
 	emit this->soundUnavailable(reason);
+}
+
+void RecorderController::onJobMicrophoneUnavailable(
+    RecordingJob* job,
+    const QString& reason,
+    bool blocked
+) {
+	if (job != this->job.get()) return;
+	emit this->microphoneUnavailable(reason, blocked);
 }
 
 void RecorderController::onJobDone(RecordingJob* job, bool ok, const QString& reason) {

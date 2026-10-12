@@ -12,6 +12,7 @@
 #include <qstring.h>
 #include <qurl.h>
 
+#include "../recorder/audio_capture.hpp"
 #include "../recorder/recording.hpp"
 #include "../util.hpp"
 
@@ -34,6 +35,12 @@ ScreenRecorder::ScreenRecorder(QObject* parent): QObject(parent) {
 	QObject::connect(controller, &C::finished, this, &ScreenRecorder::finished);
 	QObject::connect(controller, &C::failed, this, &ScreenRecorder::failed);
 	QObject::connect(controller, &C::soundUnavailable, this, &ScreenRecorder::soundUnavailable);
+	QObject::connect(
+	    controller,
+	    &C::microphoneUnavailable,
+	    this,
+	    &ScreenRecorder::microphoneUnavailable
+	);
 }
 
 bool ScreenRecorder::recording() const { return RecorderController::instance()->recording(); }
@@ -50,7 +57,8 @@ bool ScreenRecorder::start(
     int width,
     int height,
     bool sound,
-    const QString& saveDir
+    const QString& saveDir,
+    bool microphone
 ) {
 	auto fail = [this](const QString& reason) {
 		qCWarning(logScreenRecorder) << "Cannot start recording:" << reason;
@@ -75,7 +83,8 @@ bool ScreenRecorder::start(
 
 	recorder::RecordingRequest request;
 	request.region = region;
-	request.sound = sound;
+	request.systemAudio = sound;
+	request.microphone = microphone;
 	request.path = QDir(dir).absoluteFilePath(name);
 
 	QString error;
@@ -83,7 +92,12 @@ bool ScreenRecorder::start(
 	return true;
 }
 
-bool ScreenRecorder::startScreen(const QString& screenName, bool sound, const QString& saveDir) {
+bool ScreenRecorder::startScreen(
+    const QString& screenName,
+    bool sound,
+    const QString& saveDir,
+    bool microphone
+) {
 	for (auto* screen: QGuiApplication::screens()) {
 		if (screen->name() != screenName) continue;
 
@@ -91,7 +105,7 @@ bool ScreenRecorder::startScreen(const QString& screenName, bool sound, const QS
 		if (!rects.valid) break;
 
 		const auto& r = rects.monitor;
-		return this->start(r.x(), r.y(), r.width(), r.height(), sound, saveDir);
+		return this->start(r.x(), r.y(), r.width(), r.height(), sound, saveDir, microphone);
 	}
 
 	auto reason = QString("no screen named %1").arg(screenName);
@@ -101,5 +115,9 @@ bool ScreenRecorder::startScreen(const QString& screenName, bool sound, const QS
 }
 
 void ScreenRecorder::stop() { RecorderController::instance()->stop(); }
+
+QString ScreenRecorder::microphoneBlockedReason() {
+	return recorder::AudioCapture::microphoneBlockedReason();
+}
 
 } // namespace qs::windows::sys

@@ -63,7 +63,8 @@ qt_add_library(quickshell-windows STATIC
 	recorder/recording.cpp
 	recorder/region_capture.cpp
 	recorder/mp4_writer.cpp
-	recorder/loopback.cpp
+	recorder/audio_capture.cpp
+	recorder/audio_dsp.cpp
 	system/audio_visualizer.cpp
 	visualizer/spectrum.cpp
 	visualizer/loopback_source.cpp

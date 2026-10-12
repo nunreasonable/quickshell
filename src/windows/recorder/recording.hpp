@@ -15,7 +15,8 @@ class RecordingJob;
 
 struct RecordingRequest {
 	QRect region;
-	bool sound = false;
+	bool systemAudio = false;
+	bool microphone = false;
 	bool cursor = true;
 	int fps = 30;
 	QString path;
@@ -42,6 +43,7 @@ signals:
 	void finished(const QString& path);
 	void failed(const QString& reason);
 	void soundUnavailable(const QString& reason);
+	void microphoneUnavailable(const QString& reason, bool blocked);
 
 private:
 	explicit RecorderController();
@@ -51,6 +53,7 @@ private:
 	friend class RecordingJob;
 	void onJobStarted(RecordingJob* job);
 	void onJobSoundUnavailable(RecordingJob* job, const QString& reason);
+	void onJobMicrophoneUnavailable(RecordingJob* job, const QString& reason, bool blocked);
 	void onJobDone(RecordingJob* job, bool ok, const QString& reason);
 	void shutdown();
 
