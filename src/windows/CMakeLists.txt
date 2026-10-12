@@ -41,6 +41,7 @@ qt_add_library(quickshell-windows STATIC
 	system/network_connectivity.cpp
 	system/wallpaper.cpp
 	system/fs_utils.cpp
+	system/equalizer_apo.cpp
 	system/file_index.cpp
 	system/terminal_colors.cpp
 	system/terminal_colors_math.cpp
