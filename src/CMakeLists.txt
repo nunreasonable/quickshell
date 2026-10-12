@@ -6,6 +6,8 @@ if (WIN32)
 	qt_add_executable(quickshell-gui main.cpp)
 	set_target_properties(quickshell-gui PROPERTIES OUTPUT_NAME qsw WIN32_EXECUTABLE ON)
 	target_compile_definitions(quickshell-gui PRIVATE QS_WINDOWS_GUI_EXE)
+	target_sources(quickshell PRIVATE quickshell.rc)
+	target_sources(quickshell-gui PRIVATE quickshell.rc)
 
 	install(TARGETS quickshell quickshell-gui RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 else()
