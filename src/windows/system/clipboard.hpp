@@ -55,6 +55,8 @@ public:
 
 	Q_INVOKABLE bool copyImageFile(const QString& path);
 
+	Q_INVOKABLE bool copyFile(const QString& path);
+
 	Q_INVOKABLE void copyText(const QString& text);
 
 signals:

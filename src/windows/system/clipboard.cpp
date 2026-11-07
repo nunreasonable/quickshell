@@ -6,6 +6,7 @@
 #include <utility>
 
 #include <qt_windows.h>
+#include <shlobj.h>
 
 #include <qbytearray.h>
 #include <qcoreapplication.h>
@@ -121,6 +122,25 @@ void* globalFromImage(const QImage& imageIn) {
 		    static_cast<SIZE_T>(image.width()) * 4
 		);
 	}
+	GlobalUnlock(mem);
+	return mem;
+}
+
+void* globalFromFile(const QString& path) {
+	auto native = QDir::toNativeSeparators(path);
+	auto bytes = sizeof(DROPFILES) + (native.size() + 2) * sizeof(wchar_t);
+	auto* mem = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes);
+	if (mem == nullptr) return nullptr;
+
+	auto* drop = static_cast<DROPFILES*>(GlobalLock(mem));
+	if (drop == nullptr) {
+		GlobalFree(mem);
+		return nullptr;
+	}
+
+	drop->pFiles = sizeof(DROPFILES);
+	drop->fWide = TRUE;
+	memcpy(reinterpret_cast<char*>(drop) + sizeof(DROPFILES), native.utf16(), native.size() * sizeof(wchar_t)); // NOLINT
 	GlobalUnlock(mem);
 	return mem;
 }
@@ -623,6 +643,19 @@ bool Clipboard::copyImageFile(const QString& path) {
 	});
 
 	capturePool()->start(task);
+	return true;
+}
+
+bool Clipboard::copyFile(const QString& path) {
+	QFileInfo info(path);
+	if (!info.isFile()) {
+		qCWarning(logClipboard) << "Cannot copy missing file" << path;
+		return false;
+	}
+
+	auto* data = globalFromFile(info.absoluteFilePath());
+	if (data == nullptr) return false;
+	this->writeData(CF_HDROP, data, nullptr);
 	return true;
 }
 
