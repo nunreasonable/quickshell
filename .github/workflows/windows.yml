@@ -86,7 +86,8 @@ jobs:
             -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_PREFIX_PATH="$QT_WIN"
           cmake --build build/windows-test
           export PATH="$(cygpath -u "$QT_WIN")/bin:$PATH"
-          for test in tiling_layout_test screenshot_jobs_test panel_animation_test; do
+          powershell -NoProfile -Command "Add-VpnConnection -Name 'iiw test' -ServerAddress 192.0.2.10 -Force"
+          for test in tiling_layout_test screenshot_jobs_test panel_animation_test vpn_connections_test; do
             echo "== $test"
             "build/windows-test/$test.exe"
           done

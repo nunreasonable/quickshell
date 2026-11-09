@@ -62,6 +62,7 @@ qt_add_library(quickshell-windows STATIC
 	system/calendar_ics.cpp
 	system/calendar_events.cpp
 	system/displays.cpp
+	system/vpn_connections.cpp
 	image/image_tools.cpp
 	image/image_tools_backend.cpp
 	image/image_tools_worker.cpp
@@ -144,6 +145,7 @@ target_link_libraries(quickshell-windows PRIVATE
 	wlanapi
 	iphlpapi
 	netapi32
+	rasapi32
 	CoreMessaging
 	material-color
 	mfplat
@@ -168,6 +170,7 @@ set(QS_WINDOWS_DELAYLOAD
 	wlanapi
 	iphlpapi
 	netapi32
+	rasapi32
 	version
 	powrprof
 	d3d11
