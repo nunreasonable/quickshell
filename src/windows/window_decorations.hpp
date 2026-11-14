@@ -6,6 +6,7 @@
 #include <qhash.h>
 #include <qlist.h>
 #include <qset.h>
+#include <qtimer.h>
 #include <qobject.h>
 #include <qstring.h>
 #include <qtclasshelpermacros.h>
@@ -59,6 +60,8 @@ private:
 		bool corner = false;
 		bool opacity = false;
 		bool addedLayered = false;
+		bool foreign = false;
+		bool denied = false;
 		COLORREF color = 0;
 		DWORD preference = 0;
 		BYTE alpha = 255;
@@ -77,15 +80,19 @@ private:
 	void apply(TrackedWindow* window);
 	void watch(TrackedWindow* window);
 	void forget(TrackedWindow* window);
-	static void restore(HWND hwnd, const Applied& state);
+	void restore(HWND hwnd, const Applied& state);
 	static void restoreOpacity(HWND hwnd, Applied& state);
+	static bool ownsAlpha(HWND hwnd, const Applied& state);
+	void retryPending();
 	void restoreAll();
 	void onActiveWindowChanged();
 
 	WindowTracker* tracker = nullptr;
 	QList<QMetaObject::Connection> connections;
 	QHash<HWND, Applied> applied;
-	QSet<TrackedWindow*> watched;
+	QHash<TrackedWindow*, QList<QMetaObject::Connection>> watched;
+	QHash<HWND, Applied> pendingRestore;
+	QTimer* pendingTimer = nullptr;
 	HWND lastActive = nullptr;
 	bool running = false;
 

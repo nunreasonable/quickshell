@@ -23,15 +23,16 @@ namespace {
 constexpr DWORD WINDOWS_11_BUILD = 22000;
 constexpr std::size_t CRASH_SLOTS = 512;
 
-std::array<std::atomic<HWND>, CRASH_SLOTS> gSlots {}; // NOLINT
+std::array<std::atomic<HWND>, CRASH_SLOTS> gSlots {};        // NOLINT
+std::array<std::atomic<HWND>, CRASH_SLOTS> gLayeredSlots {}; // NOLINT
 std::atomic<bool> gBordersOverridden = false;          // NOLINT
 std::atomic<bool> gCornersOverridden = false;          // NOLINT
 std::atomic<bool> gOpacityOverridden = false;          // NOLINT
 
-void rememberForCrash(HWND hwnd) {
+void rememberIn(std::array<std::atomic<HWND>, CRASH_SLOTS>& table, HWND hwnd) {
 	std::atomic<HWND>* free = nullptr;
 
-	for (auto& slot: gSlots) {
+	for (auto& slot: table) {
 		auto* value = slot.load();
 		if (value == hwnd) return;
 		if (value == nullptr && free == nullptr) free = &slot;
@@ -40,10 +41,16 @@ void rememberForCrash(HWND hwnd) {
 	if (free != nullptr) free->store(hwnd);
 }
 
-void forgetForCrash(HWND hwnd) {
-	for (auto& slot: gSlots) {
+void forgetIn(std::array<std::atomic<HWND>, CRASH_SLOTS>& table, HWND hwnd) {
+	for (auto& slot: table) {
 		if (slot.load() == hwnd) slot.store(nullptr);
 	}
+}
+
+void rememberForCrash(HWND hwnd) { rememberIn(gSlots, hwnd); }
+void forgetForCrash(HWND hwnd) {
+	forgetIn(gSlots, hwnd);
+	forgetIn(gLayeredSlots, hwnd);
 }
 
 COLORREF colorRef(const QColor& color) {
@@ -92,6 +99,9 @@ DecorationManager* DecorationManager::instance() {
 }
 
 DecorationManager::DecorationManager(QObject* parent): QObject(parent) {
+	this->pendingTimer = new QTimer(this);
+	this->pendingTimer->setInterval(2000);
+	QObject::connect(this->pendingTimer, &QTimer::timeout, this, &DecorationManager::retryPending);
 	QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, [this]() {
 		this->restoreAll();
 		this->stop();
@@ -113,7 +123,13 @@ void DecorationManager::restoreForCrash() {
 		if (hwnd == nullptr || !reachable(hwnd)) continue;
 		if (borders) setBorder(hwnd, DWMWA_COLOR_DEFAULT);
 		if (corners) setCorner(hwnd, DWMWCP_DEFAULT);
-		if (opacity && layered(hwnd)) SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+	}
+
+	if (!opacity) return;
+	for (auto& slot: gLayeredSlots) {
+		auto* hwnd = slot.load();
+		if (hwnd == nullptr || !reachable(hwnd) || !layered(hwnd)) continue;
+		SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
 	}
 }
 
@@ -251,6 +267,9 @@ void DecorationManager::start() {
 void DecorationManager::stop() {
 	for (const auto& connection: this->connections) QObject::disconnect(connection);
 	this->connections.clear();
+	for (const auto& list: std::as_const(this->watched)) {
+		for (const auto& connection: list) QObject::disconnect(connection);
+	}
 	this->watched.clear();
 	this->restoreAll();
 	this->lastActive = nullptr;
@@ -273,8 +292,7 @@ void DecorationManager::applyAll() {
 			continue;
 		}
 
-		DecorationManager::restore(iter.key(), iter.value());
-		forgetForCrash(iter.key());
+		this->restore(iter.key(), iter.value());
 		iter = this->applied.erase(iter);
 	}
 }
@@ -315,11 +333,29 @@ void DecorationManager::apply(TrackedWindow* window) {
 		state.corner = false;
 	}
 
+	if (state.addedLayered && !layered(hwnd)) {
+		state.addedLayered = false;
+		state.opacity = false;
+		state.alpha = 255;
+	} else if (state.opacity && !DecorationManager::ownsAlpha(hwnd, state)) {
+		state.addedLayered = false;
+		state.opacity = false;
+		state.alpha = 255;
+		state.foreign = true;
+	}
+
 	auto alpha = this->alphaFor(active);
-	if (alpha != 255 && !coversMonitor(hwnd)) {
-		if (!state.addedLayered && !layered(hwnd)) {
-			SetWindowLongPtrW(hwnd, GWL_EXSTYLE, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
-			state.addedLayered = layered(hwnd);
+	auto fullscreen = window->fullscreen() || (coversMonitor(hwnd) && !IsZoomed(hwnd));
+	auto eligible = !state.foreign && !state.denied && !window->isUwpFrame() && !fullscreen;
+	if (alpha != 255 && eligible) {
+		if (!state.addedLayered) {
+			if (layered(hwnd)) {
+				state.foreign = true;
+			} else {
+				SetWindowLongPtrW(hwnd, GWL_EXSTYLE, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
+				state.addedLayered = layered(hwnd);
+				state.denied = !state.addedLayered;
+			}
 		}
 		if (state.addedLayered && (!state.opacity || state.alpha != alpha)
 		    && SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA))
@@ -331,9 +367,11 @@ void DecorationManager::apply(TrackedWindow* window) {
 		DecorationManager::restoreOpacity(hwnd, state);
 	}
 
-	if (state.border || state.corner || state.opacity || state.addedLayered) {
+	if (state.border || state.corner || state.opacity || state.addedLayered || state.foreign || state.denied) {
 		this->applied.insert(hwnd, state);
-		rememberForCrash(hwnd);
+		if (state.border || state.corner) rememberForCrash(hwnd);
+		if (state.addedLayered) rememberIn(gLayeredSlots, hwnd);
+		else forgetIn(gLayeredSlots, hwnd);
 	} else {
 		this->applied.remove(hwnd);
 		forgetForCrash(hwnd);
@@ -345,21 +383,18 @@ void DecorationManager::forget(TrackedWindow* window) {
 
 	auto* hwnd = window->hwnd();
 	if (hwnd == this->lastActive) this->lastActive = nullptr;
-	this->watched.remove(window);
+	for (const auto& connection: this->watched.take(window)) QObject::disconnect(connection);
 
 	auto iter = this->applied.find(hwnd);
 	if (iter == this->applied.end()) return;
 
-	DecorationManager::restore(hwnd, iter.value());
-
-	forgetForCrash(hwnd);
+	this->restore(hwnd, iter.value());
 	this->applied.erase(iter);
 }
 
 void DecorationManager::restoreAll() {
 	for (auto iter = this->applied.cbegin(); iter != this->applied.cend(); ++iter) {
-		DecorationManager::restore(iter.key(), iter.value());
-		forgetForCrash(iter.key());
+		this->restore(iter.key(), iter.value());
 	}
 
 	this->applied.clear();
@@ -367,31 +402,76 @@ void DecorationManager::restoreAll() {
 
 void DecorationManager::watch(TrackedWindow* window) {
 	if (window == nullptr || this->watched.contains(window)) return;
-	this->watched.insert(window);
 
 	auto reapply = [this, window]() {
 		if (this->running && this->opacityOverriding()) this->apply(window);
 	};
-	this->connections.append(QObject::connect(window, &TrackedWindow::rectChanged, this, reapply));
-	this->connections.append(QObject::connect(window, &TrackedWindow::fullscreenChanged, this, reapply));
+	this->watched.insert(
+	    window,
+	    {QObject::connect(window, &TrackedWindow::rectChanged, this, reapply),
+	     QObject::connect(window, &TrackedWindow::fullscreenChanged, this, reapply)}
+	);
 }
 
 void DecorationManager::restore(HWND hwnd, const Applied& state) {
-	if (!reachable(hwnd)) return;
+	if (!IsWindow(hwnd)) {
+		forgetForCrash(hwnd);
+		return;
+	}
+
+	if (IsHungAppWindow(hwnd)) {
+		this->pendingRestore.insert(hwnd, state);
+		if (!this->pendingTimer->isActive()) this->pendingTimer->start();
+		return;
+	}
+
 	if (state.border) setBorder(hwnd, DWMWA_COLOR_DEFAULT);
 	if (state.corner) setCorner(hwnd, DWMWCP_DEFAULT);
 
 	auto copy = state;
 	DecorationManager::restoreOpacity(hwnd, copy);
+	forgetForCrash(hwnd);
+}
+
+void DecorationManager::retryPending() {
+	for (auto iter = this->pendingRestore.begin(); iter != this->pendingRestore.end();) {
+		auto* hwnd = iter.key();
+		if (!IsWindow(hwnd)) {
+			forgetForCrash(hwnd);
+			iter = this->pendingRestore.erase(iter);
+			continue;
+		}
+		if (IsHungAppWindow(hwnd)) {
+			++iter;
+			continue;
+		}
+
+		auto state = iter.value();
+		iter = this->pendingRestore.erase(iter);
+		this->restore(hwnd, state);
+	}
+
+	if (this->pendingRestore.isEmpty()) this->pendingTimer->stop();
+}
+
+bool DecorationManager::ownsAlpha(HWND hwnd, const Applied& state) {
+	if (!layered(hwnd)) return false;
+
+	COLORREF key = 0;
+	BYTE alpha = 0;
+	DWORD flags = 0;
+	if (!GetLayeredWindowAttributes(hwnd, &key, &alpha, &flags)) return false;
+	return flags == LWA_ALPHA && alpha == state.alpha;
 }
 
 void DecorationManager::restoreOpacity(HWND hwnd, Applied& state) {
-	if (reachable(hwnd) && state.addedLayered) {
+	if (state.addedLayered && reachable(hwnd) && (!state.opacity || DecorationManager::ownsAlpha(hwnd, state))) {
 		SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
 		SetWindowLongPtrW(hwnd, GWL_EXSTYLE, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & ~WS_EX_LAYERED);
 		RedrawWindow(hwnd, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
 	}
 
+	forgetIn(gLayeredSlots, hwnd);
 	state.opacity = false;
 	state.addedLayered = false;
 	state.alpha = 255;
