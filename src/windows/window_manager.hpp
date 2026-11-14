@@ -82,6 +82,8 @@ class WindowManager: public QObject {
 	Q_PROPERTY(QColor activeBorderColor READ activeBorderColor WRITE setActiveBorderColor NOTIFY activeBorderColorChanged);
 	Q_PROPERTY(QColor inactiveBorderColor READ inactiveBorderColor WRITE setInactiveBorderColor NOTIFY inactiveBorderColorChanged);
 	Q_PROPERTY(QString corners READ corners WRITE setCorners NOTIFY cornersChanged);
+	Q_PROPERTY(qreal activeOpacity READ activeOpacity WRITE setActiveOpacity NOTIFY activeOpacityChanged);
+	Q_PROPERTY(qreal inactiveOpacity READ inactiveOpacity WRITE setInactiveOpacity NOTIFY inactiveOpacityChanged);
 	Q_PROPERTY(bool workspaceBackAndForth READ workspaceBackAndForth WRITE setWorkspaceBackAndForth NOTIFY workspaceBackAndForthChanged);
 	Q_PROPERTY(qint32 warpOnChangeWorkspace READ warpOnChangeWorkspace WRITE setWarpOnChangeWorkspace NOTIFY warpOnChangeWorkspaceChanged);
 	// clang-format on
@@ -98,6 +100,10 @@ public:
 	void setInactiveBorderColor(const QColor& color);
 	[[nodiscard]] QString corners() const;
 	void setCorners(const QString& corners);
+	[[nodiscard]] qreal activeOpacity() const;
+	void setActiveOpacity(qreal opacity);
+	[[nodiscard]] qreal inactiveOpacity() const;
+	void setInactiveOpacity(qreal opacity);
 	[[nodiscard]] bool workspaceBackAndForth() const;
 	void setWorkspaceBackAndForth(bool enabled);
 	[[nodiscard]] qint32 warpOnChangeWorkspace() const;
@@ -108,6 +114,8 @@ signals:
 	void activeBorderColorChanged();
 	void inactiveBorderColorChanged();
 	void cornersChanged();
+	void activeOpacityChanged();
+	void inactiveOpacityChanged();
 	void workspaceBackAndForthChanged();
 	void warpOnChangeWorkspaceChanged();
 };

@@ -289,6 +289,8 @@ WindowManager::WindowManager(QObject* parent): QObject(parent) {
 	QObject::connect(decorations, &DecorationManager::activeColorChanged, this, &WindowManager::activeBorderColorChanged);
 	QObject::connect(decorations, &DecorationManager::inactiveColorChanged, this, &WindowManager::inactiveBorderColorChanged);
 	QObject::connect(decorations, &DecorationManager::cornersChanged, this, &WindowManager::cornersChanged);
+	QObject::connect(decorations, &DecorationManager::activeOpacityChanged, this, &WindowManager::activeOpacityChanged);
+	QObject::connect(decorations, &DecorationManager::inactiveOpacityChanged, this, &WindowManager::inactiveOpacityChanged);
 	QObject::connect(behavior, &WorkspaceBehavior::backAndForthChanged, this, &WindowManager::workspaceBackAndForthChanged);
 	QObject::connect(behavior, &WorkspaceBehavior::warpOnChangeChanged, this, &WindowManager::warpOnChangeWorkspaceChanged);
 	// clang-format on
@@ -316,6 +318,18 @@ void WindowManager::setInactiveBorderColor(const QColor& color) {
 QString WindowManager::corners() const { return DecorationManager::instance()->corners(); }
 void WindowManager::setCorners(const QString& corners) {
 	DecorationManager::instance()->setCorners(corners);
+}
+
+qreal WindowManager::activeOpacity() const { return DecorationManager::instance()->activeOpacity(); }
+void WindowManager::setActiveOpacity(qreal opacity) {
+	DecorationManager::instance()->setActiveOpacity(opacity);
+}
+
+qreal WindowManager::inactiveOpacity() const {
+	return DecorationManager::instance()->inactiveOpacity();
+}
+void WindowManager::setInactiveOpacity(qreal opacity) {
+	DecorationManager::instance()->setInactiveOpacity(opacity);
 }
 
 bool WindowManager::workspaceBackAndForth() const {

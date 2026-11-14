@@ -26,6 +26,7 @@ constexpr std::size_t CRASH_SLOTS = 512;
 std::array<std::atomic<HWND>, CRASH_SLOTS> gSlots {}; // NOLINT
 std::atomic<bool> gBordersOverridden = false;          // NOLINT
 std::atomic<bool> gCornersOverridden = false;          // NOLINT
+std::atomic<bool> gOpacityOverridden = false;          // NOLINT
 
 void rememberForCrash(HWND hwnd) {
 	std::atomic<HWND>* free = nullptr;
@@ -63,6 +64,21 @@ bool setCorner(HWND hwnd, DWORD preference) {
 
 bool reachable(HWND hwnd) { return IsWindow(hwnd) && !IsHungAppWindow(hwnd); }
 
+bool coversMonitor(HWND hwnd) {
+	RECT rect {};
+	if (!GetWindowRect(hwnd, &rect)) return false;
+
+	MONITORINFO info {};
+	info.cbSize = sizeof(info);
+	if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &info)) return false;
+
+	const auto& screen = info.rcMonitor;
+	return rect.left <= screen.left && rect.top <= screen.top && rect.right >= screen.right
+	    && rect.bottom >= screen.bottom;
+}
+
+bool layered(HWND hwnd) { return (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED) != 0; }
+
 } // namespace
 
 DecorationManager* DecorationManager::instance() {
@@ -89,13 +105,15 @@ bool DecorationManager::supported() { return windowsBuild() >= WINDOWS_11_BUILD;
 void DecorationManager::restoreForCrash() {
 	auto borders = gBordersOverridden.load();
 	auto corners = gCornersOverridden.load();
-	if (!borders && !corners) return;
+	auto opacity = gOpacityOverridden.load();
+	if (!borders && !corners && !opacity) return;
 
 	for (auto& slot: gSlots) {
 		auto* hwnd = slot.load();
 		if (hwnd == nullptr || !reachable(hwnd)) continue;
 		if (borders) setBorder(hwnd, DWMWA_COLOR_DEFAULT);
 		if (corners) setCorner(hwnd, DWMWCP_DEFAULT);
+		if (opacity && layered(hwnd)) SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
 	}
 }
 
@@ -139,6 +157,22 @@ void DecorationManager::setCorners(const QString& corners) {
 	emit this->cornersChanged();
 }
 
+void DecorationManager::setActiveOpacity(qreal opacity) {
+	opacity = qBound(0.1, opacity, 1.0);
+	if (qFuzzyCompare(opacity, this->mActiveOpacity)) return;
+	this->mActiveOpacity = opacity;
+	emit this->activeOpacityChanged();
+	this->update();
+}
+
+void DecorationManager::setInactiveOpacity(qreal opacity) {
+	opacity = qBound(0.1, opacity, 1.0);
+	if (qFuzzyCompare(opacity, this->mInactiveOpacity)) return;
+	this->mInactiveOpacity = opacity;
+	emit this->inactiveOpacityChanged();
+	this->update();
+}
+
 DecorationManager::BorderMode DecorationManager::borderMode() const {
 	if (this->mBorders == QStringLiteral("colors")) return BorderMode::Colors;
 	if (this->mBorders == QStringLiteral("none")) return BorderMode::None;
@@ -153,8 +187,18 @@ DWORD DecorationManager::cornerPreference() const {
 }
 
 bool DecorationManager::overriding() const {
+	if (this->opacityOverriding()) return true;
 	if (!DecorationManager::supported()) return false;
 	return this->borderMode() != BorderMode::System || this->cornerPreference() != DWMWCP_DEFAULT;
+}
+
+bool DecorationManager::opacityOverriding() const {
+	return this->alphaFor(true) != 255 || this->alphaFor(false) != 255;
+}
+
+BYTE DecorationManager::alphaFor(bool active) const {
+	auto opacity = active ? this->mActiveOpacity : this->mInactiveOpacity;
+	return static_cast<BYTE>(qRound(qBound(0.1, opacity, 1.0) * 255));
 }
 
 void DecorationManager::update() {
@@ -162,8 +206,11 @@ void DecorationManager::update() {
 	auto borders = supported && this->borderMode() != BorderMode::System;
 	auto corners = supported && this->cornerPreference() != DWMWCP_DEFAULT;
 
+	auto opacity = this->opacityOverriding();
+
 	if (borders) gBordersOverridden.store(true);
 	if (corners) gCornersOverridden.store(true);
+	if (opacity) gOpacityOverridden.store(true);
 
 	if (this->overriding()) {
 		if (!this->running) this->start();
@@ -175,6 +222,7 @@ void DecorationManager::update() {
 
 	gBordersOverridden.store(borders);
 	gCornersOverridden.store(corners);
+	gOpacityOverridden.store(opacity);
 }
 
 void DecorationManager::start() {
@@ -182,9 +230,10 @@ void DecorationManager::start() {
 	this->running = true;
 
 	auto& c = this->connections;
-	c.append(
-	    QObject::connect(this->tracker, &WindowTracker::windowAdded, this, &DecorationManager::apply)
-	);
+	c.append(QObject::connect(this->tracker, &WindowTracker::windowAdded, this, [this](TrackedWindow* window) {
+		this->watch(window);
+		this->apply(window);
+	}));
 	c.append(
 	    QObject::connect(this->tracker, &WindowTracker::windowRemoved, this, &DecorationManager::forget)
 	);
@@ -202,6 +251,7 @@ void DecorationManager::start() {
 void DecorationManager::stop() {
 	for (const auto& connection: this->connections) QObject::disconnect(connection);
 	this->connections.clear();
+	this->watched.clear();
 	this->restoreAll();
 	this->lastActive = nullptr;
 	this->running = false;
@@ -213,6 +263,7 @@ void DecorationManager::applyAll() {
 	QSet<HWND> tracked;
 	for (auto* window: this->tracker->windows()) {
 		tracked.insert(window->hwnd());
+		if (this->running) this->watch(window);
 		this->apply(window);
 	}
 
@@ -222,11 +273,7 @@ void DecorationManager::applyAll() {
 			continue;
 		}
 
-		if (reachable(iter.key())) {
-			if (iter->border) setBorder(iter.key(), DWMWA_COLOR_DEFAULT);
-			if (iter->corner) setCorner(iter.key(), DWMWCP_DEFAULT);
-		}
-
+		DecorationManager::restore(iter.key(), iter.value());
 		forgetForCrash(iter.key());
 		iter = this->applied.erase(iter);
 	}
@@ -240,8 +287,10 @@ void DecorationManager::apply(TrackedWindow* window) {
 
 	auto state = this->applied.value(hwnd);
 
-	auto mode = this->borderMode();
-	auto color = window == this->tracker->activeWindow() ? this->mActiveColor : this->mInactiveColor;
+	auto supported = DecorationManager::supported();
+	auto active = window == this->tracker->activeWindow();
+	auto mode = supported ? this->borderMode() : BorderMode::System;
+	auto color = active ? this->mActiveColor : this->mInactiveColor;
 	if (mode == BorderMode::Colors && !color.isValid()) mode = BorderMode::System;
 
 	if (mode != BorderMode::System) {
@@ -255,7 +304,7 @@ void DecorationManager::apply(TrackedWindow* window) {
 		state.border = false;
 	}
 
-	auto preference = this->cornerPreference();
+	auto preference = supported ? this->cornerPreference() : DWORD(DWMWCP_DEFAULT);
 	if (preference != DWMWCP_DEFAULT) {
 		if ((!state.corner || state.preference != preference) && setCorner(hwnd, preference)) {
 			state.corner = true;
@@ -266,7 +315,23 @@ void DecorationManager::apply(TrackedWindow* window) {
 		state.corner = false;
 	}
 
-	if (state.border || state.corner) {
+	auto alpha = this->alphaFor(active);
+	if (alpha != 255 && !coversMonitor(hwnd)) {
+		if (!state.addedLayered && !layered(hwnd)) {
+			SetWindowLongPtrW(hwnd, GWL_EXSTYLE, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
+			state.addedLayered = layered(hwnd);
+		}
+		if (state.addedLayered && (!state.opacity || state.alpha != alpha)
+		    && SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA))
+		{
+			state.opacity = true;
+			state.alpha = alpha;
+		}
+	} else if (state.opacity || state.addedLayered) {
+		DecorationManager::restoreOpacity(hwnd, state);
+	}
+
+	if (state.border || state.corner || state.opacity || state.addedLayered) {
 		this->applied.insert(hwnd, state);
 		rememberForCrash(hwnd);
 	} else {
@@ -280,14 +345,12 @@ void DecorationManager::forget(TrackedWindow* window) {
 
 	auto* hwnd = window->hwnd();
 	if (hwnd == this->lastActive) this->lastActive = nullptr;
+	this->watched.remove(window);
 
 	auto iter = this->applied.find(hwnd);
 	if (iter == this->applied.end()) return;
 
-	if (reachable(hwnd)) {
-		if (iter->border) setBorder(hwnd, DWMWA_COLOR_DEFAULT);
-		if (iter->corner) setCorner(hwnd, DWMWCP_DEFAULT);
-	}
+	DecorationManager::restore(hwnd, iter.value());
 
 	forgetForCrash(hwnd);
 	this->applied.erase(iter);
@@ -295,15 +358,43 @@ void DecorationManager::forget(TrackedWindow* window) {
 
 void DecorationManager::restoreAll() {
 	for (auto iter = this->applied.cbegin(); iter != this->applied.cend(); ++iter) {
-		if (reachable(iter.key())) {
-			if (iter->border) setBorder(iter.key(), DWMWA_COLOR_DEFAULT);
-			if (iter->corner) setCorner(iter.key(), DWMWCP_DEFAULT);
-		}
-
+		DecorationManager::restore(iter.key(), iter.value());
 		forgetForCrash(iter.key());
 	}
 
 	this->applied.clear();
+}
+
+void DecorationManager::watch(TrackedWindow* window) {
+	if (window == nullptr || this->watched.contains(window)) return;
+	this->watched.insert(window);
+
+	auto reapply = [this, window]() {
+		if (this->running && this->opacityOverriding()) this->apply(window);
+	};
+	this->connections.append(QObject::connect(window, &TrackedWindow::rectChanged, this, reapply));
+	this->connections.append(QObject::connect(window, &TrackedWindow::fullscreenChanged, this, reapply));
+}
+
+void DecorationManager::restore(HWND hwnd, const Applied& state) {
+	if (!reachable(hwnd)) return;
+	if (state.border) setBorder(hwnd, DWMWA_COLOR_DEFAULT);
+	if (state.corner) setCorner(hwnd, DWMWCP_DEFAULT);
+
+	auto copy = state;
+	DecorationManager::restoreOpacity(hwnd, copy);
+}
+
+void DecorationManager::restoreOpacity(HWND hwnd, Applied& state) {
+	if (reachable(hwnd) && state.addedLayered) {
+		SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+		SetWindowLongPtrW(hwnd, GWL_EXSTYLE, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & ~WS_EX_LAYERED);
+		RedrawWindow(hwnd, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+	}
+
+	state.opacity = false;
+	state.addedLayered = false;
+	state.alpha = 255;
 }
 
 void DecorationManager::onActiveWindowChanged() {
