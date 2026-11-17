@@ -135,7 +135,13 @@ void DecorationManager::restoreForCrash() {
 	for (auto& slot: gLayeredSlots) {
 		auto* hwnd = slot.load();
 		if (hwnd == nullptr || !reachable(hwnd) || !layered(hwnd)) continue;
+		COLORREF key = 0;
+		BYTE alpha = 0;
+		DWORD flags = 0;
+		if (!GetLayeredWindowAttributes(hwnd, &key, &alpha, &flags) || flags != LWA_ALPHA) continue;
 		SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA);
+		SetWindowLongPtrW(hwnd, GWL_EXSTYLE, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & ~WS_EX_LAYERED);
+		RedrawWindow(hwnd, nullptr, nullptr, RDW_ERASE | RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
 	}
 }
 
