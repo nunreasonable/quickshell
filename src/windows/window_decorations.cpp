@@ -86,6 +86,12 @@ bool coversMonitor(HWND hwnd) {
 
 bool layered(HWND hwnd) { return (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED) != 0; }
 
+bool hidesContentWhenLayered(HWND hwnd) {
+	wchar_t buffer[64] {};
+	GetClassNameW(hwnd, buffer, 64);
+	return lstrcmpW(buffer, L"CASCADIA_HOSTING_WINDOW_CLASS") == 0;
+}
+
 } // namespace
 
 DecorationManager* DecorationManager::instance() {
@@ -346,7 +352,8 @@ void DecorationManager::apply(TrackedWindow* window) {
 
 	auto alpha = this->alphaFor(active);
 	auto fullscreen = window->fullscreen() || (coversMonitor(hwnd) && !IsZoomed(hwnd));
-	auto eligible = !state.foreign && !state.denied && !window->isUwpFrame() && !fullscreen;
+	auto eligible = !state.foreign && !state.denied && !window->isUwpFrame() && !fullscreen
+	             && !hidesContentWhenLayered(hwnd);
 	if (alpha != 255 && eligible) {
 		if (!state.addedLayered) {
 			if (layered(hwnd)) {
