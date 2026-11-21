@@ -30,6 +30,10 @@ class Dispatcher;
 
 } // namespace qs::hyprland::ipc
 
+Q_MOC_INCLUDE("hyprland_toplevel.hpp")
+Q_MOC_INCLUDE("monitor.hpp")
+Q_MOC_INCLUDE("workspace.hpp")
+
 Q_DECLARE_OPAQUE_POINTER(qs::hyprland::ipc::HyprlandWorkspace*);
 Q_DECLARE_OPAQUE_POINTER(qs::hyprland::ipc::HyprlandMonitor*);
 Q_DECLARE_OPAQUE_POINTER(qs::hyprland::ipc::HyprlandToplevel*);
