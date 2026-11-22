@@ -396,9 +396,6 @@ LRESULT HookWindow::handle(UINT msg, WPARAM wParam, LPARAM lParam) {
 			return 0;
 		}
 
-		// Never forward: a close sent to the taskbar makes Explorer open its
-		// "Shut Down Windows" dialog. Task Scheduler sends WM_CLOSE to every
-		// window of the shell when it stops it, so each restart showed it.
 		return 0;
 	case WM_DESTROY:
 		KillTimer(this->hwnd, RAISE_TIMER);
