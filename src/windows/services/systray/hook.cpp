@@ -396,7 +396,7 @@ LRESULT HookWindow::handle(UINT msg, WPARAM wParam, LPARAM lParam) {
 			return 0;
 		}
 
-		return this->forward(msg, wParam, lParam).value_or(0);
+		return 0;
 	case WM_DESTROY:
 		KillTimer(this->hwnd, RAISE_TIMER);
 		KillTimer(this->hwnd, ANNOUNCE_TIMER);
