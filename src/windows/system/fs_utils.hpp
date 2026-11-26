@@ -28,6 +28,8 @@ public:
 
 	Q_INVOKABLE static bool removeFile(const QString& path);
 
+	Q_INVOKABLE static bool renameFile(const QString& from, const QString& to);
+
 	Q_INVOKABLE static QString canonicalPath(const QString& path);
 };
 

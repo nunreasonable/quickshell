@@ -70,6 +70,13 @@ bool FsUtils::removeFile(const QString& path) {
 	return QFile::remove(path);
 }
 
+bool FsUtils::renameFile(const QString& from, const QString& to) {
+	if (from.isEmpty() || to.isEmpty()) return false;
+	auto wfrom = QDir::toNativeSeparators(from).toStdWString();
+	auto wto = QDir::toNativeSeparators(to).toStdWString();
+	return MoveFileExW(wfrom.c_str(), wto.c_str(), MOVEFILE_REPLACE_EXISTING) != FALSE;
+}
+
 QString FsUtils::canonicalPath(const QString& path) {
 	if (path.isEmpty()) return QString();
 	auto native = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
