@@ -115,7 +115,8 @@ void FileViewReader::read(
 
 	if (!state.exists) {
 		if (state.printErrors) {
-			qmlWarning(view) << "Read of " << state.path << " failed: File does not exist.";
+			qmlWarning(view) << "Read of " << qUtf8Printable(state.path)
+			                 << " failed: File does not exist.";
 		}
 
 		state.error = FileViewError::FileNotFound;
@@ -124,14 +125,14 @@ void FileViewReader::read(
 
 	if (!info.isFile()) {
 		if (state.printErrors) {
-			qmlWarning(view) << "Read of " << state.path << " failed: Not a file.";
+			qmlWarning(view) << "Read of " << qUtf8Printable(state.path) << " failed: Not a file.";
 		}
 
 		state.error = FileViewError::NotAFile;
 		return;
 	} else if (!info.isReadable()) {
 		if (state.printErrors) {
-			qmlWarning(view) << "Read of " << state.path << " failed: Permission denied.";
+			qmlWarning(view) << "Read of " << qUtf8Printable(state.path) << " failed: Permission denied.";
 		}
 
 		state.error = FileViewError::PermissionDenied;
@@ -143,7 +144,8 @@ void FileViewReader::read(
 	auto file = QFile(state.path);
 
 	if (!file.open(QFile::ReadOnly)) {
-		qmlWarning(view) << "Read of " << state.path << " failed: Unknown failure when opening file.";
+		qmlWarning(view) << "Read of " << qUtf8Printable(state.path)
+		                 << " failed: Unknown failure when opening file.";
 		state.error = FileViewError::Unknown;
 		return;
 	}
@@ -160,7 +162,7 @@ void FileViewReader::read(
 			auto r = file.read(data.data() + i, data.length() - i); // NOLINT
 
 			if (r == -1) {
-				qmlWarning(view) << "Read of " << state.path << " failed: read() failed.";
+				qmlWarning(view) << "Read of " << qUtf8Printable(state.path) << " failed: read() failed.";
 
 				state.error = FileViewError::Unknown;
 				return;
@@ -183,7 +185,7 @@ void FileViewReader::read(
 			auto r = file.read(buf.data(), buf.size()); // NOLINT
 
 			if (r == -1) {
-				qmlWarning(view) << "Read of " << state.path << " failed: read() failed.";
+				qmlWarning(view) << "Read of " << qUtf8Printable(state.path) << " failed: read() failed.";
 
 				state.error = FileViewError::Unknown;
 				return;
@@ -231,7 +233,7 @@ void FileViewWriter::write(
 		auto dir = info.dir();
 		if (!dir.mkpath(".")) {
 			if (state.printErrors) {
-				qmlWarning(view) << "Write of " << state.path
+				qmlWarning(view) << "Write of " << qUtf8Printable(state.path)
 				                 << " failed: Could not create parent directories of file.";
 			}
 
@@ -240,7 +242,8 @@ void FileViewWriter::write(
 		}
 	} else if (!info.isWritable()) {
 		if (state.printErrors) {
-			qmlWarning(view) << "Write of " << state.path << " failed: Permission denied.";
+			qmlWarning(view) << "Write of " << qUtf8Printable(state.path)
+			                 << " failed: Permission denied.";
 		}
 
 		state.error = FileViewError::PermissionDenied;
@@ -257,7 +260,8 @@ void FileViewWriter::write(
 	}
 
 	if (!file->open(QFile::WriteOnly)) {
-		qmlWarning(view) << "Write of " << state.path << " failed: Unknown error when opening file.";
+		qmlWarning(view) << "Write of " << qUtf8Printable(state.path)
+		                 << " failed: Unknown error when opening file.";
 		state.error = FileViewError::Unknown;
 		return;
 	}
@@ -273,7 +277,7 @@ void FileViewWriter::write(
 		auto r = file->write(data.data() + i, data.length() - i); // NOLINT
 
 		if (r == -1) {
-			qmlWarning(view) << "Write of " << state.path << " failed: write() failed.";
+			qmlWarning(view) << "Write of " << qUtf8Printable(state.path) << " failed: write() failed.";
 
 			state.error = FileViewError::Unknown;
 			return;
@@ -287,7 +291,8 @@ void FileViewWriter::write(
 
 	if (doAtomicWrite) {
 		if (!reinterpret_cast<QSaveFile*>(file.get())->commit()) {
-			qmlWarning(view) << "Write of " << state.path << " failed: Atomic commit failed.";
+			qmlWarning(view) << "Write of " << qUtf8Printable(state.path)
+			                 << " failed: Atomic commit failed.";
 		}
 	}
 }
