@@ -207,6 +207,7 @@ void FocusGrab::onWindowsChanged() {
 
 	for (auto* window: windows) {
 		auto* hwnd = hwndOf(window);
+		if (!IsWindowVisible(hwnd)) continue;
 		if (!this->knownWindows.contains(hwnd)) added = true;
 		current.append(hwnd);
 	}
@@ -224,7 +225,10 @@ void FocusGrab::tryActivate() {
 	this->grabActive = true;
 	this->mActivatedAt = GetTickCount();
 	this->knownWindows.clear();
-	for (auto* window: windows) this->knownWindows.append(hwndOf(window));
+	for (auto* window: windows) {
+		auto* hwnd = hwndOf(window);
+		if (IsWindowVisible(hwnd)) this->knownWindows.append(hwnd);
+	}
 
 	FocusGrabTracker::instance()->add(this);
 	emit this->activeChanged();
@@ -261,6 +265,7 @@ void FocusGrab::refocus() {
 		if (window->flags().testFlag(Qt::WindowDoesNotAcceptFocus)) continue;
 
 		auto* hwnd = hwndOf(window);
+		if (!IsWindowVisible(hwnd)) continue;
 		if ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_NOACTIVATE) != 0) continue;
 
 		window->requestActivate();
