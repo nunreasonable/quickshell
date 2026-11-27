@@ -50,6 +50,14 @@ jobs:
         with:
           arch: x64
 
+      - name: Use the clang that ships with Visual Studio
+        run: |
+          llvm="${llvmX64:-}"
+          [ "$RUNNER_ARCH" = "ARM64" ] && llvm="${llvmArm64:-$llvm}"
+          if [ -n "$llvm" ] && [ -x "$(cygpath -u "$llvm")/clang-cl.exe" ]; then
+            echo "$llvm" >> "$GITHUB_PATH"
+          fi
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
