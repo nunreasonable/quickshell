@@ -865,10 +865,26 @@ void WinPanelWindow::updateDimensions() {
 			auto reservedLogical = mapper.toLogical(reserved);
 
 			switch (edge) {
-			case Qt::TopEdge: base.setTop(std::min(base.top(), reservedLogical.top())); break;
-			case Qt::BottomEdge: base.setBottom(std::max(base.bottom(), reservedLogical.bottom())); break;
-			case Qt::LeftEdge: base.setLeft(std::min(base.left(), reservedLogical.left())); break;
-			case Qt::RightEdge: base.setRight(std::max(base.right(), reservedLogical.right())); break;
+			case Qt::TopEdge:
+				base.setTop(std::min(base.top(), reservedLogical.top()));
+				base.setLeft(reservedLogical.left());
+				base.setRight(reservedLogical.right());
+				break;
+			case Qt::BottomEdge:
+				base.setBottom(std::max(base.bottom(), reservedLogical.bottom()));
+				base.setLeft(reservedLogical.left());
+				base.setRight(reservedLogical.right());
+				break;
+			case Qt::LeftEdge:
+				base.setLeft(std::min(base.left(), reservedLogical.left()));
+				base.setTop(reservedLogical.top());
+				base.setBottom(reservedLogical.bottom());
+				break;
+			case Qt::RightEdge:
+				base.setRight(std::max(base.right(), reservedLogical.right()));
+				base.setTop(reservedLogical.top());
+				base.setBottom(reservedLogical.bottom());
+				break;
 			default: break;
 			}
 		}
